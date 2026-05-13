@@ -988,6 +988,33 @@ func TestAcquireAttemptsRetriesCleanedCoordinatorStaleInstanceFailures(t *testin
 	}
 }
 
+func TestAcquireAttemptsRetriesRepeatedCleanedCoordinatorStaleInstanceFailures(t *testing.T) {
+	var stderr strings.Builder
+	attempts := 0
+	lease, err := acquireAttemptsRetry(Runtime{Stderr: &stderr}, false, func() (LeaseTarget, error) {
+		attempts++
+		if attempts < 5 {
+			err := CoordinatorHTTPError{
+				Method:     "POST",
+				Path:       "/v1/leases",
+				StatusCode: 500,
+				Message:    `{"error":"InvalidInstanceID.NotFound"}`,
+			}
+			return LeaseTarget{}, coordinatorStaleInstanceCleanedError{err: err}
+		}
+		return LeaseTarget{LeaseID: "cbx_ok"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 5 || lease.LeaseID != "cbx_ok" {
+		t.Fatalf("attempts=%d lease=%#v", attempts, lease)
+	}
+	if got := strings.Count(stderr.String(), "coordinator returned stale instance"); got != 4 {
+		t.Fatalf("stale retry warnings=%d want 4: %q", got, stderr.String())
+	}
+}
+
 func TestBootstrapWaitTimeoutExtendsForDesktopBrowser(t *testing.T) {
 	if got := bootstrapWaitTimeout(Config{}); got != 20*time.Minute {
 		t.Fatalf("plain bootstrap timeout=%s want 20m", got)

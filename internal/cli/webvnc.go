@@ -951,13 +951,17 @@ func safeWebVNCDaemonName(value string) string {
 
 func startVNCForegroundTunnel(ctx context.Context, target SSHTarget, localPort, remoteHost, remotePort string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "ssh", vncTunnelArgs(target, localPort, remoteHost, remotePort)...)
+	var output strings.Builder
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	done := make(chan error, 1)
 	go func() {
-		_ = cmd.Wait()
+		done <- cmd.Wait()
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			stopProcess(cmd)
@@ -965,6 +969,14 @@ func startVNCForegroundTunnel(ctx context.Context, target SSHTarget, localPort, 
 		}
 		if tcpReachable(ctx, "127.0.0.1", localPort, 200*time.Millisecond) {
 			return cmd, nil
+		}
+		select {
+		case err := <-done:
+			if text := strings.TrimSpace(output.String()); text != "" {
+				return nil, fmt.Errorf("%w: %s", err, text)
+			}
+			return nil, err
+		default:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

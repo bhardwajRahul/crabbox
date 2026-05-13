@@ -91,15 +91,12 @@ func TouchDirectLeaseBestEffort(ctx context.Context, cfg Config, server Server, 
 }
 
 func acquireAttemptsRetry(rt Runtime, keep bool, acquire func() (LeaseTarget, error)) (LeaseTarget, error) {
-	var lastErr error
-	attempts := acquireAttempts(keep)
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		lease, err := acquire()
 		if err == nil {
 			return lease, nil
 		}
-		lastErr = err
-		if attempt == attempts || !isRetryableAcquireError(err) {
+		if !isRetryableAcquireError(err) || attempt >= acquireAttemptsForError(keep, err) {
 			return LeaseTarget{}, err
 		}
 		if isCoordinatorStaleInstanceCleanedError(err) {
@@ -108,7 +105,13 @@ func acquireAttemptsRetry(rt Runtime, keep bool, acquire func() (LeaseTarget, er
 			fmt.Fprintf(rt.Stderr, "warning: bootstrap failed; retrying with fresh lease: %v\n", err)
 		}
 	}
-	return LeaseTarget{}, lastErr
+}
+
+func acquireAttemptsForError(keep bool, err error) int {
+	if isCoordinatorStaleInstanceCleanedError(err) {
+		return 5
+	}
+	return acquireAttempts(keep)
 }
 
 func isRetryableAcquireError(err error) bool {

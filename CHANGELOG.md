@@ -20,6 +20,8 @@
 - Fixed Proxmox VM bootstrap to wait for the guest IP and bootstrap over SSH after clone/start, avoiding fragile guest-agent exec behavior. Thanks @mine-13-zoom.
 - Fixed AWS Windows WSL2 exact `--type` requests so instance families without nested virtualization fail before leasing with a targeted repair hint.
 - Fixed coordinator-backed AWS acquisition so readiness failures delete the just-created instance before retrying, while CLI retries still require an explicit cleanup signal.
+- Fixed coordinator-backed acquisition so repeated confirmed stale AWS instance cleanups get a larger retry budget instead of failing after the second stale instance.
+- Fixed `crabbox code` on leases that fall back from SSH port 2222 to 22, and improved foreground tunnel startup errors to include SSH failure details.
 - Fixed `crabbox run --preflight --preflight-tools none` so it prints only the workspace summary without running remote probes.
 - Fixed native Windows `crabbox run --preflight` so user and cwd diagnostics are always printed alongside configurable tool probes.
 - Fixed native Windows `--script` and `--env-from-profile` uploads so non-ASCII PowerShell source and profile values stay UTF-8 under Windows PowerShell.
