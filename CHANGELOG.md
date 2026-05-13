@@ -4,9 +4,14 @@
 
 ### Added
 
+- Added native Windows support for `crabbox run --script` / `--script-stdin` and a real native Windows `--preflight` probe.
+
 ### Changed
 
 ### Fixed
+
+- Fixed native Windows `--script` and `--env-from-profile` uploads so non-ASCII PowerShell source and profile values stay UTF-8 under Windows PowerShell.
+- Fixed native Windows `--env-from-profile` uploads so allowed profile values are written relative to the synced workdir and failures include the remote PowerShell error.
 
 ## 0.12.0 - 2026-05-12
 
