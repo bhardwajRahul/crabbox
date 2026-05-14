@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class MemoryStorage {
   readonly values = new Map<string, unknown>();
@@ -13,7 +13,7 @@ class MemoryStorage {
 }
 
 class MockContainer {
-  readonly ctx: { storage: MemoryStorage };
+  readonly ctx: { storage: MemoryStorage; waitUntil: (promise: Promise<unknown>) => void };
   readonly schedules: Array<{ when: Date | number; callback: string }> = [];
   deletedSchedules: string[] = [];
   destroyed = false;
@@ -22,8 +22,11 @@ class MockContainer {
   renewedActivityTimeouts = 0;
   execResponse: Response | undefined;
 
-  constructor(ctx: { storage: MemoryStorage }) {
-    this.ctx = ctx;
+  constructor(ctx: { storage: MemoryStorage; waitUntil?: (promise: Promise<unknown>) => void }) {
+    this.ctx = {
+      ...ctx,
+      waitUntil: ctx.waitUntil ?? ((promise) => void promise),
+    };
   }
 
   async startAndWaitForPorts(): Promise<void> {
@@ -142,6 +145,11 @@ describe("Cloudflare runner lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-13T18:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("sanitizes create payload before dispatching to the durable object", async () => {

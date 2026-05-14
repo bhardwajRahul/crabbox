@@ -272,7 +272,7 @@ export class Sandbox extends Container {
 
   private finishExecutionWhenStreamCloses(response: Response): Response {
     if (!response.body) {
-      void this.finishExecution();
+      this.finishExecutionAfterResponse();
       return response;
     }
     const reader = response.body.getReader();
@@ -281,14 +281,14 @@ export class Sandbox extends Container {
         const next = await reader.read();
         if (next.done) {
           controller.close();
-          void this.finishExecution();
+          this.finishExecutionAfterResponse();
           return;
         }
         controller.enqueue(next.value);
       },
       cancel: async (reason) => {
         await reader.cancel(reason);
-        void this.finishExecution();
+        this.finishExecutionAfterResponse();
       },
     });
     return new Response(clientBody, {
@@ -296,6 +296,10 @@ export class Sandbox extends Container {
       statusText: response.statusText,
       headers: response.headers,
     });
+  }
+
+  private finishExecutionAfterResponse(): void {
+    this.ctx.waitUntil(this.finishExecution());
   }
 }
 
