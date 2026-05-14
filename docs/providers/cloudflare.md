@@ -52,7 +52,7 @@ Install Worker dependencies and verify the runner:
 
 ```sh
 npm ci --prefix worker
-npm run check:cloudflare --prefix worker
+npm run check --prefix worker
 npm run build:cloudflare --prefix worker
 ```
 

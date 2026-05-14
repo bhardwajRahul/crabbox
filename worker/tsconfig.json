@@ -15,6 +15,5 @@
     "useUnknownInCatchVariables": true,
     "skipLibCheck": false
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/cloudflare-container-runner.ts"]
+  "include": ["src/**/*.ts"]
 }
