@@ -260,6 +260,7 @@ export interface ProviderImage {
   name: string;
   state: string;
   region?: string;
+  snapshots?: string[];
 }
 
 export interface PromotedImageRecord extends ProviderImage {

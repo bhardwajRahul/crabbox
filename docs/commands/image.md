@@ -1,11 +1,15 @@
 # image
 
 `crabbox image` contains trusted operator controls for AWS runner images.
+Use it for base runner images, not per-scenario checkpoints. If you want to
+save one prepared lease and fork that exact scenario later, use
+[`crabbox checkpoint`](checkpoint.md).
 
 ```sh
-crabbox image create --id cbx_... --name openclaw-crabbox-20260501-1246 --wait
+crabbox image create --id cbx_... --name crabbox-runner-20260501-1246 --wait
 crabbox image promote ami-...
 crabbox image promote ami-... --json
+crabbox image delete ami-... --region eu-west-1
 ```
 
 Image commands require a configured coordinator and admin-token auth. Set
@@ -19,6 +23,10 @@ promoted AMI id and related metadata so future AWS leases can resolve the
 default image. Hetzner snapshots/images should live in the Hetzner project and
 be selected through `image`/`CRABBOX_HETZNER_IMAGE` until Crabbox grows
 Hetzner create/promote lifecycle commands.
+
+An AMI is AWS's bootable machine image format. EBS snapshots are the stored disk
+snapshots that back the AMI. Deleting a candidate image should remove both the
+AMI registration and its EBS snapshots.
 
 ## create
 
@@ -43,7 +51,7 @@ Recommended bake flow:
 ```sh
 crabbox warmup --provider aws --class standard --ttl 2h --idle-timeout 30m
 crabbox run --id <slug> --shell -- 'command -v ssh git rsync curl jq && test -d /work/crabbox'
-crabbox image create --id <cbx_id> --name openclaw-crabbox-YYYYMMDD-HHMM --wait
+crabbox image create --id <cbx_id> --name crabbox-runner-YYYYMMDD-HHMM --wait
 ```
 
 Use a fresh, intentionally warmed lease as the source. Do not bake personal
@@ -64,7 +72,8 @@ Failure handling:
 - If the baked image boots but never reaches `crabbox-ready`, do not promote it.
   Keep the previous promoted AMI and debug bootstrap on a normal lease first.
 - Cleanup of stale candidate AMIs is an AWS operator task. Promotion does not
-  delete old images or snapshots.
+  delete old images or snapshots. Use `crabbox image delete` for explicit
+  cleanup.
 - If a Mantis timing report does not improve after promotion, treat that as a
   failed performance bake even if the AMI boots.
 
@@ -77,6 +86,7 @@ crabbox image promote ami-1234567890abcdef0
 ```
 
 Add `--json` to print the promoted image record for automation.
+Add `--region` when the AMI is outside the coordinator's default AWS region.
 
 Future brokered AWS leases use the promoted image when the request does not set
 an explicit `awsAMI` or `CRABBOX_AWS_AMI` override. Promotion stores coordinator
@@ -95,6 +105,17 @@ If the smoke fails, promote the previous known-good AMI again. The coordinator
 stores only the selected AMI ID, so rollback is another `image promote` call.
 Keep the previous AMI available until at least one brokered AWS smoke succeeds
 on the new image.
+
+## delete
+
+Delete an AMI and its EBS snapshots:
+
+```sh
+crabbox image delete ami-1234567890abcdef0 --region eu-west-1
+```
+
+Deletion deregisters the AMI, then deletes the EBS snapshots referenced by its
+block device mappings. It requires admin-token auth.
 
 Related docs:
 
