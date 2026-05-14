@@ -87,7 +87,7 @@ vi.mock("@cloudflare/containers", () => ({
 
 const { Sandbox } = await import("../src/cloudflare-container-runner");
 
-describe("CF Containers runner lifecycle", () => {
+describe("Cloudflare runner lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-13T18:00:00Z"));

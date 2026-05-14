@@ -12,22 +12,22 @@ import (
 	"time"
 )
 
-func NewCFContainersBackend(spec ProviderSpec, cfg Config, rt Runtime) Backend {
+func NewCloudflareBackend(spec ProviderSpec, cfg Config, rt Runtime) Backend {
 	cfg.Provider = providerName
-	return &cfContainersBackend{spec: spec, cfg: cfg, rt: rt}
+	return &cloudflareBackend{spec: spec, cfg: cfg, rt: rt}
 }
 
-type cfContainersBackend struct {
+type cloudflareBackend struct {
 	spec ProviderSpec
 	cfg  Config
 	rt   Runtime
 }
 
-func (b *cfContainersBackend) Spec() ProviderSpec { return b.spec }
+func (b *cloudflareBackend) Spec() ProviderSpec { return b.spec }
 
-func (b *cfContainersBackend) Warmup(ctx context.Context, req WarmupRequest) error {
+func (b *cloudflareBackend) Warmup(ctx context.Context, req WarmupRequest) error {
 	started := b.now()
-	client, err := newCFContainersClient(b.cfg, b.rt)
+	client, err := newCloudflareClient(b.cfg, b.rt)
 	if err != nil {
 		return err
 	}
@@ -53,23 +53,23 @@ func (b *cfContainersBackend) Warmup(ctx context.Context, req WarmupRequest) err
 	return nil
 }
 
-func (b *cfContainersBackend) Run(ctx context.Context, req RunRequest) (RunResult, error) {
-	if err := rejectCFContainersSyncOptions(req); err != nil {
+func (b *cloudflareBackend) Run(ctx context.Context, req RunRequest) (RunResult, error) {
+	if err := rejectCloudflareSyncOptions(req); err != nil {
 		return RunResult{}, err
 	}
-	workdir, err := cfContainersWorkdir(b.cfg)
+	workdir, err := cloudflareWorkdir(b.cfg)
 	if err != nil {
 		return RunResult{}, err
 	}
 	started := b.now()
-	client, err := newCFContainersClient(b.cfg, b.rt)
+	client, err := newCloudflareClient(b.cfg, b.rt)
 	if err != nil {
 		return RunResult{}, err
 	}
 	leaseID, sandboxID, slug := "", "", ""
 	acquired := false
 	if req.ID == "" {
-		var sandbox cfContainer
+		var sandbox cloudflareContainer
 		leaseID, sandbox, slug, err = b.createSandbox(ctx, client, req.Repo, req.Reclaim)
 		if err != nil {
 			return RunResult{}, err
@@ -128,7 +128,7 @@ func (b *cfContainersBackend) Run(ctx context.Context, req RunRequest) (RunResul
 		return result, nil
 	}
 
-	command, err := buildCFContainersCommand(req.Command, req.ShellMode)
+	command, err := buildCloudflareCommand(req.Command, req.ShellMode)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -181,10 +181,10 @@ func (b *cfContainersBackend) Run(ctx context.Context, req RunRequest) (RunResul
 	return result, nil
 }
 
-func (b *cfContainersBackend) List(ctx context.Context, req ListRequest) ([]LeaseView, error) {
+func (b *cloudflareBackend) List(ctx context.Context, req ListRequest) ([]LeaseView, error) {
 	_ = ctx
 	_ = req
-	claims, err := localCFContainersClaims()
+	claims, err := localCloudflareClaims()
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +195,8 @@ func (b *cfContainersBackend) List(ctx context.Context, req ListRequest) ([]Leas
 	return servers, nil
 }
 
-func (b *cfContainersBackend) Status(ctx context.Context, req StatusRequest) (StatusView, error) {
-	client, err := newCFContainersClient(b.cfg, b.rt)
+func (b *cloudflareBackend) Status(ctx context.Context, req StatusRequest) (StatusView, error) {
+	client, err := newCloudflareClient(b.cfg, b.rt)
 	if err != nil {
 		return StatusView{}, err
 	}
@@ -215,7 +215,7 @@ func (b *cfContainersBackend) Status(ctx context.Context, req StatusRequest) (St
 		}
 		view := sandboxStatusView(leaseID, slug, sandbox)
 		if !req.Wait || view.Ready {
-			if cfContainersTerminalState(view.State) {
+			if cloudflareTerminalState(view.State) {
 				removeLeaseClaim(leaseID)
 			}
 			return view, nil
@@ -231,8 +231,8 @@ func (b *cfContainersBackend) Status(ctx context.Context, req StatusRequest) (St
 	}
 }
 
-func (b *cfContainersBackend) Stop(ctx context.Context, req StopRequest) error {
-	client, err := newCFContainersClient(b.cfg, b.rt)
+func (b *cloudflareBackend) Stop(ctx context.Context, req StopRequest) error {
+	client, err := newCloudflareClient(b.cfg, b.rt)
 	if err != nil {
 		return err
 	}
@@ -248,12 +248,12 @@ func (b *cfContainersBackend) Stop(ctx context.Context, req StopRequest) error {
 	return nil
 }
 
-func (b *cfContainersBackend) Cleanup(ctx context.Context, req CleanupRequest) error {
-	client, err := newCFContainersClient(b.cfg, b.rt)
+func (b *cloudflareBackend) Cleanup(ctx context.Context, req CleanupRequest) error {
+	client, err := newCloudflareClient(b.cfg, b.rt)
 	if err != nil {
 		return err
 	}
-	claims, err := localCFContainersClaims()
+	claims, err := localCloudflareClaims()
 	if err != nil {
 		return err
 	}
@@ -274,7 +274,7 @@ func (b *cfContainersBackend) Cleanup(ctx context.Context, req CleanupRequest) e
 			fmt.Fprintf(b.rt.Stderr, "warning: %s status failed for %s: %v\n", providerName, claim.LeaseID, err)
 			continue
 		}
-		if !cfContainersTerminalState(sandbox.State) {
+		if !cloudflareTerminalState(sandbox.State) {
 			continue
 		}
 		if req.DryRun {
@@ -291,12 +291,12 @@ func (b *cfContainersBackend) Cleanup(ctx context.Context, req CleanupRequest) e
 	return nil
 }
 
-func (b *cfContainersBackend) createSandbox(ctx context.Context, client *cfContainersClient, repo Repo, reclaim bool) (string, cfContainer, string, error) {
+func (b *cloudflareBackend) createSandbox(ctx context.Context, client *cloudflareClient, repo Repo, reclaim bool) (string, cloudflareContainer, string, error) {
 	leaseID := newLeaseID()
 	slug := newLeaseSlug(leaseID)
-	workdir, err := cfContainersWorkdir(b.cfg)
+	workdir, err := cloudflareWorkdir(b.cfg)
 	if err != nil {
-		return "", cfContainer{}, "", err
+		return "", cloudflareContainer{}, "", err
 	}
 	labels := map[string]string{
 		"crabbox":  "true",
@@ -316,24 +316,22 @@ func (b *cfContainersBackend) createSandbox(ctx context.Context, client *cfConta
 		Labels:             labels,
 	})
 	if err != nil {
-		return "", cfContainer{}, "", err
+		return "", cloudflareContainer{}, "", err
 	}
 	if err := claimLeaseForRepoProvider(leaseID, slug, providerName, repo.Root, b.cfg.IdleTimeout, reclaim); err != nil {
 		_ = client.destroySandbox(context.Background(), sandbox.ID)
-		return "", cfContainer{}, "", err
+		return "", cloudflareContainer{}, "", err
 	}
 	return leaseID, sandbox, slug, nil
 }
 
-func (b *cfContainersBackend) resolveSandboxID(identifier string) (string, string, string, error) {
-	for _, provider := range []string{providerName, cloudflareContainerName} {
-		claim, ok, err := resolveLeaseClaimForProvider(identifier, provider)
-		if err != nil {
-			return "", "", "", err
-		}
-		if ok {
-			return claim.LeaseID, claim.LeaseID, blank(claim.Slug, newLeaseSlug(claim.LeaseID)), nil
-		}
+func (b *cloudflareBackend) resolveSandboxID(identifier string) (string, string, string, error) {
+	claim, ok, err := resolveLeaseClaimForProvider(identifier, providerName)
+	if err != nil {
+		return "", "", "", err
+	}
+	if ok {
+		return claim.LeaseID, claim.LeaseID, blank(claim.Slug, newLeaseSlug(claim.LeaseID)), nil
 	}
 	value := strings.TrimSpace(identifier)
 	if value == "" {
@@ -342,7 +340,7 @@ func (b *cfContainersBackend) resolveSandboxID(identifier string) (string, strin
 	return value, value, newLeaseSlug(value), nil
 }
 
-func buildCFContainersCommand(command []string, shellMode bool) (string, error) {
+func buildCloudflareCommand(command []string, shellMode bool) (string, error) {
 	if len(command) == 0 {
 		return "", errors.New("missing command")
 	}
@@ -355,15 +353,15 @@ func buildCFContainersCommand(command []string, shellMode bool) (string, error) 
 	return strings.Join(shellWords(command), " "), nil
 }
 
-func rejectCFContainersSyncOptions(req RunRequest) error {
+func rejectCloudflareSyncOptions(req RunRequest) error {
 	if req.ChecksumSync {
 		return exit(2, "%s uses archive sync; --checksum is not supported", providerName)
 	}
 	return nil
 }
 
-func cfContainersWorkdir(cfg Config) (string, error) {
-	workdir := blank(strings.TrimSpace(cfg.CFContainers.Workdir), "/workspace/crabbox")
+func cloudflareWorkdir(cfg Config) (string, error) {
+	workdir := blank(strings.TrimSpace(cfg.Cloudflare.Workdir), "/workspace/crabbox")
 	clean := path.Clean(workdir)
 	if !strings.HasPrefix(clean, "/") {
 		return "", exit(2, "%s workdir %q must resolve to an absolute path", providerName, workdir)
@@ -375,7 +373,7 @@ func cfContainersWorkdir(cfg Config) (string, error) {
 	return clean, nil
 }
 
-func sandboxStatusView(leaseID, slug string, sandbox cfContainer) StatusView {
+func sandboxStatusView(leaseID, slug string, sandbox cloudflareContainer) StatusView {
 	server := sandboxToServer(leaseID, slug, sandbox)
 	return StatusView{
 		ID:         leaseID,
@@ -386,12 +384,12 @@ func sandboxStatusView(leaseID, slug string, sandbox cfContainer) StatusView {
 		ServerID:   sandbox.ID,
 		ServerType: providerName,
 		Network:    networkPublic,
-		Ready:      cfContainersReady(server.Status),
+		Ready:      cloudflareReady(server.Status),
 		Labels:     server.Labels,
 	}
 }
 
-func sandboxToServer(leaseID, slug string, sandbox cfContainer) Server {
+func sandboxToServer(leaseID, slug string, sandbox cloudflareContainer) Server {
 	labels := map[string]string{}
 	for k, v := range sandbox.Labels {
 		labels[k] = v
@@ -432,7 +430,7 @@ func claimToServer(claim localClaim, state string) Server {
 	return server
 }
 
-func cfContainersReady(status string) bool {
+func cloudflareReady(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "", "running", "ready", "started", "active", "healthy", "unknown":
 		return true
@@ -441,7 +439,7 @@ func cfContainersReady(status string) bool {
 	}
 }
 
-func cfContainersTerminalState(status string) bool {
+func cloudflareTerminalState(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "expired", "stopped", "stopped_with_code", "destroyed", "not_found", "not-found":
 		return true
@@ -464,7 +462,7 @@ func durationMillisecondsCeil(duration time.Duration) int64 {
 	return int64((duration + time.Millisecond - 1) / time.Millisecond)
 }
 
-func (b *cfContainersBackend) now() time.Time {
+func (b *cloudflareBackend) now() time.Time {
 	if b.rt.Clock != nil {
 		return b.rt.Clock.Now()
 	}
@@ -477,7 +475,7 @@ type localClaim struct {
 	Provider string `json:"provider,omitempty"`
 }
 
-func localCFContainersClaims() ([]localClaim, error) {
+func localCloudflareClaims() ([]localClaim, error) {
 	dir, err := localClaimsDir()
 	if err != nil {
 		return nil, err
@@ -502,7 +500,7 @@ func localCFContainersClaims() ([]localClaim, error) {
 		if err := json.Unmarshal(data, &claim); err != nil {
 			return nil, exit(2, "parse claim %s: %v", entry.Name(), err)
 		}
-		if claim.Provider == providerName || claim.Provider == cloudflareContainerName {
+		if claim.Provider == providerName {
 			claims = append(claims, claim)
 		}
 	}

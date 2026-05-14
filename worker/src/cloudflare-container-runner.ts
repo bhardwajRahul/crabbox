@@ -330,7 +330,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health") {
-      return json({ ok: true, runner: "cf-containers" });
+      return json({ ok: true, runner: "cloudflare" });
     }
 
     const auth = authorize(request, env);

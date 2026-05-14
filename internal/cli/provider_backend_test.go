@@ -46,10 +46,8 @@ func TestProviderRegistryCanonicalAndAliases(t *testing.T) {
 		{name: "islo", canonical: "islo"},
 		{name: "e2b", canonical: "e2b"},
 		{name: "modal", canonical: "modal"},
-		{name: "cf-containers", canonical: "cf-containers"},
-		{name: "cloudflare-containers", canonical: "cf-containers"},
-		{name: "cloudflare-container", canonical: "cf-containers"},
-		{name: "cf-container", canonical: "cf-containers"},
+		{name: "cloudflare", canonical: "cloudflare"},
+		{name: "cf", canonical: "cloudflare"},
 		{name: "sprites", canonical: "sprites"},
 	} {
 		provider, err := ProviderFor(tc.name)

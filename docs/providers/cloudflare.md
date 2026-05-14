@@ -1,11 +1,10 @@
-# CF Containers Provider
+# Cloudflare Provider
 
-Use `provider: cf-containers` when Crabbox should run commands through a
+Use `provider: cloudflare` when Crabbox should run commands through a
 Cloudflare Worker backed by a custom Cloudflare Containers image. The provider
-also accepts the aliases `cloudflare-containers`, `cloudflare-container`, and
-`cf-container`.
+also accepts the short alias `cf`.
 
-CF Containers is a delegated run provider. Crabbox owns local repo archive
+Cloudflare is a delegated run provider. Crabbox owns local repo archive
 creation, local lease claims, timing output, command rendering, and friendly
 slugs. A small Worker runner owns container creation, file upload, command
 execution, and teardown.
@@ -16,34 +15,34 @@ execution, and teardown.
 - Wrangler authenticated for deploys.
 - Docker or a Docker-compatible CLI/daemon available to Wrangler for container
   image builds.
-- A deployed Crabbox CF Containers runner with `CRABBOX_RUNNER_TOKEN` set
+- A deployed Crabbox Cloudflare runner with `CRABBOX_RUNNER_TOKEN` set
   as a Worker secret.
 
-The Worker coordinator lives in `worker/src/cloudflare-container-runner.ts`. The
+The Worker runner lives in `worker/src/cloudflare-container-runner.ts`. The
 container image is built from `worker/cloudflare-container.Dockerfile` and starts
 the HTTP runner in `worker/cloudflare-container-runner`. The deploy config is
-`worker/wrangler.cloudflare-container.jsonc`.
+`worker/wrangler.cloudflare.jsonc`.
 
 ## Configuration
 
 ```yaml
-provider: cf-containers
-cfContainers:
+provider: cloudflare
+cloudflare:
   apiUrl: https://crabbox-cloudflare-container-runner.example.workers.dev
   workdir: /workspace/crabbox
 ```
 
-Keep the bearer token in `CRABBOX_CF_CONTAINERS_TOKEN` or user-level config,
-not in repo YAML. `CRABBOX_CF_CONTAINERS_URL` or
-`CRABBOX_CF_CONTAINERS_API_URL` can also provide the runner URL.
+Keep the bearer token in `CRABBOX_CLOUDFLARE_RUNNER_TOKEN` or user-level
+config, not in repo YAML. `CRABBOX_CLOUDFLARE_RUNNER_URL` can also provide the
+runner URL.
 
-With the token already available from `CRABBOX_CF_CONTAINERS_TOKEN` or user
+With the token already available from `CRABBOX_CLOUDFLARE_RUNNER_TOKEN` or user
 config, the runner URL can also be supplied as a flag:
 
 ```sh
 crabbox run \
-  --provider cf-containers \
-  --cf-containers-url https://runner.example.workers.dev \
+  --provider cloudflare \
+  --cloudflare-url https://runner.example.workers.dev \
   -- pnpm test
 ```
 
@@ -53,14 +52,14 @@ Install Worker dependencies and verify the runner:
 
 ```sh
 npm ci --prefix worker
-npm run check:cf-containers --prefix worker
-npm run build:cf-containers --prefix worker
+npm run check:cloudflare --prefix worker
+npm run build:cloudflare --prefix worker
 ```
 
 Deploy with:
 
 ```sh
-npm run deploy:cf-containers --prefix worker
+npm run deploy:cloudflare --prefix worker
 ```
 
 The deploy script uses Wrangler's immediate container rollout mode so a Worker
@@ -69,16 +68,16 @@ operation. When deploying manually, include the same flag:
 
 ```sh
 npx wrangler deploy \
-  --config worker/wrangler.cloudflare-container.jsonc \
+  --config worker/wrangler.cloudflare.jsonc \
   --containers-rollout=immediate
 ```
 
 Then set the bearer token:
 
 ```sh
-printf '%s' "$CRABBOX_CF_CONTAINERS_TOKEN" \
+printf '%s' "$CRABBOX_CLOUDFLARE_RUNNER_TOKEN" \
   | npx wrangler secret put CRABBOX_RUNNER_TOKEN \
-      --config worker/wrangler.cloudflare-container.jsonc
+      --config worker/wrangler.cloudflare.jsonc
 ```
 
 The checked-in runner config uses the `standard-4` container instance type so
@@ -90,20 +89,20 @@ Check the active container app after deploy:
 
 ```sh
 npx wrangler containers list \
-  --config worker/wrangler.cloudflare-container.jsonc
+  --config worker/wrangler.cloudflare.jsonc
 npx wrangler containers info <container-application-id> \
-  --config worker/wrangler.cloudflare-container.jsonc
+  --config worker/wrangler.cloudflare.jsonc
 ```
 
 ## Live Smoke
 
-With `CRABBOX_CF_CONTAINERS_TOKEN` available and `cfContainers.apiUrl` set,
+With `CRABBOX_CLOUDFLARE_RUNNER_TOKEN` available and `cloudflare.apiUrl` set,
 start with a no-sync smoke so the runner, token, image, disk, and package cache
 settings are exercised before uploading a repository archive:
 
 ```sh
 crabbox run \
-  --provider cf-containers \
+  --provider cloudflare \
   --no-sync \
   --timing-json \
   --shell \
@@ -113,7 +112,7 @@ crabbox run \
 Stop the printed lease ID when the smoke is complete:
 
 ```sh
-crabbox stop --provider cf-containers <lease-id>
+crabbox stop --provider cloudflare <lease-id>
 ```
 
 ## Behavior
@@ -128,7 +127,7 @@ crabbox stop --provider cf-containers <lease-id>
   remain alive until `crabbox stop` or the configured TTL/idle deadline
   expires.
 - `status` and `stop` resolve Crabbox's local claim and call the runner.
-- `list` reports local CF Containers claims. Cloudflare does not expose a
+- `list` reports local Cloudflare claims. Cloudflare does not expose a
   global container listing API through the runner.
 - `worker/cloudflare-container.Dockerfile` is the default Crabbox runner image.
   Operators can replace it in Wrangler config when they need a different
@@ -145,8 +144,8 @@ crabbox stop --provider cf-containers <lease-id>
   cleanup at the earlier of `--ttl` or `--idle-timeout`. Activity on file upload
   or command execution extends the idle deadline. When the deadline passes, the
   runner destroys the container and marks the lease expired.
-- `crabbox cleanup --provider cf-containers` cannot discover every remote
-  container, but it checks local CF Containers claims and removes entries
+- `crabbox cleanup --provider cloudflare` cannot discover every remote
+  container, but it checks local Cloudflare claims and removes entries
   whose runner state is expired, stopped, or missing.
 
 ## Limitations
@@ -157,8 +156,8 @@ crabbox stop --provider cf-containers <lease-id>
 - `--checksum` is not supported because the provider uses archive upload and
   extraction instead of Crabbox rsync.
 - Container size and concurrency are controlled by
-  `worker/wrangler.cloudflare-container.jsonc`. Choose an `instance_type` and
+  `worker/wrangler.cloudflare.jsonc`. Choose an `instance_type` and
   `max_instances` that match the account's Cloudflare Containers limits.
 - Cloudflare can roll container changes separately from Worker script changes.
-  Use `npm run deploy:cf-containers --prefix worker` or pass
+  Use `npm run deploy:cloudflare --prefix worker` or pass
   `--containers-rollout=immediate` when running Wrangler directly.

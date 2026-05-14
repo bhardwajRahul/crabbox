@@ -18,7 +18,7 @@ func init() {
 	RegisterProvider(testIsloProvider{})
 	RegisterProvider(testE2BProvider{})
 	RegisterProvider(testModalProvider{})
-	RegisterProvider(testCFContainersProvider{})
+	RegisterProvider(testCloudflareProvider{})
 	RegisterProvider(testSpritesProvider{})
 }
 
@@ -523,28 +523,28 @@ func (p testModalProvider) Configure(cfg Config, rt Runtime) (Backend, error) {
 	return testDelegatedBackend{spec: p.Spec()}, nil
 }
 
-type testCFContainersProvider struct{}
+type testCloudflareProvider struct{}
 
-func (testCFContainersProvider) Name() string { return "cf-containers" }
-func (testCFContainersProvider) Aliases() []string {
-	return []string{"cloudflare-containers", "cloudflare-container", "cf-container"}
+func (testCloudflareProvider) Name() string { return "cloudflare" }
+func (testCloudflareProvider) Aliases() []string {
+	return []string{"cf"}
 }
-func (testCFContainersProvider) Spec() ProviderSpec {
+func (testCloudflareProvider) Spec() ProviderSpec {
 	return ProviderSpec{
-		Name:        "cf-containers",
+		Name:        "cloudflare",
 		Kind:        ProviderKindDelegatedRun,
 		Targets:     []TargetSpec{{OS: targetLinux}},
 		Features:    FeatureSet{FeatureArchiveSync},
 		Coordinator: CoordinatorNever,
 	}
 }
-func (testCFContainersProvider) RegisterFlags(*flag.FlagSet, Config) any {
+func (testCloudflareProvider) RegisterFlags(*flag.FlagSet, Config) any {
 	return noProviderFlags{}
 }
-func (testCFContainersProvider) ApplyFlags(*Config, *flag.FlagSet, any) error {
+func (testCloudflareProvider) ApplyFlags(*Config, *flag.FlagSet, any) error {
 	return nil
 }
-func (p testCFContainersProvider) Configure(cfg Config, rt Runtime) (Backend, error) {
+func (p testCloudflareProvider) Configure(cfg Config, rt Runtime) (Backend, error) {
 	return testDelegatedBackend{spec: p.Spec()}, nil
 }
 

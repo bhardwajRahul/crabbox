@@ -9,7 +9,7 @@ import (
 )
 
 type Config = core.Config
-type CFContainersConfig = core.CFContainersConfig
+type CloudflareConfig = core.CloudflareConfig
 type ProviderSpec = core.ProviderSpec
 type Runtime = core.Runtime
 type Backend = core.Backend
@@ -30,10 +30,10 @@ type timingReport = core.TimingReport
 type timingPhase = core.TimingPhase
 
 const (
-	providerName            = "cf-containers"
-	cloudflareContainerName = "cloudflare-container"
-	targetLinux             = core.TargetLinux
-	networkPublic           = core.NetworkPublic
+	providerName  = "cloudflare"
+	providerAlias = "cf"
+	targetLinux   = core.TargetLinux
+	networkPublic = core.NetworkPublic
 )
 
 func exit(code int, format string, args ...any) core.ExitError {

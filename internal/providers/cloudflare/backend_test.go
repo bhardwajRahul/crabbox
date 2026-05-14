@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestCFContainersProviderSpec(t *testing.T) {
+func TestCloudflareProviderSpec(t *testing.T) {
 	spec := Provider{}.Spec()
 	if spec.Name != providerName {
 		t.Fatalf("spec.Name = %q, want %q", spec.Name, providerName)
@@ -26,23 +26,23 @@ func TestCFContainersProviderSpec(t *testing.T) {
 		t.Fatalf("spec.Features = %#v, want archive-sync", spec.Features)
 	}
 	aliases := Provider{}.Aliases()
-	for _, want := range []string{"cloudflare-containers", "cloudflare-container", "cf-container"} {
+	for _, want := range []string{"cf"} {
 		if !containsString(aliases, want) {
 			t.Fatalf("aliases = %#v, missing %q", aliases, want)
 		}
 	}
 }
 
-func TestCFContainersWorkdirRejectsBroadPaths(t *testing.T) {
+func TestCloudflareWorkdirRejectsBroadPaths(t *testing.T) {
 	cfg := Config{}
-	cfg.CFContainers.Workdir = "/workspace"
-	if _, err := cfContainersWorkdir(cfg); err == nil {
-		t.Fatal("cfContainersWorkdir accepted broad /workspace path")
+	cfg.Cloudflare.Workdir = "/workspace"
+	if _, err := cloudflareWorkdir(cfg); err == nil {
+		t.Fatal("cloudflareWorkdir accepted broad /workspace path")
 	}
 }
 
-func TestBuildCFContainersCommandQuotesArgv(t *testing.T) {
-	got, err := buildCFContainersCommand([]string{"node", "-e", "console.log('ok')"}, false)
+func TestBuildCloudflareCommandQuotesArgv(t *testing.T) {
+	got, err := buildCloudflareCommand([]string{"node", "-e", "console.log('ok')"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,43 +52,43 @@ func TestBuildCFContainersCommandQuotesArgv(t *testing.T) {
 	}
 }
 
-func TestCFContainersHealthyStateIsReady(t *testing.T) {
-	if !cfContainersReady("healthy") {
+func TestCloudflareHealthyStateIsReady(t *testing.T) {
+	if !cloudflareReady("healthy") {
 		t.Fatal("healthy state should be ready")
 	}
 }
 
-func TestCFContainersTokenFlagDoesNotDefaultToConfiguredSecret(t *testing.T) {
+func TestCloudflareTokenFlagDoesNotDefaultToConfiguredSecret(t *testing.T) {
 	cfg := Config{}
-	cfg.CFContainers.Token = "secret-token"
+	cfg.Cloudflare.Token = "secret-token"
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	values := RegisterCFContainersProviderFlags(fs, cfg).(cfContainersFlagValues)
+	values := RegisterCloudflareProviderFlags(fs, cfg).(cloudflareFlagValues)
 	if got := *values.Token; got != "" {
 		t.Fatalf("token flag default = %q, want empty", got)
 	}
 }
 
-func TestCFContainersFlagsApply(t *testing.T) {
+func TestCloudflareFlagsApply(t *testing.T) {
 	cfg := Config{Provider: providerName}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	values := RegisterCFContainersProviderFlags(fs, cfg)
+	values := RegisterCloudflareProviderFlags(fs, cfg)
 	err := fs.Parse([]string{
-		"--cf-containers-url", "https://current.example",
-		"--cf-containers-token", "token",
-		"--cf-containers-workdir", "/workspace/current",
+		"--cloudflare-url", "https://current.example",
+		"--cloudflare-token", "token",
+		"--cloudflare-workdir", "/workspace/current",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyCFContainersProviderFlags(&cfg, fs, values); err != nil {
+	if err := ApplyCloudflareProviderFlags(&cfg, fs, values); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CFContainers.APIURL != "https://current.example" || cfg.CFContainers.Token != "token" || cfg.CFContainers.Workdir != "/workspace/current" {
-		t.Fatalf("cf containers flags not applied: %#v", cfg.CFContainers)
+	if cfg.Cloudflare.APIURL != "https://current.example" || cfg.Cloudflare.Token != "token" || cfg.Cloudflare.Workdir != "/workspace/current" {
+		t.Fatalf("cloudflare flags not applied: %#v", cfg.Cloudflare)
 	}
 }
 
-func TestCFContainersPrepareWorkspacePreservesWhenRequested(t *testing.T) {
+func TestCloudflarePrepareWorkspacePreservesWhenRequested(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		deleteContents bool
@@ -113,10 +113,10 @@ func TestCFContainersPrepareWorkspacePreservesWhenRequested(t *testing.T) {
 			defer server.Close()
 
 			cfg := Config{}
-			cfg.CFContainers.APIURL = server.URL
-			cfg.CFContainers.Token = "token"
-			backend := cfContainersBackend{cfg: cfg, rt: Runtime{HTTP: server.Client(), Stderr: io.Discard}}
-			client, err := newCFContainersClient(cfg, backend.rt)
+			cfg.Cloudflare.APIURL = server.URL
+			cfg.Cloudflare.Token = "token"
+			backend := cloudflareBackend{cfg: cfg, rt: Runtime{HTTP: server.Client(), Stderr: io.Discard}}
+			client, err := newCloudflareClient(cfg, backend.rt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +131,7 @@ func TestCFContainersPrepareWorkspacePreservesWhenRequested(t *testing.T) {
 	}
 }
 
-func TestCFContainersRemoteDiskCheckRejectsSmallContainer(t *testing.T) {
+func TestCloudflareRemoteDiskCheckRejectsSmallContainer(t *testing.T) {
 	var got execStreamRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sandboxes/cbx_test/exec-stream" {
@@ -148,10 +148,10 @@ func TestCFContainersRemoteDiskCheckRejectsSmallContainer(t *testing.T) {
 	defer server.Close()
 
 	cfg := Config{}
-	cfg.CFContainers.APIURL = server.URL
-	cfg.CFContainers.Token = "token"
-	backend := cfContainersBackend{cfg: cfg, rt: Runtime{HTTP: server.Client(), Stderr: io.Discard}}
-	client, err := newCFContainersClient(cfg, backend.rt)
+	cfg.Cloudflare.APIURL = server.URL
+	cfg.Cloudflare.Token = "token"
+	backend := cloudflareBackend{cfg: cfg, rt: Runtime{HTTP: server.Client(), Stderr: io.Discard}}
+	client, err := newCloudflareClient(cfg, backend.rt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,20 +167,20 @@ func TestCFContainersRemoteDiskCheckRejectsSmallContainer(t *testing.T) {
 	}
 }
 
-func TestCFContainersAliasRejectsResourceFlags(t *testing.T) {
-	cfg := Config{Provider: cloudflareContainerName}
+func TestCloudflareAliasRejectsResourceFlags(t *testing.T) {
+	cfg := Config{Provider: providerAlias}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	_ = fs.String("class", "", "")
-	values := RegisterCFContainersProviderFlags(fs, cfg)
+	values := RegisterCloudflareProviderFlags(fs, cfg)
 	if err := fs.Parse([]string{"--class", "standard"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyCFContainersProviderFlags(&cfg, fs, values); err == nil {
-		t.Fatal("expected legacy provider alias to reject --class")
+	if err := ApplyCloudflareProviderFlags(&cfg, fs, values); err == nil {
+		t.Fatal("expected provider alias to reject --class")
 	}
 }
 
-func TestCFContainersClientExecStream(t *testing.T) {
+func TestCloudflareClientExecStream(t *testing.T) {
 	var token string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {
@@ -197,9 +197,9 @@ func TestCFContainersClientExecStream(t *testing.T) {
 
 	token = "test-token"
 	cfg := Config{}
-	cfg.CFContainers.APIURL = server.URL
-	cfg.CFContainers.Token = token
-	client, err := newCFContainersClient(cfg, Runtime{HTTP: server.Client()})
+	cfg.Cloudflare.APIURL = server.URL
+	cfg.Cloudflare.Token = token
+	client, err := newCloudflareClient(cfg, Runtime{HTTP: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestCFContainersClientExecStream(t *testing.T) {
 	}
 }
 
-func TestCFContainersClientRejectsPlainHTTPExceptLoopback(t *testing.T) {
+func TestCloudflareClientRejectsPlainHTTPExceptLoopback(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		apiURL  string
@@ -233,9 +233,9 @@ func TestCFContainersClientRejectsPlainHTTPExceptLoopback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{}
-			cfg.CFContainers.APIURL = tc.apiURL
-			cfg.CFContainers.Token = "token"
-			_, err := newCFContainersClient(cfg, Runtime{})
+			cfg.Cloudflare.APIURL = tc.apiURL
+			cfg.Cloudflare.Token = "token"
+			_, err := newCloudflareClient(cfg, Runtime{})
 			if tc.wantErr && err == nil {
 				t.Fatal("expected URL validation error")
 			}
@@ -261,7 +261,7 @@ func containsString(values []string, needle string) bool {
 	return false
 }
 
-func TestCFContainersStatusPrunesExpiredClaim(t *testing.T) {
+func TestCloudflareStatusPrunesExpiredClaim(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sandboxes/cbx_expired" {
@@ -272,13 +272,13 @@ func TestCFContainersStatusPrunesExpiredClaim(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := claimLeaseForRepoProvider("cbx_expired", "blue-lobster", cloudflareContainerName, t.TempDir(), time.Hour, false); err != nil {
+	if err := claimLeaseForRepoProvider("cbx_expired", "blue-lobster", providerName, t.TempDir(), time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
-	backend := cfContainersBackend{
+	backend := cloudflareBackend{
 		cfg: Config{
 			Provider: providerName,
-			CFContainers: CFContainersConfig{
+			Cloudflare: CloudflareConfig{
 				APIURL: server.URL,
 				Token:  "token",
 			},
@@ -292,12 +292,12 @@ func TestCFContainersStatusPrunesExpiredClaim(t *testing.T) {
 	if view.State != "expired" {
 		t.Fatalf("state = %q, want expired", view.State)
 	}
-	if _, ok, err := resolveLeaseClaimForProvider("blue-lobster", cloudflareContainerName); err != nil || ok {
+	if _, ok, err := resolveLeaseClaimForProvider("blue-lobster", providerName); err != nil || ok {
 		t.Fatalf("claim resolved after expired status ok=%t err=%v", ok, err)
 	}
 }
 
-func TestCFContainersCleanupPrunesTerminalClaims(t *testing.T) {
+func TestCloudflareCleanupPrunesTerminalClaims(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -312,17 +312,17 @@ func TestCFContainersCleanupPrunesTerminalClaims(t *testing.T) {
 	defer server.Close()
 
 	repo := t.TempDir()
-	if err := claimLeaseForRepoProvider("cbx_expired", "blue-lobster", cloudflareContainerName, repo, time.Hour, false); err != nil {
+	if err := claimLeaseForRepoProvider("cbx_expired", "blue-lobster", providerName, repo, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := claimLeaseForRepoProvider("cbx_running", "green-lobster", providerName, repo, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	backend := cfContainersBackend{
+	backend := cloudflareBackend{
 		cfg: Config{
 			Provider: providerName,
-			CFContainers: CFContainersConfig{
+			Cloudflare: CloudflareConfig{
 				APIURL: server.URL,
 				Token:  "token",
 			},
@@ -332,7 +332,7 @@ func TestCFContainersCleanupPrunesTerminalClaims(t *testing.T) {
 	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := resolveLeaseClaimForProvider("blue-lobster", cloudflareContainerName); err != nil || ok {
+	if _, ok, err := resolveLeaseClaimForProvider("blue-lobster", providerName); err != nil || ok {
 		t.Fatalf("expired claim resolved after cleanup ok=%t err=%v", ok, err)
 	}
 	if _, ok, err := resolveLeaseClaimForProvider("green-lobster", providerName); err != nil || !ok {

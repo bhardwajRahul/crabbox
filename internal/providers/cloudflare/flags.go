@@ -5,22 +5,22 @@ import (
 	"strings"
 )
 
-type cfContainersFlagValues struct {
+type cloudflareFlagValues struct {
 	APIURL  *string
 	Token   *string
 	Workdir *string
 }
 
-func RegisterCFContainersProviderFlags(fs *flag.FlagSet, defaults Config) any {
-	return cfContainersFlagValues{
-		APIURL:  fs.String("cf-containers-url", defaults.CFContainers.APIURL, "CF Containers runner API URL"),
-		Token:   fs.String("cf-containers-token", "", "CF Containers runner bearer token"),
-		Workdir: fs.String("cf-containers-workdir", defaults.CFContainers.Workdir, "Absolute working directory inside the CF Containers workspace"),
+func RegisterCloudflareProviderFlags(fs *flag.FlagSet, defaults Config) any {
+	return cloudflareFlagValues{
+		APIURL:  fs.String("cloudflare-url", defaults.Cloudflare.APIURL, "Cloudflare runner API URL"),
+		Token:   fs.String("cloudflare-token", "", "Cloudflare runner bearer token"),
+		Workdir: fs.String("cloudflare-workdir", defaults.Cloudflare.Workdir, "Absolute working directory inside the Cloudflare workspace"),
 	}
 }
 
-func ApplyCFContainersProviderFlags(cfg *Config, fs *flag.FlagSet, values any) error {
-	if isCFContainersProviderName(cfg.Provider) {
+func ApplyCloudflareProviderFlags(cfg *Config, fs *flag.FlagSet, values any) error {
+	if isCloudflareProviderName(cfg.Provider) {
 		if flagWasSet(fs, "class") {
 			return exit(2, "--class is not supported for provider=%s", providerName)
 		}
@@ -28,25 +28,25 @@ func ApplyCFContainersProviderFlags(cfg *Config, fs *flag.FlagSet, values any) e
 			return exit(2, "--type is not supported for provider=%s", providerName)
 		}
 	}
-	v, ok := values.(cfContainersFlagValues)
+	v, ok := values.(cloudflareFlagValues)
 	if !ok {
 		return nil
 	}
-	if flagWasSet(fs, "cf-containers-url") {
-		cfg.CFContainers.APIURL = *v.APIURL
+	if flagWasSet(fs, "cloudflare-url") {
+		cfg.Cloudflare.APIURL = *v.APIURL
 	}
-	if flagWasSet(fs, "cf-containers-token") {
-		cfg.CFContainers.Token = *v.Token
+	if flagWasSet(fs, "cloudflare-token") {
+		cfg.Cloudflare.Token = *v.Token
 	}
-	if flagWasSet(fs, "cf-containers-workdir") {
-		cfg.CFContainers.Workdir = *v.Workdir
+	if flagWasSet(fs, "cloudflare-workdir") {
+		cfg.Cloudflare.Workdir = *v.Workdir
 	}
 	return nil
 }
 
-func isCFContainersProviderName(provider string) bool {
+func isCloudflareProviderName(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case providerName, "cloudflare-containers", cloudflareContainerName, "cf-container":
+	case providerName, providerAlias:
 		return true
 	default:
 		return false

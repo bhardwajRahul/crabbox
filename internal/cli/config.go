@@ -85,7 +85,7 @@ type Config struct {
 	Islo               IsloConfig
 	Tensorlake         TensorlakeConfig
 	Modal              ModalConfig
-	CFContainers       CFContainersConfig
+	Cloudflare         CloudflareConfig
 	Semaphore          SemaphoreConfig
 	Sprites            SpritesConfig
 	Tailscale          TailscaleConfig
@@ -212,7 +212,7 @@ type ModalConfig struct {
 	Python  string
 }
 
-type CFContainersConfig struct {
+type CloudflareConfig struct {
 	APIURL  string
 	Token   string
 	Workdir string
@@ -469,7 +469,7 @@ func baseConfig() Config {
 			Workdir: "/workspace/crabbox",
 			Python:  "python3",
 		},
-		CFContainers: CFContainersConfig{
+		Cloudflare: CloudflareConfig{
 			Workdir: "/workspace/crabbox",
 		},
 		Proxmox: ProxmoxConfig{
@@ -529,7 +529,7 @@ type fileConfig struct {
 	Islo             *fileIsloConfig          `yaml:"islo,omitempty"`
 	Tensorlake       *fileTensorlakeConfig    `yaml:"tensorlake,omitempty"`
 	Modal            *fileModalConfig         `yaml:"modal,omitempty"`
-	CFContainers     *fileCFContainersConfig  `yaml:"cfContainers,omitempty"`
+	Cloudflare       *fileCloudflareConfig    `yaml:"cloudflare,omitempty"`
 	Semaphore        *fileSemaphoreConfig     `yaml:"semaphore,omitempty"`
 	Sprites          *fileSpritesConfig       `yaml:"sprites,omitempty"`
 	Tailscale        *fileTailscaleConfig     `yaml:"tailscale,omitempty"`
@@ -742,24 +742,24 @@ type fileModalConfig struct {
 	Python  string `yaml:"python,omitempty"`
 }
 
-type fileCFContainersConfig struct {
+type fileCloudflareConfig struct {
 	APIURL  string `yaml:"apiUrl,omitempty"`
 	Token   string `yaml:"token,omitempty"`
 	Workdir string `yaml:"workdir,omitempty"`
 }
 
-func applyCFContainersFileConfig(cfg *Config, file *fileCFContainersConfig) {
+func applyCloudflareFileConfig(cfg *Config, file *fileCloudflareConfig) {
 	if file == nil {
 		return
 	}
 	if file.APIURL != "" {
-		cfg.CFContainers.APIURL = file.APIURL
+		cfg.Cloudflare.APIURL = file.APIURL
 	}
 	if file.Token != "" {
-		cfg.CFContainers.Token = file.Token
+		cfg.Cloudflare.Token = file.Token
 	}
 	if file.Workdir != "" {
-		cfg.CFContainers.Workdir = file.Workdir
+		cfg.Cloudflare.Workdir = file.Workdir
 	}
 }
 
@@ -1441,7 +1441,7 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 			cfg.Modal.Python = file.Modal.Python
 		}
 	}
-	applyCFContainersFileConfig(cfg, file.CFContainers)
+	applyCloudflareFileConfig(cfg, file.Cloudflare)
 	if file.Semaphore != nil {
 		if file.Semaphore.Host != "" {
 			cfg.Semaphore.Host = file.Semaphore.Host
@@ -1860,9 +1860,9 @@ func applyEnv(cfg *Config) {
 	cfg.Modal.Image = getenv("CRABBOX_MODAL_IMAGE", cfg.Modal.Image)
 	cfg.Modal.Workdir = getenv("CRABBOX_MODAL_WORKDIR", cfg.Modal.Workdir)
 	cfg.Modal.Python = getenv("CRABBOX_MODAL_PYTHON", cfg.Modal.Python)
-	cfg.CFContainers.APIURL = getenv("CRABBOX_CF_CONTAINERS_API_URL", getenv("CRABBOX_CF_CONTAINERS_URL", cfg.CFContainers.APIURL))
-	cfg.CFContainers.Token = getenv("CRABBOX_CF_CONTAINERS_TOKEN", cfg.CFContainers.Token)
-	cfg.CFContainers.Workdir = getenv("CRABBOX_CF_CONTAINERS_WORKDIR", cfg.CFContainers.Workdir)
+	cfg.Cloudflare.APIURL = getenv("CRABBOX_CLOUDFLARE_RUNNER_URL", cfg.Cloudflare.APIURL)
+	cfg.Cloudflare.Token = getenv("CRABBOX_CLOUDFLARE_RUNNER_TOKEN", cfg.Cloudflare.Token)
+	cfg.Cloudflare.Workdir = getenv("CRABBOX_CLOUDFLARE_WORKDIR", cfg.Cloudflare.Workdir)
 	cfg.Semaphore.Host = getenv("CRABBOX_SEMAPHORE_HOST", getenv("SEMAPHORE_HOST", cfg.Semaphore.Host))
 	cfg.Semaphore.Token = getenv("CRABBOX_SEMAPHORE_TOKEN", getenv("SEMAPHORE_API_TOKEN", cfg.Semaphore.Token))
 	cfg.Semaphore.Project = getenv("CRABBOX_SEMAPHORE_PROJECT", getenv("SEMAPHORE_PROJECT", cfg.Semaphore.Project))

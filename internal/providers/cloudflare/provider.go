@@ -15,7 +15,7 @@ type Provider struct{}
 func (Provider) Name() string { return providerName }
 
 func (Provider) Aliases() []string {
-	return []string{"cloudflare-containers", cloudflareContainerName, "cf-container"}
+	return []string{providerAlias}
 }
 
 func (Provider) Spec() core.ProviderSpec {
@@ -29,13 +29,13 @@ func (Provider) Spec() core.ProviderSpec {
 }
 
 func (Provider) RegisterFlags(fs *flag.FlagSet, defaults core.Config) any {
-	return RegisterCFContainersProviderFlags(fs, defaults)
+	return RegisterCloudflareProviderFlags(fs, defaults)
 }
 
 func (Provider) ApplyFlags(cfg *core.Config, fs *flag.FlagSet, values any) error {
-	return ApplyCFContainersProviderFlags(cfg, fs, values)
+	return ApplyCloudflareProviderFlags(cfg, fs, values)
 }
 
 func (p Provider) Configure(cfg core.Config, rt core.Runtime) (core.Backend, error) {
-	return NewCFContainersBackend(p.Spec(), cfg, rt), nil
+	return NewCloudflareBackend(p.Spec(), cfg, rt), nil
 }

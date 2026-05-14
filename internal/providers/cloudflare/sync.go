@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func (b *cfContainersBackend) syncWorkspace(ctx context.Context, client *cfContainersClient, sandboxID string, req RunRequest, workdir string) ([]timingPhase, time.Duration, error) {
+func (b *cloudflareBackend) syncWorkspace(ctx context.Context, client *cloudflareClient, sandboxID string, req RunRequest, workdir string) ([]timingPhase, time.Duration, error) {
 	start := b.now()
 	excludes, err := syncExcludes(req.Repo.Root, b.cfg)
 	if err != nil {
@@ -35,7 +35,7 @@ func (b *cfContainersBackend) syncWorkspace(ctx context.Context, client *cfConta
 	}
 	prepareDuration := b.now().Sub(prepareStarted)
 	archiveStarted := b.now()
-	archive, err := createCFContainersSyncArchive(ctx, req.Repo, manifest, b.rt.Stderr)
+	archive, err := createCloudflareSyncArchive(ctx, req.Repo, manifest, b.rt.Stderr)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -76,7 +76,7 @@ func (b *cfContainersBackend) syncWorkspace(ctx context.Context, client *cfConta
 	}, total, nil
 }
 
-func (b *cfContainersBackend) checkRemoteDiskForSync(ctx context.Context, client *cfContainersClient, sandboxID, workdir string, manifestBytes, archiveBytes int64) error {
+func (b *cloudflareBackend) checkRemoteDiskForSync(ctx context.Context, client *cloudflareClient, sandboxID, workdir string, manifestBytes, archiveBytes int64) error {
 	required := manifestBytes + archiveBytes
 	if required <= 0 {
 		return nil
@@ -89,7 +89,7 @@ func (b *cfContainersBackend) checkRemoteDiskForSync(ctx context.Context, client
 		return nil
 	}
 	if available < required {
-		return exit(6, "%s remote disk too small for sync: need %s for archive+extract, available %s; use a larger CF Containers instance_type or reduce sync.exclude", providerName, byteCount(required), byteCount(available))
+		return exit(6, "%s remote disk too small for sync: need %s for archive+extract, available %s; use a larger Cloudflare instance_type or reduce sync.exclude", providerName, byteCount(required), byteCount(available))
 	}
 	const lowHeadroom = 1 << 30
 	if remaining := available - required; remaining < lowHeadroom {
@@ -98,7 +98,7 @@ func (b *cfContainersBackend) checkRemoteDiskForSync(ctx context.Context, client
 	return nil
 }
 
-func (b *cfContainersBackend) remoteDiskAvailable(ctx context.Context, client *cfContainersClient, sandboxID, workdir string) (int64, error) {
+func (b *cloudflareBackend) remoteDiskAvailable(ctx context.Context, client *cloudflareClient, sandboxID, workdir string) (int64, error) {
 	command := "set -o pipefail; df -B1 --output=avail,target /tmp " + shellQuote(workdir) + " | tail -n +2"
 	var stdout bytes.Buffer
 	if err := b.execShell(ctx, client, sandboxID, command, &stdout); err != nil {
@@ -136,7 +136,7 @@ func byteCount(bytes int64) string {
 	return fmt.Sprintf("%.1f PiB", value/unit)
 }
 
-func (b *cfContainersBackend) prepareWorkspace(ctx context.Context, client *cfContainersClient, sandboxID, workdir string, deleteContents bool) error {
+func (b *cloudflareBackend) prepareWorkspace(ctx context.Context, client *cloudflareClient, sandboxID, workdir string, deleteContents bool) error {
 	command := "mkdir -p " + shellQuote(workdir)
 	if deleteContents {
 		command = "rm -rf " + shellQuote(workdir) + " && " + command
@@ -144,7 +144,7 @@ func (b *cfContainersBackend) prepareWorkspace(ctx context.Context, client *cfCo
 	return b.execShell(ctx, client, sandboxID, command, io.Discard)
 }
 
-func (b *cfContainersBackend) execShell(ctx context.Context, client *cfContainersClient, sandboxID, command string, stdout io.Writer) error {
+func (b *cloudflareBackend) execShell(ctx context.Context, client *cloudflareClient, sandboxID, command string, stdout io.Writer) error {
 	code, err := client.execStream(ctx, sandboxID, execStreamRequest{
 		Command:   command,
 		Cwd:       "/",
@@ -159,10 +159,10 @@ func (b *cfContainersBackend) execShell(ctx context.Context, client *cfContainer
 	return nil
 }
 
-func createCFContainersSyncArchive(ctx context.Context, repo Repo, manifest SyncManifest, stderr io.Writer) (*os.File, error) {
+func createCloudflareSyncArchive(ctx context.Context, repo Repo, manifest SyncManifest, stderr io.Writer) (*os.File, error) {
 	var input bytes.Buffer
 	input.Write(manifest.NUL())
-	archive, err := os.CreateTemp("", "crabbox-cf-containers-sync-*.tgz")
+	archive, err := os.CreateTemp("", "crabbox-cloudflare-sync-*.tgz")
 	if err != nil {
 		return nil, fmt.Errorf("create sync archive temp file: %w", err)
 	}
