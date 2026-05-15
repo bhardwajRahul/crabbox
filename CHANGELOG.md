@@ -22,6 +22,7 @@
 - Fixed coordinator TTL cleanup so provider deletion failures keep leases active with retry metadata instead of silently expiring while cloud instances continue running.
 - Fixed direct AWS security-group maintenance so stale Crabbox-owned SSH ingress rules are pruned before adding the current source CIDRs.
 - Fixed E2B sync cleanup so remote upload archives are removed even when extraction fails. Thanks @stainlu.
+- Fixed Hetzner Cloud server-list parsing so `private_net` arrays from the API no longer break list, doctor, warmup, or reused-run flows. Thanks @muqsitnawaz.
 - Fixed installed tagged builds so `crabbox --version` and proof metadata report the Go module build version instead of the development fallback. Thanks @stainlu.
 - Fixed Modal sync cleanup so remote upload archives are removed even when extraction fails. Thanks @stainlu.
 - Fixed native provider checkpoint creation so AWS, Azure, and GCP snapshot/image checkpoints flush source filesystem writes before calling the provider API.
