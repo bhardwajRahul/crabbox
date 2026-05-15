@@ -223,7 +223,9 @@ when `CRABBOX_MACOS_PROMOTE=1`. Tune the WebVNC bridge wait with
 provider-side billing and release constraints; the script stops each lease's
 local WebVNC daemon before lease cleanup, waits for the host to return to
 `available` between macOS boots, and releases the host only when
-`CRABBOX_MACOS_RELEASE_HOST=1`.
+`CRABBOX_MACOS_RELEASE_HOST=1`. Host release is honored for source-only,
+candidate-only, and promoted-image runs; the script refuses to release a
+pre-existing host unless `CRABBOX_MACOS_RELEASE_EXISTING_HOST=1` is also set.
 
 If an available EC2 Mac Dedicated Host already exists, the script still stops
 after preflight unless `CRABBOX_MACOS_RUN=1` or `CRABBOX_MACOS_ALLOCATE=1` is

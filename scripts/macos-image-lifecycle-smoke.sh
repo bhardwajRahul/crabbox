@@ -69,6 +69,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+release_host_if_requested() {
+  local label="$1"
+  [[ "$release_host" == "1" && -n "$allocated_host" ]] || return 0
+  wait_for_host_available "$allocated_host" "$label"
+  run "$CRABBOX_BIN" admin mac-hosts release "$allocated_host" --region "$region" --force
+  allocated_host=""
+}
+
 lease_from_log() {
   node -e '
 const fs = require("fs");
@@ -275,10 +283,20 @@ if [[ -n "$allocated_host" ]]; then
   export CRABBOX_AWS_MAC_HOST_ID="$allocated_host"
 fi
 
+if [[ "$release_host" == "1" && -n "$allocated_host" && "$host_allocated_by_script" != "1" && "${CRABBOX_MACOS_RELEASE_EXISTING_HOST:-0}" != "1" ]]; then
+  printf 'refusing to release pre-existing EC2 Mac Dedicated Host %s; set CRABBOX_MACOS_RELEASE_EXISTING_HOST=1 to confirm.\n' "$allocated_host" >&2
+  exit 1
+fi
+
 source_lease="$(warmup_macos source)"
 smoke_macos_lease "$source_lease" source
 
 if [[ "$create_image" != "1" ]]; then
+  if [[ "$release_host" == "1" || "$keep_lease" != "1" ]]; then
+    stop_lease "$source_lease"
+    source_lease=""
+  fi
+  release_host_if_requested source
   printf 'source lease smoke passed; set CRABBOX_MACOS_CREATE_IMAGE=1 to create the AMI.\n'
   exit 0
 fi
@@ -299,6 +317,11 @@ candidate_lease="$(CRABBOX_AWS_AMI="$ami_id" warmup_macos candidate)"
 smoke_macos_lease "$candidate_lease" candidate
 
 if [[ "$promote" != "1" ]]; then
+  if [[ "$release_host" == "1" || "$keep_lease" != "1" ]]; then
+    stop_lease "$candidate_lease"
+    candidate_lease=""
+  fi
+  release_host_if_requested candidate
   printf 'candidate AMI smoke passed: %s\n' "$ami_id"
   printf 'set CRABBOX_MACOS_PROMOTE=1 to promote it and run the promoted-image smoke.\n'
   exit 0
@@ -313,13 +336,8 @@ promoted_lease="$(warmup_macos promoted)"
 smoke_macos_lease "$promoted_lease" promoted
 printf 'promoted macOS image lifecycle passed: %s\n' "$ami_id"
 
-if [[ "$release_host" == "1" && -n "$allocated_host" ]]; then
-  if [[ "$host_allocated_by_script" != "1" && "${CRABBOX_MACOS_RELEASE_EXISTING_HOST:-0}" != "1" ]]; then
-    printf 'refusing to release pre-existing EC2 Mac Dedicated Host %s; set CRABBOX_MACOS_RELEASE_EXISTING_HOST=1 to confirm.\n' "$allocated_host" >&2
-    exit 1
-  fi
+if [[ "$release_host" == "1" ]]; then
   stop_lease "$promoted_lease"
   promoted_lease=""
-  wait_for_host_available "$allocated_host" promoted
-  run "$CRABBOX_BIN" admin mac-hosts release "$allocated_host" --region "$region" --force
+  release_host_if_requested promoted
 fi
