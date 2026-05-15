@@ -103,6 +103,7 @@ export interface LeaseRequest {
   image?: string;
   awsRegion?: string;
   awsAMI?: string;
+  awsSnapshot?: string;
   awsSGID?: string;
   awsSubnetID?: string;
   awsProfile?: string;
@@ -111,9 +112,12 @@ export interface LeaseRequest {
   awsMacHostID?: string;
   azureLocation?: string;
   azureImage?: string;
+  azureSnapshot?: string;
   gcpProject?: string;
   gcpZone?: string;
   gcpImage?: string;
+  gcpMachineImage?: string;
+  gcpSnapshot?: string;
   gcpNetwork?: string;
   gcpSubnet?: string;
   gcpTags?: string[];
@@ -259,11 +263,15 @@ export interface ProviderImage {
   id: string;
   name: string;
   state: string;
+  provider?: Provider;
+  kind?: string;
   region?: string;
   target?: TargetOS;
   windowsMode?: WindowsMode;
   serverType?: string;
   architecture?: string;
+  project?: string;
+  resourceID?: string;
   snapshots?: string[];
 }
 

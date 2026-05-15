@@ -168,7 +168,11 @@ type CoordinatorImage struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	State        string `json:"state"`
+	Provider     string `json:"provider,omitempty"`
+	Kind         string `json:"kind,omitempty"`
 	Region       string `json:"region,omitempty"`
+	Project      string `json:"project,omitempty"`
+	ResourceID   string `json:"resourceID,omitempty"`
 	Target       string `json:"target,omitempty"`
 	WindowsMode  string `json:"windowsMode,omitempty"`
 	ServerType   string `json:"serverType,omitempty"`
@@ -200,6 +204,16 @@ type CoordinatorMacHostAllocationDryRun struct {
 	InstanceType     string `json:"instanceType"`
 	OK               bool   `json:"ok"`
 	Message          string `json:"message"`
+}
+
+type CoordinatorImageRef struct {
+	Provider     string
+	Region       string
+	Project      string
+	Kind         string
+	Target       string
+	ServerType   string
+	Architecture string
 }
 
 type CoordinatorGitHubLoginStart struct {
@@ -565,6 +579,7 @@ func (c *CoordinatorClient) CreateLease(ctx context.Context, cfg Config, publicK
 		"image":                           cfg.Image,
 		"awsRegion":                       cfg.AWSRegion,
 		"awsAMI":                          cfg.AWSAMI,
+		"awsSnapshot":                     cfg.AWSSnapshot,
 		"awsSGID":                         cfg.AWSSGID,
 		"awsSubnetID":                     cfg.AWSSubnetID,
 		"awsProfile":                      cfg.AWSProfile,
@@ -573,6 +588,7 @@ func (c *CoordinatorClient) CreateLease(ctx context.Context, cfg Config, publicK
 		"awsMacHostID":                    cfg.AWSMacHostID,
 		"azureLocation":                   cfg.AzureLocation,
 		"azureImage":                      cfg.AzureImage,
+		"azureSnapshot":                   cfg.AzureSnapshot,
 		"sshUser":                         cfg.SSHUser,
 		"sshPort":                         cfg.SSHPort,
 		"sshFallbackPorts":                cfg.SSHFallbackPorts,
@@ -604,6 +620,12 @@ func addCoordinatorGCPFields(req map[string]any, cfg Config) {
 	}
 	if cfg.GCPImage != "" && (cfg.gcpImageExplicit || cfg.GCPImage != base.GCPImage) {
 		req["gcpImage"] = cfg.GCPImage
+	}
+	if cfg.GCPMachineImage != "" {
+		req["gcpMachineImage"] = cfg.GCPMachineImage
+	}
+	if cfg.GCPSnapshot != "" {
+		req["gcpSnapshot"] = cfg.GCPSnapshot
 	}
 	if cfg.GCPNetwork != "" && (cfg.gcpNetworkExplicit || cfg.GCPNetwork != base.GCPNetwork) {
 		req["gcpNetwork"] = cfg.GCPNetwork
@@ -1021,56 +1043,74 @@ func (c *CoordinatorClient) AdminReleaseMacHost(ctx context.Context, region, hos
 	return res.Released, err
 }
 
-func (c *CoordinatorClient) CreateImage(ctx context.Context, leaseID, name string, noReboot bool) (CoordinatorImage, error) {
+func (c *CoordinatorClient) CreateImage(ctx context.Context, leaseID, name string, noReboot bool, strategies ...string) (CoordinatorImage, error) {
 	var res struct {
 		Image CoordinatorImage `json:"image"`
 	}
-	err := c.do(ctx, http.MethodPost, "/v1/images", map[string]any{
+	req := map[string]any{
 		"leaseID":  leaseID,
 		"name":     name,
 		"noReboot": noReboot,
-	}, &res)
+	}
+	if len(strategies) > 0 && strings.TrimSpace(strategies[0]) != "" {
+		req["strategy"] = strings.TrimSpace(strategies[0])
+	}
+	err := c.do(ctx, http.MethodPost, "/v1/images", req, &res)
 	return res.Image, err
 }
 
-func (c *CoordinatorClient) Image(ctx context.Context, imageID string, region ...string) (CoordinatorImage, error) {
+func (c *CoordinatorClient) Image(ctx context.Context, imageID string, refs ...CoordinatorImageRef) (CoordinatorImage, error) {
 	var res struct {
 		Image CoordinatorImage `json:"image"`
 	}
-	err := c.do(ctx, http.MethodGet, imagePath(imageID, "", region...), nil, &res)
+	err := c.do(ctx, http.MethodGet, imagePath(imageID, "", refs...), nil, &res)
 	return res.Image, err
 }
 
-func (c *CoordinatorClient) PromoteImage(ctx context.Context, imageID, target, region string) (CoordinatorImage, error) {
+func (c *CoordinatorClient) PromoteImage(ctx context.Context, imageID string, refs ...CoordinatorImageRef) (CoordinatorImage, error) {
 	var res struct {
 		Image CoordinatorImage `json:"image"`
 	}
-	body := map[string]any{}
-	if target != "" {
-		body["target"] = target
-	}
-	if region != "" {
-		body["region"] = region
-	}
-	err := c.do(ctx, http.MethodPost, imagePath(imageID, "promote", region), body, &res)
+	err := c.do(ctx, http.MethodPost, imagePath(imageID, "promote", refs...), map[string]any{}, &res)
 	return res.Image, err
 }
 
-func (c *CoordinatorClient) DeleteImage(ctx context.Context, imageID string, region ...string) error {
-	return c.do(ctx, http.MethodDelete, imagePath(imageID, "", region...), nil, nil)
+func (c *CoordinatorClient) DeleteImage(ctx context.Context, imageID string, refs ...CoordinatorImageRef) error {
+	return c.do(ctx, http.MethodDelete, imagePath(imageID, "", refs...), nil, nil)
 }
 
-func imagePath(imageID, action string, region ...string) string {
+func imagePath(imageID, action string, refs ...CoordinatorImageRef) string {
 	path := "/v1/images/" + url.PathEscape(imageID)
 	if action != "" {
 		path += "/" + url.PathEscape(action)
 	}
-	selected := ""
-	if len(region) > 0 {
-		selected = strings.TrimSpace(region[0])
+	values := url.Values{}
+	if len(refs) > 0 {
+		ref := refs[0]
+		if strings.TrimSpace(ref.Provider) != "" {
+			values.Set("provider", strings.TrimSpace(ref.Provider))
+		}
+		if strings.TrimSpace(ref.Region) != "" {
+			values.Set("region", strings.TrimSpace(ref.Region))
+		}
+		if strings.TrimSpace(ref.Project) != "" {
+			values.Set("project", strings.TrimSpace(ref.Project))
+		}
+		if strings.TrimSpace(ref.Kind) != "" {
+			values.Set("kind", strings.TrimSpace(ref.Kind))
+		}
+		if strings.TrimSpace(ref.Target) != "" {
+			values.Set("target", strings.TrimSpace(ref.Target))
+		}
+		if strings.TrimSpace(ref.ServerType) != "" {
+			values.Set("serverType", strings.TrimSpace(ref.ServerType))
+		}
+		if strings.TrimSpace(ref.Architecture) != "" {
+			values.Set("architecture", strings.TrimSpace(ref.Architecture))
+		}
 	}
-	if selected != "" {
-		path += "?region=" + url.QueryEscape(selected)
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 	return path
 }
