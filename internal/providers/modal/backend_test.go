@@ -380,16 +380,9 @@ func containsVerb(verbs []string, want string) bool {
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q", root},
-		{"-C", root, "config", "user.email", "test@example.com"},
-		{"-C", root, "config", "user.name", "test"},
-		{"-C", root, "commit", "-q", "--allow-empty", "-m", "init"},
-	} {
-		cmd := osexec.Command("git", args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
+	cmd := osexec.Command("git", "init", "-q", root)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
 	}
 	return root
 }
