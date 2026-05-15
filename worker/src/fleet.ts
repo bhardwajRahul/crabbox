@@ -840,7 +840,10 @@ export class FleetDurableObject implements DurableObject {
     const owner = requestOwner(request);
     const org = requestOrg(request, this.env);
     const input = await readJson<LeaseRequest>(request);
-    const config = leaseConfig(input);
+    const config = leaseConfig(
+      input,
+      this.env.CRABBOX_AZURE_OS_DISK ? { azureOSDisk: this.env.CRABBOX_AZURE_OS_DISK } : undefined,
+    );
     if (!isAdminRequest(request) && hasNativeLeaseSource(config)) {
       return json(
         {

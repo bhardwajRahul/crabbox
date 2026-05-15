@@ -46,6 +46,7 @@ type Config struct {
 	AzureResourceGroup string
 	AzureImage         string
 	AzureSnapshot      string
+	AzureOSDisk        string
 	AzureVNet          string
 	AzureSubnet        string
 	AzureNSG           string
@@ -395,6 +396,7 @@ func baseConfig() Config {
 		AzureLocation:      "eastus",
 		AzureResourceGroup: "crabbox-leases",
 		AzureImage:         defaultAzureLinuxImage,
+		AzureOSDisk:        AzureOSDiskManaged,
 		AzureVNet:          "crabbox-vnet",
 		AzureSubnet:        "crabbox-subnet",
 		AzureNSG:           "crabbox-nsg",
@@ -589,6 +591,7 @@ type fileAzureConfig struct {
 	Location       string   `yaml:"location,omitempty"`
 	ResourceGroup  string   `yaml:"resourceGroup,omitempty"`
 	Image          string   `yaml:"image,omitempty"`
+	OSDisk         string   `yaml:"osDisk,omitempty"`
 	VNet           string   `yaml:"vnet,omitempty"`
 	Subnet         string   `yaml:"subnet,omitempty"`
 	NSG            string   `yaml:"nsg,omitempty"`
@@ -1078,6 +1081,9 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 		}
 		if file.Azure.Image != "" {
 			cfg.AzureImage = file.Azure.Image
+		}
+		if file.Azure.OSDisk != "" {
+			cfg.AzureOSDisk = file.Azure.OSDisk
 		}
 		if file.Azure.VNet != "" {
 			cfg.AzureVNet = file.Azure.VNet
@@ -1718,6 +1724,7 @@ func applyEnv(cfg *Config) {
 	cfg.AzureLocation = getenv("CRABBOX_AZURE_LOCATION", cfg.AzureLocation)
 	cfg.AzureResourceGroup = getenv("CRABBOX_AZURE_RESOURCE_GROUP", cfg.AzureResourceGroup)
 	cfg.AzureImage = getenv("CRABBOX_AZURE_IMAGE", cfg.AzureImage)
+	cfg.AzureOSDisk = getenv("CRABBOX_AZURE_OS_DISK", cfg.AzureOSDisk)
 	cfg.AzureVNet = getenv("CRABBOX_AZURE_VNET", cfg.AzureVNet)
 	cfg.AzureSubnet = getenv("CRABBOX_AZURE_SUBNET", cfg.AzureSubnet)
 	cfg.AzureNSG = getenv("CRABBOX_AZURE_NSG", cfg.AzureNSG)

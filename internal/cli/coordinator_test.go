@@ -472,6 +472,7 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 		AzureLocation      string   `json:"azureLocation"`
 		AzureImage         string   `json:"azureImage"`
 		AzureSnapshot      string   `json:"azureSnapshot"`
+		AzureOSDisk        string   `json:"azureOSDisk"`
 		GCPProject         string   `json:"gcpProject"`
 		GCPZone            string   `json:"gcpZone"`
 		GCPSnapshot        string   `json:"gcpSnapshot"`
@@ -505,6 +506,7 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 		AzureLocation:      "eastus",
 		AzureImage:         "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest",
 		AzureSnapshot:      "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/snapshots/checkpoint",
+		AzureOSDisk:        "managed",
 		GCPProject:         "crabbox-project",
 		gcpProjectExplicit: true,
 		GCPZone:            "europe-west2-b",
@@ -539,6 +541,9 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 	}
 	if body.AWSSnapshot != "snap-123" || body.AzureSnapshot == "" || body.GCPSnapshot == "" {
 		t.Fatalf("snapshot fields not forwarded: aws=%q azure=%q gcp=%q", body.AWSSnapshot, body.AzureSnapshot, body.GCPSnapshot)
+	}
+	if body.AzureOSDisk != "managed" {
+		t.Fatalf("azureOSDisk=%q", body.AzureOSDisk)
 	}
 	if body.GCPProject != "crabbox-project" || body.GCPZone != "europe-west2-b" || body.GCPNetwork != "crabbox-net" || body.GCPRootGB != 900 {
 		t.Fatalf("unexpected gcp body: %#v", body)

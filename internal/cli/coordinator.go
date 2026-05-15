@@ -556,6 +556,7 @@ func (c *CoordinatorClient) CreateLease(ctx context.Context, cfg Config, publicK
 		"azureLocation":                   cfg.AzureLocation,
 		"azureImage":                      cfg.AzureImage,
 		"azureSnapshot":                   cfg.AzureSnapshot,
+		"azureOSDisk":                     cfg.AzureOSDisk,
 		"sshUser":                         cfg.SSHUser,
 		"sshPort":                         cfg.SSHPort,
 		"sshFallbackPorts":                cfg.SSHFallbackPorts,
