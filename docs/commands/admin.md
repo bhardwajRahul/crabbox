@@ -64,8 +64,44 @@ Dedicated Hosts are billed separately from Crabbox leases and have AWS lifecycle
 constraints.
 
 The coordinator AWS identity must allow `ec2:DescribeInstanceTypeOfferings`,
-`ec2:DescribeHosts`, `ec2:AllocateHosts`, and `ec2:ReleaseHosts` for this
-command group.
+`ec2:DescribeHosts`, `ec2:AllocateHosts`, `ec2:ReleaseHosts`, and
+`ec2:CreateTags` for this command group. `AllocateHosts` uses create-time tags,
+so `CreateTags` should be allowed only when the EC2 create action is
+`AllocateHosts`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeHosts",
+        "ec2:DescribeInstanceTypeOfferings"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AllocateHosts",
+        "ec2:ReleaseHosts"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "AllocateHosts"
+        }
+      }
+    }
+  ]
+}
+```
 
 Flags:
 

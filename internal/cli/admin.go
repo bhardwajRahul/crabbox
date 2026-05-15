@@ -202,7 +202,7 @@ func (a App) adminMacHostsAllocate(ctx context.Context, args []string) error {
 				status = "ok"
 			}
 			fmt.Fprintf(a.Stdout, "dry-run %s region=%s az=%s type=%s message=%s\n",
-				status, check.Region, check.AvailabilityZone, check.InstanceType, blank(check.Message, "-"))
+				status, check.Region, check.AvailabilityZone, check.InstanceType, summarizeMacHostDryRunMessage(check.Message))
 		}
 		return nil
 	}
@@ -218,6 +218,43 @@ func (a App) adminMacHostsAllocate(ctx context.Context, args []string) error {
 			host.ID, host.Region, host.AvailabilityZone, host.InstanceType, host.State)
 	}
 	return nil
+}
+
+func summarizeMacHostDryRunMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "-"
+	}
+	code := xmlTagValue(message, "Code")
+	if code == "DryRunOperation" || strings.Contains(message, "DryRunOperation") {
+		return "DryRunOperation: request would have succeeded"
+	}
+	if code == "UnauthorizedOperation" || strings.Contains(message, "UnauthorizedOperation") {
+		return "UnauthorizedOperation: coordinator AWS identity needs EC2 Mac host lifecycle permissions, including ec2:AllocateHosts and ec2:CreateTags"
+	}
+	if code != "" {
+		return code
+	}
+	const max = 240
+	if len(message) > max {
+		return strings.TrimSpace(message[:max]) + "..."
+	}
+	return message
+}
+
+func xmlTagValue(input, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	start := strings.Index(input, open)
+	if start < 0 {
+		return ""
+	}
+	start += len(open)
+	end := strings.Index(input[start:], close)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(input[start : start+end])
 }
 
 func (a App) adminMacHostsRelease(ctx context.Context, args []string) error {

@@ -189,7 +189,13 @@ crabbox admin mac-hosts allocate \
   --region eu-west-1 \
   --type mac2.metal \
   --dry-run
+```
 
+If dry-run reports `UnauthorizedOperation`, update the coordinator AWS identity
+with the EC2 Mac host lifecycle policy in [admin](../commands/admin.md#mac-hosts)
+before doing the real allocation.
+
+```bash
 crabbox admin mac-hosts allocate \
   --region eu-west-1 \
   --type mac2.metal \

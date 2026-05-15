@@ -9,6 +9,10 @@
 - Added `crabbox checkpoint` to create VM-level AWS AMI checkpoints for brokered Linux leases, fall back to local workspace archives on generic POSIX SSH leases, inspect/list/delete them, restore archives, or fork checkpoints into fresh leases.
 - Added brokered AWS AMI deletion, including deregistering the image and deleting referenced EBS snapshots.
 
+### Changed
+
+- Clarified the EC2 Mac host IAM policy, including the create-time tag permission needed by `crabbox admin mac-hosts allocate --dry-run`.
+
 ### Fixed
 
 - Fixed Code bridge upstream URL handling so browser-controlled paths cannot select a non-loopback upstream target, and clamped `CRABBOX_AWS_ROOT_GB` parsing to valid `int32` values.

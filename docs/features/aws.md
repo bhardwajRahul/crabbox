@@ -116,9 +116,11 @@ crabbox admin mac-hosts release h-0123456789abcdef0 --region eu-west-1 --force
 ```
 
 The coordinator AWS identity needs `ec2:DescribeInstanceTypeOfferings`,
-`ec2:DescribeHosts`, `ec2:AllocateHosts`, and `ec2:ReleaseHosts` for these
-admin commands. Use `allocate --dry-run` first; it validates the request path
-without creating a Dedicated Host.
+`ec2:DescribeHosts`, `ec2:AllocateHosts`, `ec2:ReleaseHosts`, and
+`ec2:CreateTags` for these admin commands. The `CreateTags` grant is needed
+because Crabbox tags hosts during `AllocateHosts`; scope it with
+`ec2:CreateAction=AllocateHosts`. Use `allocate --dry-run` first; it validates
+the request path without creating a Dedicated Host.
 
 CLI/direct env and config:
 
