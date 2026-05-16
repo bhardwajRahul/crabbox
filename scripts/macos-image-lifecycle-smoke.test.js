@@ -213,6 +213,19 @@ async function assertFileContains(file, expected) {
   assert.match(text, expected);
 }
 
+function summaryPath(artifactRoot, value) {
+  if (!value) return value;
+  return path.isAbsolute(value) ? value : path.join(artifactRoot, value);
+}
+
+async function assertSummaryFileContains(artifactRoot, value, expected) {
+  await assertFileContains(summaryPath(artifactRoot, value), expected);
+}
+
+function assertSummaryOmitsArtifactRoot(summary, artifactRoot) {
+  assert.equal(JSON.stringify(summary).includes(artifactRoot), false);
+}
+
 test("macOS lifecycle smoke reports a missing coordinator mac-host endpoint before paid work", async () => {
   const run = await setupRun();
   const result = await runLifecycle({
@@ -227,6 +240,7 @@ test("macOS lifecycle smoke reports a missing coordinator mac-host endpoint befo
 
   assert.equal(result.code, 1, result.stdout + result.stderr);
   const summary = await readJSON(path.join(run.artifacts, "summary.json"));
+  assertSummaryOmitsArtifactRoot(summary, run.artifacts);
   assert.equal(summary.result, "blocked");
   assert.equal(summary.phase, "host-offerings");
   assert.match(summary.blocker.message, /does not expose provider-neutral host lifecycle admin endpoints/);
@@ -263,14 +277,16 @@ test("macOS lifecycle smoke writes a blocked IAM summary before paid work", asyn
     "scripts/apply-macos-image-iam-policy.sh --identity provider-identity.json --policy macos-image-policy.json --profile auto --apply",
     "crabbox admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2.metal --dry-run --json",
   ]);
-  await assertFileContains(summary.evidence.providerIdentity, /crabbox-runner/);
-  await assertFileContains(summary.evidence.awsProviderPolicy, /ec2:RunInstances/);
-  await assertFileContains(summary.evidence.macHostPolicy, /ec2:AllocateHosts/);
-  await assertFileContains(summary.evidence.macosImagePolicy, /ec2:AllocateHosts/);
-  await assertFileContains(summary.evidence.hostOfferings, /mac2\.metal/);
-  await assertFileContains(summary.evidence.hostList, /^\[\]\n?$/);
-  await assertFileContains(summary.evidence.hostDryRun, /UnauthorizedOperation/);
-  await assertFileContains(summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
+  assert.equal(summary.artifactRoot, ".");
+  assert.equal(summary.evidence.providerIdentity, "evidence/provider-identity.json");
+  await assertSummaryFileContains(run.artifacts, summary.evidence.providerIdentity, /crabbox-runner/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.awsProviderPolicy, /ec2:RunInstances/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.macHostPolicy, /ec2:AllocateHosts/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.macosImagePolicy, /ec2:AllocateHosts/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostOfferings, /mac2\.metal/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostList, /^\[\]\n?$/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostDryRun, /UnauthorizedOperation/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
   assert.equal(summary.evidence.hostAllocate, null);
   assert.equal(summary.evidence.webvncDaemon.source, null);
   assert.equal(summary.evidence.webvncStatus.source, null);
@@ -316,8 +332,8 @@ test("macOS lifecycle smoke preserves quota IAM evidence when dry-run is also bl
     "crabbox admin hosts quota --provider aws --target macos --region eu-west-1 --type mac2.metal --json",
     "crabbox admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2.metal --dry-run --json",
   ]);
-  await assertFileContains(summary.evidence.hostQuota, /servicequotas:ListServiceQuotas/);
-  await assertFileContains(summary.evidence.hostDryRun, /UnauthorizedOperation/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostQuota, /servicequotas:ListServiceQuotas/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostDryRun, /UnauthorizedOperation/);
 });
 
 test("macOS lifecycle smoke blocks on missing Mac host quota before paid work", async () => {
@@ -339,7 +355,7 @@ test("macOS lifecycle smoke blocks on missing Mac host quota before paid work", 
   assert.equal(summary.result, "blocked");
   assert.equal(summary.phase, "host-quota");
   assert.match(summary.blocker.message, /quota is below 1/);
-  await assertFileContains(summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
   assert.equal(summary.evidence.hostAllocate, null);
 
   const fakeLog = await readFile(run.fakeLog, "utf8");
@@ -366,7 +382,7 @@ test("macOS lifecycle smoke selects a dry-run-ready configured region before pai
   assert.equal(summary.result, "ready");
   assert.equal(summary.phase, "allocation");
   assert.equal(summary.region, "us-west-2");
-  await assertFileContains(summary.evidence.regionPreflight, /"selectedRegion": "us-west-2"/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.regionPreflight, /"selectedRegion": "us-west-2"/);
 
   const fakeLog = await readFile(run.fakeLog, "utf8");
   assert.match(fakeLog, /^admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2\.metal --dry-run --json$/m);
@@ -395,7 +411,7 @@ test("macOS lifecycle smoke adopts the type selected by region preflight", async
   assert.equal(summary.phase, "allocation");
   assert.equal(summary.region, "us-west-2");
   assert.equal(summary.instanceType, "mac1.metal");
-  await assertFileContains(summary.evidence.regionPreflight, /"selectedInstanceType": "mac1.metal"/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.regionPreflight, /"selectedInstanceType": "mac1.metal"/);
 
   const fakeLog = await readFile(run.fakeLog, "utf8");
   assert.match(fakeLog, /^admin hosts allocate --provider aws --target macos --region us-west-2 --type mac1\.metal --dry-run --json$/m);
@@ -419,6 +435,7 @@ test("macOS lifecycle smoke preserves full mock lifecycle evidence", async () =>
 
   assert.equal(result.code, 0, result.stdout + result.stderr);
   const summary = await readJSON(path.join(run.artifacts, "summary.json"));
+  assertSummaryOmitsArtifactRoot(summary, run.artifacts);
   assert.equal(summary.result, "passed");
   assert.equal(summary.phase, "promoted");
   assert.equal(summary.host.id, "h-mock");
@@ -428,30 +445,32 @@ test("macOS lifecycle smoke preserves full mock lifecycle evidence", async () =>
   assert.equal(summary.checkpoint.id, "chk_macos");
   assert.equal(summary.checkpoint.deleted, true);
   assert.equal(summary.leases.checkpointFork, "cbx_checkpoint");
+  assert.equal(summary.artifactRoot, ".");
+  assert.equal(summary.evidence.providerIdentity, "evidence/provider-identity.json");
 
   for (const label of ["source", "candidate", "promoted"]) {
-    assert.equal(summary.artifacts[label], path.join(run.artifacts, label));
-    await readdir(summary.artifacts[label]);
-    await assertFileContains(summary.evidence.hostWait[label], /host h-mock is available/);
-    await assertFileContains(summary.evidence.warmup[label], /"leaseId":"cbx_/);
-    await assertFileContains(summary.evidence.webvncDaemon[label], /webvnc daemon: ready/);
-    await assertFileContains(summary.evidence.webvncStatus[label], /portal bridge: connected=true/);
+    assert.equal(summary.artifacts[label], label);
+    await readdir(summaryPath(run.artifacts, summary.artifacts[label]));
+    await assertSummaryFileContains(run.artifacts, summary.evidence.hostWait[label], /host h-mock is available/);
+    await assertSummaryFileContains(run.artifacts, summary.evidence.warmup[label], /"leaseId":"cbx_/);
+    await assertSummaryFileContains(run.artifacts, summary.evidence.webvncDaemon[label], /webvnc daemon: ready/);
+    await assertSummaryFileContains(run.artifacts, summary.evidence.webvncStatus[label], /portal bridge: connected=true/);
   }
-  assert.equal(summary.artifacts.checkpointFork, path.join(run.artifacts, "checkpoint"));
-  await readdir(summary.artifacts.checkpointFork);
-  await assertFileContains(summary.evidence.hostWait.checkpointFork, /host h-mock is available/);
-  await assertFileContains(summary.evidence.webvncDaemon.checkpointFork, /webvnc daemon: ready/);
-  await assertFileContains(summary.evidence.webvncStatus.checkpointFork, /portal bridge: connected=true/);
-  await assertFileContains(summary.evidence.imageCreate, /ami-mock/);
-  await assertFileContains(summary.evidence.imagePromote, /"target":"macos"/);
-  await assertFileContains(summary.evidence.checkpointCreate, /chk_macos/);
-  await assertFileContains(summary.evidence.checkpointFork, /cbx_checkpoint/);
-  await assertFileContains(summary.evidence.checkpointDelete, /checkpoint deleted/);
-  await assertFileContains(summary.evidence.providerIdentity, /crabbox-runner/);
-  await assertFileContains(summary.evidence.awsProviderPolicy, /ec2:RunInstances/);
-  await assertFileContains(summary.evidence.macHostPolicy, /ec2:AllocateHosts/);
-  await assertFileContains(summary.evidence.macosImagePolicy, /ec2:AllocateHosts/);
-  await assertFileContains(summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
+  assert.equal(summary.artifacts.checkpointFork, "checkpoint");
+  await readdir(summaryPath(run.artifacts, summary.artifacts.checkpointFork));
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostWait.checkpointFork, /host h-mock is available/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.webvncDaemon.checkpointFork, /webvnc daemon: ready/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.webvncStatus.checkpointFork, /portal bridge: connected=true/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.imageCreate, /ami-mock/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.imagePromote, /"target":"macos"/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.checkpointCreate, /chk_macos/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.checkpointFork, /cbx_checkpoint/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.checkpointDelete, /checkpoint deleted/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.providerIdentity, /crabbox-runner/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.awsProviderPolicy, /ec2:RunInstances/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.macHostPolicy, /ec2:AllocateHosts/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.macosImagePolicy, /ec2:AllocateHosts/);
+  await assertSummaryFileContains(run.artifacts, summary.evidence.hostQuota, /Running Dedicated mac2 Hosts/);
 
   const evidenceFiles = await readdir(path.join(run.artifacts, "evidence"));
   assert.deepEqual(

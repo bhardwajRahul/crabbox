@@ -291,7 +291,7 @@ write_summary() {
     --arg region "$region" \
     --arg instanceType "$instance_type" \
     --arg imageName "$image_name" \
-    --arg artifactRoot "$artifact_root" \
+    --arg artifactRoot "." \
     --arg sourceLease "$source_lease_id" \
     --arg checkpointForkLease "$checkpoint_fork_lease_id" \
     --arg candidateLease "$candidate_lease_id" \
@@ -437,14 +437,25 @@ write_summary() {
 existing_file_or_empty() {
   local path="${1:-}"
   if [[ -n "$path" && -f "$path" ]]; then
-    printf '%s' "$path"
+    summary_path "$path"
   fi
 }
 
 existing_dir_or_empty() {
   local path="${1:-}"
   if [[ -n "$path" && -d "$path" ]]; then
-    printf '%s' "$path"
+    summary_path "$path"
+  fi
+}
+
+summary_path() {
+  local path="$1"
+  if [[ "$path" == "$artifact_root" ]]; then
+    printf '.'
+  elif [[ "$path" == "$artifact_root/"* ]]; then
+    printf '%s' "${path#"$artifact_root"/}"
+  else
+    printf '%s' "$(basename "$path")"
   fi
 }
 
