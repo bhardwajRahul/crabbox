@@ -275,15 +275,15 @@ export class EC2SpotClient {
         if (candidateConfig.target !== "macos") {
           return this.resolveAMI(candidateConfig);
         }
-        if (pinnedMacOSImageID && candidateConfig.serverType === config.serverType) {
-          return pinnedMacOSImageID;
-        }
         const promotedImageID =
           config.awsPromotedAMIs[
             awsPromotedAMIConfigKey(this.region, candidateConfig.serverType)
           ] ?? "";
         if (promotedImageID) {
           return promotedImageID;
+        }
+        if (pinnedMacOSImageID && candidateConfig.serverType === config.serverType) {
+          return pinnedMacOSImageID;
         }
         const query = awsMacOSAMIQuery(candidateConfig.serverType);
         const cacheKey = `${query.name}\0${query.architecture}`;

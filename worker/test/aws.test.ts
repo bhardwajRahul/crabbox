@@ -668,6 +668,84 @@ describe("aws provider", () => {
     expect(result.serverType).toBe("mac1.metal");
   });
 
+  it("prefers region-scoped promoted macOS AMIs over a pinned AMI", async () => {
+    const runImages: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        if (new URL(request.url).hostname.startsWith("servicequotas.")) {
+          return new Response(JSON.stringify({ Quota: { Value: 999 } }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        const params = new URLSearchParams(await request.clone().text());
+        const action = params.get("Action") ?? "";
+        if (action === "DescribeKeyPairs") {
+          return ec2XMLResponse("<DescribeKeyPairsResponse />");
+        }
+        if (action === "DescribeHosts") {
+          return ec2XMLResponse(`<?xml version="1.0" encoding="UTF-8"?>
+<DescribeHostsResponse>
+  <hostSet>
+    <item>
+      <hostId>h-mac2</hostId>
+      <hostState>available</hostState>
+    </item>
+  </hostSet>
+</DescribeHostsResponse>`);
+        }
+        if (action === "RunInstances") {
+          runImages.push(params.get("ImageId") ?? "");
+          return ec2XMLResponse(`<?xml version="1.0" encoding="UTF-8"?>
+<RunInstancesResponse>
+  <instancesSet>
+    <item>
+      <instanceId>i-mac2</instanceId>
+      <instanceType>mac2.metal</instanceType>
+      <placement><hostId>h-mac2</hostId></placement>
+      <ipAddress>203.0.113.44</ipAddress>
+      <instanceState><name>pending</name></instanceState>
+    </item>
+  </instancesSet>
+</RunInstancesResponse>`);
+        }
+        return ec2XMLResponse(
+          `<Response><Errors><Error><Code>Unexpected</Code><Message>${action}</Message></Error></Errors></Response>`,
+          500,
+        );
+      }),
+    );
+
+    const client = new EC2SpotClient(
+      {
+        AWS_ACCESS_KEY_ID: "test",
+        AWS_SECRET_ACCESS_KEY: "secret",
+        CRABBOX_AWS_SECURITY_GROUP_ID: "sg-123",
+      } as never,
+      "us-west-2",
+    );
+    const config = leaseConfig({
+      provider: "aws",
+      target: "macos",
+      capacity: { market: "on-demand" },
+      awsAMI: "ami-eu-mac2",
+      serverType: "mac2.metal",
+      serverTypeExplicit: true,
+      sshPublicKey: "ssh-ed25519 test",
+    });
+    config.awsPromotedAMIs[awsPromotedAMIConfigKey("us-west-2", "mac2.metal")] = "ami-us-mac2";
+
+    await client.createServerWithFallback(
+      config,
+      "cbx_abcdef123456",
+      "violet-prawn",
+      "alice@example.com",
+    );
+
+    expect(runImages).toEqual(["ami-us-mac2"]);
+  });
+
   it("discovers brokered macOS hosts in the configured subnet availability zone", async () => {
     const describeSubnetParams: Record<string, string>[] = [];
     const describeHostFilters: Record<string, string>[] = [];
