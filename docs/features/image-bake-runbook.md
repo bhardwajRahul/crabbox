@@ -198,10 +198,29 @@ before doing the real allocation. Confirm the caller identity and print the
 copy-pasteable policy with:
 
 ```bash
-crabbox admin aws-identity --region eu-west-1
-crabbox admin aws-policy --mac-hosts
+crabbox admin aws-identity --region eu-west-1 --json
+crabbox admin aws-policy --mac-hosts > /tmp/crabbox-macos-image-policy.json
 crabbox admin mac-hosts policy
 ```
+
+Apply the combined policy to the coordinator AWS principal before rerunning the
+preflight. If `admin aws-identity --json` returns an IAM role ARN, attach it to
+that role. If it returns an IAM user ARN, attach it to that user:
+
+```bash
+aws iam put-role-policy \
+  --role-name <coordinator-role-name> \
+  --policy-name CrabboxMacOSImageLifecycle \
+  --policy-document file:///tmp/crabbox-macos-image-policy.json
+
+aws iam put-user-policy \
+  --user-name <coordinator-user-name> \
+  --policy-name CrabboxMacOSImageLifecycle \
+  --policy-document file:///tmp/crabbox-macos-image-policy.json
+```
+
+For assumed-role identities, attach the policy to the underlying role name from
+the ARN rather than to the session name.
 
 If dry-run succeeds, run `crabbox admin mac-hosts quota --region eu-west-1
 --type mac2.metal` before real allocation. It prints the selected EC2 Mac

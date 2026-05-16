@@ -84,6 +84,28 @@ EC2 Mac Dedicated Host allocation and release are intentionally separate; use
 `crabbox admin mac-hosts policy` for that grant, or add `--mac-hosts` to print
 one combined provider plus Dedicated Host lifecycle policy.
 
+For coordinator remediation, save the combined policy and attach it to the AWS
+principal returned by `admin aws-identity`:
+
+```bash
+crabbox admin aws-identity --region eu-west-1 --json
+crabbox admin aws-policy --mac-hosts > /tmp/crabbox-macos-image-policy.json
+
+aws iam put-role-policy \
+  --role-name <coordinator-role-name> \
+  --policy-name CrabboxMacOSImageLifecycle \
+  --policy-document file:///tmp/crabbox-macos-image-policy.json
+
+aws iam put-user-policy \
+  --user-name <coordinator-user-name> \
+  --policy-name CrabboxMacOSImageLifecycle \
+  --policy-document file:///tmp/crabbox-macos-image-policy.json
+```
+
+Use the role command for IAM role ARNs and the user command for IAM user ARNs.
+For assumed-role identities, attach the policy to the underlying role name, not
+the session name.
+
 Flags:
 
 ```text
