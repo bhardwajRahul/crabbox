@@ -11,6 +11,7 @@ export interface Env {
   CRABBOX_AWS_INSTANCE_PROFILE?: string;
   CRABBOX_AWS_ROOT_GB?: string;
   CRABBOX_AWS_SSH_CIDRS?: string;
+  CRABBOX_HOST_ID?: string;
   CRABBOX_AWS_MAC_HOST_ID?: string;
   CRABBOX_CAPACITY_REGIONS?: string;
   CRABBOX_CAPACITY_AVAILABILITY_ZONES?: string;
@@ -99,6 +100,7 @@ export interface LeaseRequest {
   class?: string;
   serverType?: string;
   serverTypeExplicit?: boolean;
+  hostID?: string;
   location?: string;
   image?: string;
   awsRegion?: string;

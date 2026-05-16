@@ -599,6 +599,7 @@ func (c *CoordinatorClient) CreateLease(ctx context.Context, cfg Config, publicK
 		"class":                           cfg.Class,
 		"serverType":                      cfg.ServerType,
 		"serverTypeExplicit":              cfg.ServerTypeExplicit,
+		"hostID":                          cfg.HostID,
 		"location":                        cfg.Location,
 		"image":                           cfg.Image,
 		"awsRegion":                       cfg.AWSRegion,

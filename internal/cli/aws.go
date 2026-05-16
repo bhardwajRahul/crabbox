@@ -293,7 +293,11 @@ func (c *AWSClient) createServer(ctx context.Context, cfg Config, publicKey, lea
 	}
 	applyAWSRunInstanceTargetOptions(input, cfg)
 	if cfg.TargetOS == targetMacOS {
-		input.Placement = &types.Placement{HostId: aws.String(cfg.AWSMacHostID), Tenancy: types.TenancyHost}
+		hostID := cfg.HostID
+		if hostID == "" {
+			hostID = cfg.AWSMacHostID
+		}
+		input.Placement = &types.Placement{HostId: aws.String(hostID), Tenancy: types.TenancyHost}
 	} else if cfg.AWSSubnetID == "" {
 		if zone := awsAvailabilityZoneForRegion(cfg, cfg.AWSRegion); zone != "" {
 			input.Placement = &types.Placement{AvailabilityZone: aws.String(zone)}

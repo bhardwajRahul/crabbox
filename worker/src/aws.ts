@@ -803,7 +803,12 @@ export class EC2SpotClient {
     const rootGB = config.awsRootGB || positiveInt(this.env.CRABBOX_AWS_ROOT_GB) || 400;
     const instanceProfile = config.awsProfile || this.env.CRABBOX_AWS_INSTANCE_PROFILE || "";
     const subnetID = config.awsSubnetID || this.env.CRABBOX_AWS_SUBNET_ID || "";
-    const configuredMacHostID = config.awsMacHostID || this.env.CRABBOX_AWS_MAC_HOST_ID || "";
+    const configuredMacHostID =
+      config.hostID ||
+      config.awsMacHostID ||
+      this.env.CRABBOX_HOST_ID ||
+      this.env.CRABBOX_AWS_MAC_HOST_ID ||
+      "";
     const run = async (macHostID: string): Promise<ProviderMachine> => {
       const params: Record<string, string> = {
         ClientToken: leaseID,
@@ -979,7 +984,7 @@ export class EC2SpotClient {
     const hostID = awsMacHostIDFromDescribeHosts(root, excludedHostID);
     if (!hostID) {
       throw new Error(
-        `no available EC2 Mac Dedicated Host found in ${this.region} for ${serverType}; allocate a host or set CRABBOX_AWS_MAC_HOST_ID`,
+        `no available EC2 Mac Dedicated Host found in ${this.region} for ${serverType}; allocate a host or set CRABBOX_HOST_ID`,
       );
     }
     return hostID;

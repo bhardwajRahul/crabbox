@@ -27,6 +27,7 @@ type Config struct {
 	Coordinator        string
 	CoordToken         string
 	CoordAdminToken    string
+	HostID             string
 	Access             AccessConfig
 	Location           string
 	Image              string
@@ -514,6 +515,7 @@ type fileConfig struct {
 	ServerType       string                   `yaml:"serverType,omitempty"`
 	Coordinator      string                   `yaml:"coordinator,omitempty"`
 	CoordinatorToken string                   `yaml:"coordinatorToken,omitempty"`
+	HostID           string                   `yaml:"hostId,omitempty"`
 	Broker           *fileBrokerConfig        `yaml:"broker,omitempty"`
 	Hetzner          *fileHetznerConfig       `yaml:"hetzner,omitempty"`
 	AWS              *fileAWSConfig           `yaml:"aws,omitempty"`
@@ -998,6 +1000,9 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 	if file.CoordinatorToken != "" {
 		cfg.CoordToken = file.CoordinatorToken
 	}
+	if file.HostID != "" {
+		cfg.HostID = file.HostID
+	}
 	if file.Broker != nil {
 		if file.Broker.URL != "" {
 			cfg.Coordinator = file.Broker.URL
@@ -1058,6 +1063,9 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 		}
 		if file.AWS.MacHostID != "" {
 			cfg.AWSMacHostID = file.AWS.MacHostID
+			if cfg.HostID == "" {
+				cfg.HostID = file.AWS.MacHostID
+			}
 		}
 	}
 	if file.Azure != nil {
@@ -1697,6 +1705,7 @@ func applyEnv(cfg *Config) {
 	cfg.Coordinator = getenv("CRABBOX_COORDINATOR", cfg.Coordinator)
 	cfg.CoordToken = getenv("CRABBOX_COORDINATOR_TOKEN", cfg.CoordToken)
 	cfg.CoordAdminToken = getenv("CRABBOX_COORDINATOR_ADMIN_TOKEN", getenv("CRABBOX_ADMIN_TOKEN", cfg.CoordAdminToken))
+	cfg.HostID = getenv("CRABBOX_HOST_ID", cfg.HostID)
 	cfg.Access.ClientID = getenv("CRABBOX_ACCESS_CLIENT_ID", getenv("CF_ACCESS_CLIENT_ID", cfg.Access.ClientID))
 	cfg.Access.ClientSecret = getenv("CRABBOX_ACCESS_CLIENT_SECRET", getenv("CF_ACCESS_CLIENT_SECRET", cfg.Access.ClientSecret))
 	cfg.Access.Token = getenv("CRABBOX_ACCESS_TOKEN", getenv("CF_ACCESS_TOKEN", cfg.Access.Token))
@@ -1709,6 +1718,12 @@ func applyEnv(cfg *Config) {
 	cfg.AWSProfile = getenv("CRABBOX_AWS_INSTANCE_PROFILE", cfg.AWSProfile)
 	cfg.AWSRootGB = getenvInt32("CRABBOX_AWS_ROOT_GB", cfg.AWSRootGB)
 	cfg.AWSMacHostID = getenv("CRABBOX_AWS_MAC_HOST_ID", cfg.AWSMacHostID)
+	if cfg.HostID == "" && cfg.AWSMacHostID != "" {
+		cfg.HostID = cfg.AWSMacHostID
+	}
+	if cfg.AWSMacHostID == "" && cfg.Provider == "aws" && cfg.TargetOS == targetMacOS {
+		cfg.AWSMacHostID = cfg.HostID
+	}
 	if cidrs := os.Getenv("CRABBOX_AWS_SSH_CIDRS"); cidrs != "" {
 		cfg.AWSSSHCIDRs = splitCommaList(cidrs)
 	}
