@@ -244,6 +244,13 @@ printed by `crabbox admin mac-hosts policy`, including
 policy with `crabbox admin aws-policy`, or the combined provider plus Dedicated
 Host policy with `crabbox admin aws-policy --mac-hosts`.
 
+Before approving paid EC2 Mac host allocation, run the no-spend region
+preflight against the coordinator you intend to use:
+`CRABBOX_MACOS_REGIONS=eu-west-1,us-east-1,us-west-2 scripts/macos-host-region-preflight.sh`.
+It checks for an existing reusable Dedicated Host first, then runs allocation
+dry-runs by region and returns JSON with `ready-existing-host`,
+`ready-allocation`, or `blocked`.
+
 SSH ingress for AWS security groups is source-scoped. If `CRABBOX_AWS_SSH_CIDRS` is set, Crabbox adds those CIDRs. Otherwise, the CLI sends its detected outbound IPv4 `/32` to the broker; when that is unavailable, the Worker falls back to `CF-Connecting-IP` as `/32` or `/128`. Direct and brokered AWS open the primary SSH port plus configured fallback ports. Crabbox also revokes the old managed `0.0.0.0/0` SSH ingress rule when the broker touches the managed security group. Supplying `CRABBOX_AWS_SECURITY_GROUP_ID` makes network policy your responsibility.
 
 ## Machine Classes
