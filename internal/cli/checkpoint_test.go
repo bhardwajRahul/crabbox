@@ -283,7 +283,7 @@ func TestNewCheckpointRecordStoresHostPinAndServerType(t *testing.T) {
 	record, _, err := newCheckpointRecord(
 		Repo{Name: "my-app"},
 		cfg,
-		Server{CloudID: "i-1234567890abcdef0", Provider: "aws"},
+		Server{CloudID: "i-1234567890abcdef0", Provider: "aws", HostID: "h-000000000002"},
 		SSHTarget{TargetOS: targetMacOS},
 		"cbx_123",
 		"/Users/ec2-user/crabbox/cbx_123/my-app",
@@ -292,8 +292,8 @@ func TestNewCheckpointRecordStoresHostPinAndServerType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.HostID != "h-000000000001" {
-		t.Fatalf("HostID=%q, want h-000000000001", record.HostID)
+	if record.HostID != "h-000000000002" {
+		t.Fatalf("HostID=%q, want h-000000000002", record.HostID)
 	}
 	if record.ServerType != "mac2-m2pro.metal" {
 		t.Fatalf("ServerType=%q, want mac2-m2pro.metal", record.ServerType)

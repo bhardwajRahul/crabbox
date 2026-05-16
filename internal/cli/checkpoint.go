@@ -822,7 +822,7 @@ func newCheckpointRecord(repo Repo, cfg Config, server Server, target SSHTarget,
 		TargetOS:       firstNonBlank(target.TargetOS, cfg.TargetOS),
 		WindowsMode:    firstNonBlank(target.WindowsMode, cfg.WindowsMode),
 		ServerType:     firstNonBlank(server.ServerType.Name, cfg.ServerType),
-		HostID:         firstNonBlank(cfg.HostID, cfg.AWSMacHostID),
+		HostID:         firstNonBlank(server.HostID, cfg.HostID, cfg.AWSMacHostID),
 		Workdir:        workdir,
 	}
 	record.Repo.Root = repo.Root

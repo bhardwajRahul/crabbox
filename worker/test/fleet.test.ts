@@ -771,6 +771,39 @@ describe("fleet lease identity and idle", () => {
     expect(awsCIDRs).toEqual(["203.0.113.7/32"]);
   });
 
+  it("persists provider host pins on AWS macOS leases", async () => {
+    const fleet = testFleet(new MemoryStorage(), {
+      aws: fakeProvider(undefined, {
+        provider: "aws",
+        serverType: "mac2.metal",
+        hostID: "h-000000000001",
+      }),
+    });
+
+    const create = await fleet.fetch(
+      request("POST", "/v1/leases", {
+        headers: {
+          "x-crabbox-owner": "alice@example.com",
+          "cf-connecting-ip": "203.0.113.7",
+          "x-crabbox-org": "example-org",
+        },
+        body: {
+          leaseID: "cbx_abcdef123456",
+          provider: "aws",
+          target: "macos",
+          class: "standard",
+          serverType: "mac2.metal",
+          capacity: { market: "on-demand" },
+          sshPublicKey: "ssh-ed25519 test",
+        },
+      }),
+    );
+
+    expect(create.status).toBe(201);
+    const { lease } = (await create.json()) as { lease: LeaseRecord };
+    expect(lease.hostID).toBe("h-000000000001");
+  });
+
   it("only applies target-matching promoted AWS images", async () => {
     const storage = new MemoryStorage();
     storage.seed("image:aws:promoted:macos:arm64_mac:eu-west-1", {
@@ -4928,6 +4961,7 @@ function fakeProvider(
   result: {
     provider?: "hetzner" | "aws" | "azure" | "gcp";
     serverType?: string;
+    hostID?: string;
     cloudID?: string;
     region?: string;
     imageRegion?: string;
@@ -4960,6 +4994,7 @@ function fakeProvider(
         name: `crabbox-${id}`,
         status: "running",
         serverType: result.serverType ?? "cpx62",
+        ...(result.hostID ? { hostID: result.hostID } : {}),
         host: "192.0.2.10",
         labels: {},
       };
@@ -4974,6 +5009,7 @@ function fakeProvider(
           name: `crabbox-${slug}`,
           status: "running",
           serverType: result.serverType ?? "cpx62",
+          ...(result.hostID ? { hostID: result.hostID } : {}),
           host: "192.0.2.10",
           region:
             result.provider === "aws"

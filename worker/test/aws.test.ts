@@ -380,6 +380,7 @@ describe("aws provider", () => {
     <item>
       <instanceId>i-mac1</instanceId>
       <instanceType>mac1.metal</instanceType>
+      <placement><hostId>h-mac1</hostId></placement>
       <ipAddress>203.0.113.44</ipAddress>
       <instanceState><name>pending</name></instanceState>
       <tagSet><item><key>Name</key><value>crabbox-violet-prawn</value></item></tagSet>
@@ -420,6 +421,7 @@ describe("aws provider", () => {
     expect(runTypes).toEqual(["mac1.metal"]);
     expect(runImages).toEqual(["ami-x86-mac"]);
     expect(result.serverType).toBe("mac1.metal");
+    expect(result.server.hostID).toBe("h-mac1");
   });
 
   it("waits for transient AMIs before launching from EBS snapshots", async () => {

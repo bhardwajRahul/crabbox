@@ -40,6 +40,7 @@
 ### Fixed
 
 - Fixed provider-neutral admin command errors so older coordinators report the neutral route and the legacy compatibility route that both returned 404.
+- Fixed coordinator-backed macOS checkpoint metadata so an auto-discovered provider host id is preserved for snapshot forks.
 - Fixed macOS image lifecycle and host-region preflight blockers so remediation commands use neutral `crabbox` commands and the guarded IAM apply helper instead of embedding local binary paths, checkout paths, or manual account-match snippets.
 - Fixed macOS image lifecycle blocked summaries so quota preflight failures, EC2 Mac host dry-run IAM failures, rerun commands, and short `blocker.reason` aliases are preserved in evidence.
 - Fixed macOS image lifecycle evidence and artifact summaries so paths are only populated after the matching files or directories are captured.

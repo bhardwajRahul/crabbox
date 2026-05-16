@@ -125,6 +125,7 @@ func TestLeaseToServerTargetPreservesCoordinatorWorkRoot(t *testing.T) {
 		Slug:       "silver-squid",
 		Provider:   "aws",
 		TargetOS:   targetMacOS,
+		HostID:     "h-000000000001",
 		SSHUser:    "ec2-user",
 		SSHPort:    "22",
 		Host:       "203.0.113.10",
@@ -141,6 +142,9 @@ func TestLeaseToServerTargetPreservesCoordinatorWorkRoot(t *testing.T) {
 	}
 	if server.Labels["work_root"] != defaultMacOSWorkRoot {
 		t.Fatalf("work_root label=%q want %q", server.Labels["work_root"], defaultMacOSWorkRoot)
+	}
+	if server.HostID != "h-000000000001" || server.Labels["host_id"] != "h-000000000001" {
+		t.Fatalf("server host id not preserved: %#v", server)
 	}
 
 	applyResolvedServerConfig(&cfg, server)

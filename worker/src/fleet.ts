@@ -1014,6 +1014,10 @@ export class FleetDurableObject implements DurableObject {
         config.idleTimeoutSeconds,
       ).toISOString(),
     };
+    const requestedHostID = config.hostID || config.awsMacHostID;
+    if (requestedHostID) {
+      record.hostID = requestedHostID;
+    }
     if (config.target === "windows") {
       record.windowsMode = config.windowsMode;
     }
@@ -1041,6 +1045,9 @@ export class FleetDurableObject implements DurableObject {
     );
     record.cloudID = server.cloudID;
     record.serverType = serverType;
+    if (server.hostID) {
+      record.hostID = server.hostID;
+    }
     if (market) {
       record.market = market;
     }

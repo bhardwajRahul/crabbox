@@ -1321,6 +1321,7 @@ function instanceToMachine(input: unknown): ProviderMachine {
     name: tags["Name"] || cloudID,
     status: asString(record(instance["instanceState"])["name"]),
     serverType: asString(instance["instanceType"]),
+    hostID: asString(record(instance["placement"])["hostId"]),
     host: asString(instance["ipAddress"]),
     labels: tags,
   };

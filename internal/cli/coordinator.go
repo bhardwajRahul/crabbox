@@ -56,6 +56,7 @@ type CoordinatorLease struct {
 	Class                string                `json:"class"`
 	ServerType           string                `json:"serverType"`
 	RequestedServerType  string                `json:"requestedServerType,omitempty"`
+	HostID               string                `json:"hostID,omitempty"`
 	Market               string                `json:"market,omitempty"`
 	ProvisioningAttempts []ProvisioningAttempt `json:"provisioningAttempts,omitempty"`
 	CapacityHints        []CapacityHint        `json:"capacityHints,omitempty"`
@@ -1560,6 +1561,7 @@ func leaseToServerTarget(lease CoordinatorLease, cfg Config) (Server, SSHTarget,
 	server := Server{
 		Provider: lease.Provider,
 		CloudID:  lease.CloudID,
+		HostID:   lease.HostID,
 		ID:       lease.ServerID,
 		Name:     lease.ServerName,
 		Status:   lease.State,
@@ -1568,6 +1570,7 @@ func leaseToServerTarget(lease CoordinatorLease, cfg Config) (Server, SSHTarget,
 			"slug":              lease.Slug,
 			"keep":              fmt.Sprint(lease.Keep),
 			"target":            blank(lease.TargetOS, cfg.TargetOS),
+			"host_id":           lease.HostID,
 			"windows_mode":      blank(lease.WindowsMode, cfg.WindowsMode),
 			"desktop":           fmt.Sprint(lease.Desktop),
 			"browser":           fmt.Sprint(lease.Browser),
