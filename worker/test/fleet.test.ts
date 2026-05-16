@@ -2223,6 +2223,8 @@ describe("fleet lease identity and idle", () => {
     expect(pageBody).toContain("vnc-control");
     expect(pageBody).toContain("take control");
     expect(pageBody).toContain("you control");
+    expect(pageBody).toContain('fragment.get("control") === "take"');
+    expect(pageBody).toContain("takeControlIfRequested(state)");
     expect(pageBody).toContain('aria-label="WebVNC display" tabindex="0"');
     expect(pageBody).toContain('screen.addEventListener("contextmenu"');
     expect(pageBody).toContain(

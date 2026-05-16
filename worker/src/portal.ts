@@ -642,6 +642,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       const target = ${JSON.stringify(target)};
       const username = fragment.get("username") || "";
       const password = fragment.get("password") || "";
+      const takeControlOnConnect = fragment.get("control") === "take";
       const credentials = {};
       if (username) credentials.username = username;
       if (password) credentials.password = password;
@@ -659,6 +660,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       let statusTimer;
       let controllerLabel = "";
       let isController = false;
+      let takeControlAttempted = false;
       const terminalStatusCodes = new Set([403, 404, 409, 410]);
       function focusVNC() {
         if (!isController) return;
@@ -763,6 +765,25 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         applyCollaborationState(state);
         return state;
       }
+      async function takeControl(label = "you took control") {
+        const response = await fetch(controlURL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ viewerID }),
+        });
+        const state = response.ok ? await response.json() : undefined;
+        if (!response.ok) throw new Error(state?.message || "takeover failed");
+        applyCollaborationState(state);
+        setStatus(label, "ok");
+        focusVNC();
+        return state;
+      }
+      async function takeControlIfRequested(state) {
+        if (!takeControlOnConnect || takeControlAttempted || state?.viewerRole === "controller") return;
+        if (state?.viewerRole !== "observer") return;
+        takeControlAttempted = true;
+        await takeControl();
+      }
       function stopPolling(label) {
         stopped = true;
         connected = false;
@@ -813,7 +834,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
             connected = true;
             retryAttempt = 0;
             setStatus("connected", "ok");
-            void refreshCollaborationState().then(focusVNC).catch(() => {});
+            void refreshCollaborationState().then((state) => takeControlIfRequested(state)).then(focusVNC).catch(() => {});
             window.clearInterval(statusTimer);
             statusTimer = window.setInterval(refreshCollaborationState, 1500);
           });
@@ -858,16 +879,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       const takeoverBtn = document.getElementById("vnc-takeover");
       takeoverBtn?.addEventListener("click", async () => {
         try {
-          const response = await fetch(controlURL, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ viewerID }),
-          });
-          const state = response.ok ? await response.json() : undefined;
-          if (!response.ok) throw new Error(state?.message || "takeover failed");
-          applyCollaborationState(state);
-          setStatus("you took control", "ok");
-          focusVNC();
+          await takeControl();
         } catch (error) {
           setStatus(error instanceof Error ? error.message : String(error), "bad");
         }
