@@ -134,6 +134,13 @@ func TestCapsuleFailureSignatureUsesLastLogLine(t *testing.T) {
 	}
 }
 
+func TestCapsuleFailureSignatureStripsGitHubPrefixes(t *testing.T) {
+	got := capsuleFailureSignature("Plugin\tCheck\t2026-05-16T05:20:06.2281757Z Error: missing plugin\nPlugin\tCheck\t2026-05-16T05:20:07.0000000Z ##[error]Process completed with exit code 1.\n")
+	if got != "Error: missing plugin" {
+		t.Fatalf("signature=%q", got)
+	}
+}
+
 func TestSafePathComponent(t *testing.T) {
 	got := safePathComponent("OpenClaw/Crabbox Actions 123")
 	if strings.ContainsAny(got, "/ ") || got != "openclaw-crabbox-actions-123" {

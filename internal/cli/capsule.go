@@ -742,15 +742,23 @@ func capsuleFailureSignature(logText string) string {
 func stripGitHubLogPrefix(line string) string {
 	fields := strings.Split(line, "\t")
 	if len(fields) >= 3 {
-		return fields[len(fields)-1]
+		line = fields[len(fields)-1]
 	}
-	return line
+	line = strings.TrimSpace(line)
+	if len(line) > len(time.RFC3339Nano) && line[4] == '-' && line[7] == '-' && line[10] == 'T' {
+		if space := strings.IndexByte(line, ' '); space > 0 {
+			line = strings.TrimSpace(line[space+1:])
+		}
+	}
+	line = strings.TrimPrefix(line, "##[error]")
+	return strings.TrimSpace(line)
 }
 
 func isLowSignalActionsLogLine(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	return lower == "post job cleanup." ||
 		strings.Contains(lower, "cleaning up orphan processes") ||
+		strings.HasPrefix(lower, "process completed with exit code ") ||
 		strings.HasPrefix(lower, "[command]/usr/bin/git ") ||
 		strings.HasPrefix(lower, "removing ") ||
 		strings.HasPrefix(lower, "temporarily overriding home=") ||
