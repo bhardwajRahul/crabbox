@@ -21,6 +21,7 @@ export interface LeaseConfig {
   image: string;
   awsRegion: string;
   awsAMI: string;
+  awsSnapshot: string;
   awsSGID: string;
   awsSubnetID: string;
   awsProfile: string;
@@ -29,9 +30,13 @@ export interface LeaseConfig {
   awsMacHostID: string;
   azureLocation: string;
   azureImage: string;
+  azureSnapshot: string;
+  azureOSDisk: AzureOSDiskMode;
   gcpProject: string;
   gcpZone: string;
   gcpImage: string;
+  gcpMachineImage: string;
+  gcpSnapshot: string;
   gcpNetwork: string;
   gcpSubnet: string;
   gcpTags: string[];
@@ -59,7 +64,13 @@ export interface LeaseConfig {
   sshPublicKey: string;
 }
 
-export function leaseConfig(input: LeaseRequest): LeaseConfig {
+export type AzureOSDiskMode = "managed" | "ephemeral";
+
+export interface LeaseConfigDefaults {
+  azureOSDisk?: string;
+}
+
+export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults = {}): LeaseConfig {
   const provider = input.provider ?? "hetzner";
   if (provider !== "hetzner" && provider !== "aws" && provider !== "azure" && provider !== "gcp") {
     throw new Error(`unsupported provider: ${String(provider)}`);
@@ -70,20 +81,25 @@ export function leaseConfig(input: LeaseRequest): LeaseConfig {
     target !== "linux" &&
     !(provider === "aws" && target === "windows") &&
     !(provider === "aws" && target === "macos") &&
-    !(provider === "azure" && target === "windows" && windowsMode === "normal")
+    !(provider === "azure" && target === "windows")
   ) {
     if (provider === "hetzner" || provider === "azure" || provider === "gcp") {
-      throw new Error(unsupportedManagedTargetMessage(provider, target, windowsMode));
+      throw new Error(unsupportedManagedTargetMessage(provider, target));
     }
     throw new Error(`unsupported target for brokered ${provider}: ${target}`);
   }
   if (
     provider === "azure" &&
     target === "windows" &&
-    (input.desktop || input.browser || input.code || input.tailscale)
+    (input.browser || input.code || input.tailscale)
   ) {
     throw new Error(
-      "brokered azure target=windows currently supports SSH, sync, and run; desktop/browser/code/tailscale require Linux or AWS Windows where supported",
+      "brokered azure target=windows currently supports SSH, sync, run, and desktop/VNC; browser/code/tailscale require Linux or AWS Windows where supported",
+    );
+  }
+  if (target === "windows" && windowsMode === "wsl2" && input.desktop) {
+    throw new Error(
+      "brokered target=windows windowsMode=wsl2 does not support desktop/VNC; use windowsMode=normal for desktop/VNC or omit desktop for WSL2",
     );
   }
   if (target === "macos") {
@@ -130,6 +146,7 @@ export function leaseConfig(input: LeaseRequest): LeaseConfig {
     image: input.image ?? "ubuntu-24.04",
     awsRegion: input.awsRegion ?? "eu-west-1",
     awsAMI: input.awsAMI ?? "",
+    awsSnapshot: input.awsSnapshot ?? "",
     awsSGID: input.awsSGID ?? "",
     awsSubnetID: input.awsSubnetID ?? "",
     awsProfile: input.awsProfile ?? "",
@@ -138,9 +155,13 @@ export function leaseConfig(input: LeaseRequest): LeaseConfig {
     awsMacHostID: input.awsMacHostID ?? "",
     azureLocation: input.azureLocation ?? "",
     azureImage: input.azureImage ?? "",
+    azureSnapshot: input.azureSnapshot ?? "",
+    azureOSDisk: normalizeAzureOSDiskMode(input.azureOSDisk ?? defaults.azureOSDisk),
     gcpProject: input.gcpProject ?? "",
     gcpZone: input.gcpZone ?? "",
     gcpImage: input.gcpImage ?? "",
+    gcpMachineImage: input.gcpMachineImage ?? "",
+    gcpSnapshot: input.gcpSnapshot ?? "",
     gcpNetwork: input.gcpNetwork ?? "",
     gcpSubnet: input.gcpSubnet ?? "",
     gcpTags: uniqueStrings(input.gcpTags ?? []),
@@ -165,6 +186,21 @@ export function leaseConfig(input: LeaseRequest): LeaseConfig {
   };
 }
 
+export function normalizeAzureOSDiskMode(value: string | undefined): AzureOSDiskMode {
+  const normalized = (value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "":
+    case "managed":
+      return "managed";
+    case "auto":
+      return "managed";
+    case "ephemeral":
+      return "ephemeral";
+    default:
+      throw new Error("azureOSDisk must be auto, managed, or ephemeral");
+  }
+}
+
 function defaultWorkRoot(target: TargetOS, windowsMode: WindowsMode, sshUser: string): string {
   if (target === "macos") {
     return `/Users/${sshUser || "ec2-user"}/crabbox`;
@@ -185,19 +221,12 @@ function defaultSSHUser(provider: Provider, target: TargetOS, windowsMode: Windo
   return "crabbox";
 }
 
-function unsupportedManagedTargetMessage(
-  provider: Provider,
-  target: TargetOS,
-  windowsMode: WindowsMode,
-): string {
-  if (provider === "azure" && target === "windows" && windowsMode === "wsl2") {
-    return "brokered azure supports native Windows only; use brokered aws for managed Windows WSL2 or provider=ssh for existing Windows WSL2 hosts";
-  }
+function unsupportedManagedTargetMessage(provider: Provider, target: TargetOS): string {
   if (provider === "azure") {
     if (target === "macos") {
-      return "brokered azure managed provisioning supports target=linux and native Windows only; use brokered aws with an EC2 Mac Dedicated Host or provider=ssh for existing macOS hosts";
+      return "brokered azure managed provisioning supports target=linux and Windows only; use brokered aws with an EC2 Mac Dedicated Host or provider=ssh for existing macOS hosts";
     }
-    return "brokered azure managed provisioning supports target=linux and native Windows only";
+    return "brokered azure managed provisioning supports target=linux and Windows only";
   }
   if (provider === "gcp") {
     if (target === "macos") {
@@ -370,7 +399,7 @@ export function azureVMSizeCandidatesForTargetClass(
   if (target === "linux") {
     return azureVMSizeCandidatesForClass(machineClass);
   }
-  if (target === "windows" && windowsMode === "normal") {
+  if (target === "windows" && (windowsMode === "normal" || windowsMode === "wsl2")) {
     return azureWindowsVMSizeCandidatesForClass(machineClass);
   }
   return [machineClass];

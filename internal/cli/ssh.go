@@ -111,9 +111,9 @@ func waitForSSHReady(ctx context.Context, target *SSHTarget, stderr io.Writer, p
 		}
 		if time.Now().After(deadline) {
 			if lastPorts != "" {
-				return exit(5, "timed out waiting for SSH on %s during %s ports=%s", target.Host, phase, lastPorts)
+				return exit(5, "timed out waiting for SSH on %s during %s ports=%s; %s", target.Host, phase, lastPorts, sshWaitNextAction(phase))
 			}
-			return exit(5, "timed out waiting for SSH on %s during %s", target.Host, phase)
+			return exit(5, "timed out waiting for SSH on %s during %s; %s", target.Host, phase, sshWaitNextAction(phase))
 		}
 		if target.SSHConfigProxy {
 			if runSSHQuietWithOptions(ctx, *target, sshReadyCommand(*target), "5", "1") == nil {
@@ -162,6 +162,17 @@ func waitForSSHReady(ctx context.Context, target *SSHTarget, stderr io.Writer, p
 
 func WaitForSSHReady(ctx context.Context, target *SSHTarget, stderr io.Writer, phase string, timeout time.Duration) error {
 	return waitForSSHReady(ctx, target, stderr, phase, timeout)
+}
+
+func sshWaitNextAction(phase string) string {
+	switch phase {
+	case "before sync":
+		return "next_action=retry with --full-resync, then use a fresh lease if SSH still fails"
+	case "before command":
+		return "next_action=retry the command, then stop or replace the lease if SSH still fails"
+	default:
+		return "next_action=check lease status, then stop or replace the lease if SSH stays unreachable"
+	}
 }
 
 func sshWaitProgressMessage(target *SSHTarget, phase, reachablePort, transportPort, portStatus string, elapsed, remaining time.Duration) string {
@@ -378,6 +389,34 @@ func runSSHInput(ctx context.Context, target SSHTarget, remote string, input io.
 	return lastErr
 }
 
+func runSSHInputStream(ctx context.Context, target SSHTarget, remote string, input io.ReadSeeker, stdout, stderr io.Writer) error {
+	remote = wrapRemoteForTarget(target, remote)
+	if input == nil {
+		input = strings.NewReader("")
+	}
+	var lastErr error
+	for _, port := range sshPortCandidates(target.Port, target.FallbackPorts) {
+		if _, err := input.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		probe := target
+		probe.Port = port
+		cmd := exec.CommandContext(ctx, "ssh", sshArgs(probe, remote)...)
+		cmd.Stdin = input
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		err := cmd.Run()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !shouldRetrySSHPort(err) {
+			return err
+		}
+	}
+	return lastErr
+}
+
 func runSSHStream(ctx context.Context, target SSHTarget, remote string, stdout, stderr io.Writer) int {
 	code, _ := runSSHStreamResult(ctx, target, remote, stdout, stderr)
 	return code
@@ -498,6 +537,7 @@ type rsyncOptions struct {
 	Debug             bool
 	Delete            bool
 	Checksum          bool
+	FullResync        bool
 	UseFilesFrom      bool
 	FilesFrom         []byte
 	Timeout           time.Duration
@@ -549,7 +589,7 @@ func rsync(ctx context.Context, target SSHTarget, src, dst string, excludes []st
 	err := cmd.Run()
 	stopHeartbeat()
 	if ctx.Err() == context.DeadlineExceeded {
-		return exit(6, "rsync timed out after %s", opts.Timeout)
+		return exit(6, "rsync timed out after %s; next_action=retry with --full-resync, then use a fresh lease if sync still stalls", opts.Timeout)
 	}
 	if opts.Debug {
 		fmt.Fprintf(stderr, "rsync elapsed=%s checksum=%t delete=%t\n", time.Since(start).Round(time.Millisecond), opts.Checksum, opts.Delete)
@@ -603,7 +643,12 @@ func startSyncHeartbeat(stderr io.Writer, start time.Time, interval time.Duratio
 			case <-done:
 				return
 			case <-ticker.C:
-				fmt.Fprintf(stderr, "still syncing after %s...\n", time.Since(start).Round(time.Second))
+				elapsed := time.Since(start).Round(time.Second)
+				if elapsed >= 4*time.Minute {
+					fmt.Fprintf(stderr, "still syncing after %s... watchdog=sync-quiet next_action=wait, or cancel and retry with --full-resync/fresh lease if no progress\n", elapsed)
+				} else {
+					fmt.Fprintf(stderr, "still syncing after %s...\n", elapsed)
+				}
 			}
 		}
 	}()
@@ -760,8 +805,12 @@ func remoteCommand(workdir string, env map[string]string, command []string) stri
 }
 
 func remoteCommandWithEnvFile(workdir string, env map[string]string, envFile string, command []string) string {
+	return remoteCommandWithEnvFiles(workdir, env, singleEnvFile(envFile), command)
+}
+
+func remoteCommandWithEnvFiles(workdir string, env map[string]string, envFiles []string, command []string) string {
 	var b strings.Builder
-	writeRemoteCommandPrefix(&b, workdir, env, envFile)
+	writeRemoteCommandPrefix(&b, workdir, env, envFiles)
 	b.WriteString("bash -lc ")
 	b.WriteString(shellQuote(`exec "$@"`))
 	b.WriteString(" bash")
@@ -777,8 +826,12 @@ func remoteShellCommand(workdir string, env map[string]string, script string) st
 }
 
 func remoteShellCommandWithEnvFile(workdir string, env map[string]string, envFile, script string) string {
+	return remoteShellCommandWithEnvFiles(workdir, env, singleEnvFile(envFile), script)
+}
+
+func remoteShellCommandWithEnvFiles(workdir string, env map[string]string, envFiles []string, script string) string {
 	var b strings.Builder
-	writeRemoteCommandPrefix(&b, workdir, env, envFile)
+	writeRemoteCommandPrefix(&b, workdir, env, envFiles)
 	b.WriteString("bash -lc ")
 	b.WriteString(shellQuote(script))
 	return b.String()
@@ -854,11 +907,15 @@ func resetsShellCommandPosition(word string) bool {
 	}
 }
 
-func writeRemoteCommandPrefix(b *strings.Builder, workdir string, env map[string]string, envFile string) {
+func writeRemoteCommandPrefix(b *strings.Builder, workdir string, env map[string]string, envFiles []string) {
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(workdir))
 	b.WriteString(" && ")
-	if envFile != "" {
+	for _, envFile := range envFiles {
+		envFile = strings.TrimSpace(envFile)
+		if envFile == "" {
+			continue
+		}
 		b.WriteString("if [ -f ")
 		b.WriteString(shellQuote(envFile))
 		b.WriteString(" ]; then . ")
@@ -871,6 +928,13 @@ func writeRemoteCommandPrefix(b *strings.Builder, workdir string, env map[string
 		b.WriteString(shellQuote(v))
 		b.WriteByte(' ')
 	}
+}
+
+func singleEnvFile(envFile string) []string {
+	if strings.TrimSpace(envFile) == "" {
+		return nil
+	}
+	return []string{envFile}
 }
 
 func shellWords(words []string) []string {
@@ -887,6 +951,12 @@ func ShellWords(words []string) []string {
 
 func remoteMkdir(workdir string) string {
 	return "mkdir -p " + shellQuote(workdir)
+}
+
+func remoteResetWorkdir(workdir string) string {
+	parent := filepath.ToSlash(filepath.Dir(workdir))
+	script := "set -eu\nmkdir -p " + shellQuote(parent) + "\nrm -rf -- " + shellQuote(workdir) + "\nmkdir -p " + shellQuote(workdir)
+	return "bash -lc " + shellQuote(script)
 }
 
 func remoteGitHydrate(workdir, baseRef string) string {

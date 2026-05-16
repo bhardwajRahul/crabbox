@@ -20,7 +20,15 @@ func (a App) configShow(args []string) error {
 	if err != nil {
 		return err
 	}
-	view := map[string]any{
+	if *jsonOut {
+		return json.NewEncoder(a.Stdout).Encode(configShowView(cfg))
+	}
+	writeConfigShowText(a.Stdout, cfg)
+	return nil
+}
+
+func configShowView(cfg Config) map[string]any {
+	return map[string]any{
 		"profile":            cfg.Profile,
 		"provider":           cfg.Provider,
 		"target":             cfg.TargetOS,
@@ -54,6 +62,9 @@ func (a App) configShow(args []string) error {
 		"env": map[string]any{
 			"allow": cfg.EnvAllow,
 		},
+		"run": map[string]any{
+			"preflightTools": cfg.Run.PreflightTools,
+		},
 		"capacity": map[string]any{
 			"market":            cfg.Capacity.Market,
 			"strategy":          cfg.Capacity.Strategy,
@@ -70,6 +81,14 @@ func (a App) configShow(args []string) error {
 			"runnerLabels":  cfg.Actions.RunnerLabels,
 			"runnerVersion": cfg.Actions.RunnerVersion,
 			"ephemeral":     cfg.Actions.Ephemeral,
+		},
+		"azure": map[string]any{
+			"location":      cfg.AzureLocation,
+			"resourceGroup": cfg.AzureResourceGroup,
+			"image":         cfg.AzureImage,
+			"osDisk":        cfg.AzureOSDisk,
+			"network":       cfg.AzureNetwork,
+			"sshCIDRs":      cfg.AzureSSHCIDRs,
 		},
 		"blacksmith": map[string]any{
 			"org":         cfg.Blacksmith.Org,
@@ -95,6 +114,11 @@ func (a App) configShow(args []string) error {
 			"template": cfg.E2B.Template,
 			"workdir":  cfg.E2B.Workdir,
 			"user":     cfg.E2B.User,
+		},
+		"cloudflare": map[string]any{
+			"apiUrl":  cfg.Cloudflare.APIURL,
+			"auth":    tokenState(cfg.Cloudflare.Token),
+			"workdir": cfg.Cloudflare.Workdir,
 		},
 		"static": map[string]any{
 			"id":       cfg.Static.ID,
@@ -141,36 +165,53 @@ func (a App) configShow(args []string) error {
 			"sshCIDRs":       cfg.GCPSSHCIDRs,
 			"serviceAccount": cfg.GCPServiceAccount,
 		},
+		"proxmox": map[string]any{
+			"apiUrl":      cfg.Proxmox.APIURL,
+			"auth":        tokenState(cfg.Proxmox.TokenSecret),
+			"tokenId":     cfg.Proxmox.TokenID,
+			"node":        cfg.Proxmox.Node,
+			"templateId":  cfg.Proxmox.TemplateID,
+			"storage":     cfg.Proxmox.Storage,
+			"pool":        cfg.Proxmox.Pool,
+			"bridge":      cfg.Proxmox.Bridge,
+			"user":        cfg.Proxmox.User,
+			"workRoot":    cfg.Proxmox.WorkRoot,
+			"fullClone":   cfg.Proxmox.FullClone,
+			"insecureTLS": cfg.Proxmox.InsecureTLS,
+		},
 	}
-	if *jsonOut {
-		return json.NewEncoder(a.Stdout).Encode(view)
-	}
-	fmt.Fprintf(a.Stdout, "config=%s\n", userConfigPath())
-	fmt.Fprintf(a.Stdout, "provider=%s target=%s windows_mode=%s class=%s type=%s profile=%s\n", cfg.Provider, cfg.TargetOS, cfg.WindowsMode, cfg.Class, cfg.ServerType, cfg.Profile)
-	fmt.Fprintf(a.Stdout, "broker=%s auth=%s admin_auth=%s\n", blank(cfg.Coordinator, "-"), tokenState(cfg.CoordToken), tokenState(cfg.CoordAdminToken))
-	fmt.Fprintf(a.Stdout, "access_auth=%s\n", accessAuthState(cfg.Access))
-	fmt.Fprintf(a.Stdout, "ssh=%s@<host>:%s fallback_ports=%s key=%s\n", cfg.SSHUser, cfg.SSHPort, blank(strings.Join(cfg.SSHFallbackPorts, ","), "-"), cfg.SSHKey)
-	fmt.Fprintf(a.Stdout, "sync delete=%t checksum=%t git_seed=%t fingerprint=%t base_ref=%s excludes=%d timeout=%s\n", cfg.Sync.Delete, cfg.Sync.Checksum, cfg.Sync.GitSeed, cfg.Sync.Fingerprint, blank(cfg.Sync.BaseRef, "-"), len(configuredExcludes(cfg)), cfg.Sync.Timeout)
-	fmt.Fprintf(a.Stdout, "env allow=%s\n", strings.Join(cfg.EnvAllow, ","))
-	fmt.Fprintf(a.Stdout, "capacity market=%s strategy=%s fallback=%s regions=%s hints=%t\n", cfg.Capacity.Market, cfg.Capacity.Strategy, cfg.Capacity.Fallback, blank(strings.Join(cfg.Capacity.Regions, ","), "-"), cfg.Capacity.Hints)
-	fmt.Fprintf(a.Stdout, "actions repo=%s workflow=%s job=%s ref=%s runner_version=%s ephemeral=%t labels=%s\n", blank(cfg.Actions.Repo, "-"), blank(cfg.Actions.Workflow, "-"), blank(cfg.Actions.Job, "-"), blank(cfg.Actions.Ref, "-"), cfg.Actions.RunnerVersion, cfg.Actions.Ephemeral, blank(strings.Join(cfg.Actions.RunnerLabels, ","), "-"))
-	fmt.Fprintf(a.Stdout, "blacksmith org=%s workflow=%s job=%s ref=%s idle_timeout=%s debug=%t\n", blank(cfg.Blacksmith.Org, "-"), blank(cfg.Blacksmith.Workflow, "-"), blank(cfg.Blacksmith.Job, "-"), blank(cfg.Blacksmith.Ref, "-"), cfg.Blacksmith.IdleTimeout, cfg.Blacksmith.Debug)
-	fmt.Fprintf(a.Stdout, "namespace image=%s size=%s repository=%s site=%s volume_size_gb=%d auto_stop_idle_timeout=%s work_root=%s delete_on_release=%t\n", cfg.Namespace.Image, blank(cfg.Namespace.Size, "-"), blank(cfg.Namespace.Repository, "-"), blank(cfg.Namespace.Site, "-"), cfg.Namespace.VolumeSizeGB, cfg.Namespace.AutoStopIdleTimeout, cfg.Namespace.WorkRoot, cfg.Namespace.DeleteOnRelease)
-	fmt.Fprintf(a.Stdout, "e2b api_url=%s domain=%s template=%s workdir=%s user=%s\n", cfg.E2B.APIURL, cfg.E2B.Domain, cfg.E2B.Template, cfg.E2B.Workdir, blank(cfg.E2B.User, "-"))
-	fmt.Fprintf(a.Stdout, "static id=%s name=%s host=%s user=%s port=%s work_root=%s\n", blank(cfg.Static.ID, "-"), blank(cfg.Static.Name, "-"), blank(cfg.Static.Host, "-"), blank(cfg.Static.User, "-"), blank(cfg.Static.Port, "-"), blank(cfg.Static.WorkRoot, "-"))
-	fmt.Fprintf(a.Stdout, "results junit=%s\n", blank(strings.Join(cfg.Results.JUnit, ","), "-"))
-	fmt.Fprintf(a.Stdout, "cache pnpm=%t npm=%t docker=%t git=%t max_gb=%d purge_on_release=%t\n", cfg.Cache.Pnpm, cfg.Cache.Npm, cfg.Cache.Docker, cfg.Cache.Git, cfg.Cache.MaxGB, cfg.Cache.PurgeOnRelease)
+}
+
+func writeConfigShowText(w io.Writer, cfg Config) {
+	fmt.Fprintf(w, "config=%s\n", userConfigPath())
+	fmt.Fprintf(w, "provider=%s target=%s windows_mode=%s class=%s type=%s profile=%s\n", cfg.Provider, cfg.TargetOS, cfg.WindowsMode, cfg.Class, cfg.ServerType, cfg.Profile)
+	fmt.Fprintf(w, "broker=%s auth=%s admin_auth=%s\n", blank(cfg.Coordinator, "-"), tokenState(cfg.CoordToken), tokenState(cfg.CoordAdminToken))
+	fmt.Fprintf(w, "access_auth=%s\n", accessAuthState(cfg.Access))
+	fmt.Fprintf(w, "ssh=%s@<host>:%s fallback_ports=%s key=%s\n", cfg.SSHUser, cfg.SSHPort, blank(strings.Join(cfg.SSHFallbackPorts, ","), "-"), cfg.SSHKey)
+	fmt.Fprintf(w, "sync delete=%t checksum=%t git_seed=%t fingerprint=%t base_ref=%s excludes=%d timeout=%s\n", cfg.Sync.Delete, cfg.Sync.Checksum, cfg.Sync.GitSeed, cfg.Sync.Fingerprint, blank(cfg.Sync.BaseRef, "-"), len(configuredExcludes(cfg)), cfg.Sync.Timeout)
+	fmt.Fprintf(w, "env allow=%s\n", strings.Join(cfg.EnvAllow, ","))
+	fmt.Fprintf(w, "run preflight_tools=%s\n", blank(strings.Join(cfg.Run.PreflightTools, ","), "-"))
+	fmt.Fprintf(w, "capacity market=%s strategy=%s fallback=%s regions=%s hints=%t\n", cfg.Capacity.Market, cfg.Capacity.Strategy, cfg.Capacity.Fallback, blank(strings.Join(cfg.Capacity.Regions, ","), "-"), cfg.Capacity.Hints)
+	fmt.Fprintf(w, "actions repo=%s workflow=%s job=%s ref=%s runner_version=%s ephemeral=%t labels=%s\n", blank(cfg.Actions.Repo, "-"), blank(cfg.Actions.Workflow, "-"), blank(cfg.Actions.Job, "-"), blank(cfg.Actions.Ref, "-"), cfg.Actions.RunnerVersion, cfg.Actions.Ephemeral, blank(strings.Join(cfg.Actions.RunnerLabels, ","), "-"))
+	fmt.Fprintf(w, "blacksmith org=%s workflow=%s job=%s ref=%s idle_timeout=%s debug=%t\n", blank(cfg.Blacksmith.Org, "-"), blank(cfg.Blacksmith.Workflow, "-"), blank(cfg.Blacksmith.Job, "-"), blank(cfg.Blacksmith.Ref, "-"), cfg.Blacksmith.IdleTimeout, cfg.Blacksmith.Debug)
+	fmt.Fprintf(w, "namespace image=%s size=%s repository=%s site=%s volume_size_gb=%d auto_stop_idle_timeout=%s work_root=%s delete_on_release=%t\n", cfg.Namespace.Image, blank(cfg.Namespace.Size, "-"), blank(cfg.Namespace.Repository, "-"), blank(cfg.Namespace.Site, "-"), cfg.Namespace.VolumeSizeGB, cfg.Namespace.AutoStopIdleTimeout, cfg.Namespace.WorkRoot, cfg.Namespace.DeleteOnRelease)
+	fmt.Fprintf(w, "e2b api_url=%s domain=%s template=%s workdir=%s user=%s\n", cfg.E2B.APIURL, cfg.E2B.Domain, cfg.E2B.Template, cfg.E2B.Workdir, blank(cfg.E2B.User, "-"))
+	fmt.Fprintf(w, "cloudflare api_url=%s workdir=%s auth=%s\n", blank(cfg.Cloudflare.APIURL, "-"), cfg.Cloudflare.Workdir, tokenState(cfg.Cloudflare.Token))
+	fmt.Fprintf(w, "static id=%s name=%s host=%s user=%s port=%s work_root=%s\n", blank(cfg.Static.ID, "-"), blank(cfg.Static.Name, "-"), blank(cfg.Static.Host, "-"), blank(cfg.Static.User, "-"), blank(cfg.Static.Port, "-"), blank(cfg.Static.WorkRoot, "-"))
+	fmt.Fprintf(w, "results junit=%s\n", blank(strings.Join(cfg.Results.JUnit, ","), "-"))
+	fmt.Fprintf(w, "cache pnpm=%t npm=%t docker=%t git=%t max_gb=%d purge_on_release=%t\n", cfg.Cache.Pnpm, cfg.Cache.Npm, cfg.Cache.Docker, cfg.Cache.Git, cfg.Cache.MaxGB, cfg.Cache.PurgeOnRelease)
 	if len(cfg.Jobs) > 0 {
 		names := make([]string, 0, len(cfg.Jobs))
 		for name := range cfg.Jobs {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		fmt.Fprintf(a.Stdout, "jobs=%s\n", strings.Join(names, ","))
+		fmt.Fprintf(w, "jobs=%s\n", strings.Join(names, ","))
 	}
-	fmt.Fprintf(a.Stdout, "aws region=%s root_gb=%d ssh_cidrs=%s\n", cfg.AWSRegion, cfg.AWSRootGB, blank(strings.Join(cfg.AWSSSHCIDRs, ","), "-"))
-	fmt.Fprintf(a.Stdout, "gcp project=%s zone=%s image=%s network=%s subnet=%s root_gb=%d ssh_cidrs=%s\n", blank(cfg.GCPProject, "-"), cfg.GCPZone, cfg.GCPImage, cfg.GCPNetwork, blank(cfg.GCPSubnet, "-"), cfg.GCPRootGB, blank(strings.Join(cfg.GCPSSHCIDRs, ","), "-"))
-	return nil
+	fmt.Fprintf(w, "aws region=%s root_gb=%d ssh_cidrs=%s\n", cfg.AWSRegion, cfg.AWSRootGB, blank(strings.Join(cfg.AWSSSHCIDRs, ","), "-"))
+	fmt.Fprintf(w, "azure location=%s resource_group=%s os_disk=%s network=%s ssh_cidrs=%s\n", cfg.AzureLocation, cfg.AzureResourceGroup, cfg.AzureOSDisk, blank(cfg.AzureNetwork, "-"), blank(strings.Join(cfg.AzureSSHCIDRs, ","), "-"))
+	fmt.Fprintf(w, "gcp project=%s zone=%s image=%s network=%s subnet=%s root_gb=%d ssh_cidrs=%s\n", blank(cfg.GCPProject, "-"), cfg.GCPZone, cfg.GCPImage, cfg.GCPNetwork, blank(cfg.GCPSubnet, "-"), cfg.GCPRootGB, blank(strings.Join(cfg.GCPSSHCIDRs, ","), "-"))
+	fmt.Fprintf(w, "proxmox api_url=%s node=%s template_id=%d storage=%s pool=%s bridge=%s user=%s work_root=%s full_clone=%t auth=%s\n", blank(cfg.Proxmox.APIURL, "-"), blank(cfg.Proxmox.Node, "-"), cfg.Proxmox.TemplateID, blank(cfg.Proxmox.Storage, "-"), blank(cfg.Proxmox.Pool, "-"), blank(cfg.Proxmox.Bridge, "-"), cfg.Proxmox.User, cfg.Proxmox.WorkRoot, cfg.Proxmox.FullClone, tokenState(cfg.Proxmox.TokenSecret))
 }
 
 func jobConfigViews(jobs map[string]JobConfig) map[string]any {
@@ -234,7 +275,7 @@ func durationString(d time.Duration) string {
 func (a App) configSetBroker(args []string) error {
 	fs := newFlagSet("config set-broker", a.Stderr)
 	url := fs.String("url", "", "broker URL")
-	provider := fs.String("provider", "", "default provider: hetzner, aws, azure, or gcp")
+	provider := fs.String("provider", "", "default brokered provider: hetzner, aws, azure, or gcp")
 	tokenStdin := fs.Bool("token-stdin", false, "read broker token from stdin")
 	adminTokenStdin := fs.Bool("admin-token-stdin", false, "read broker admin token from stdin")
 	if err := parseFlags(fs, args); err != nil {

@@ -7,7 +7,7 @@ import {
 } from "./config";
 import { leaseProviderLabels } from "./provider-labels";
 import { leaseProviderName } from "./slug";
-import type { Env, ProviderMachine } from "./types";
+import type { Env, ProviderImage, ProviderMachine } from "./types";
 
 const ADDRESS_SPACE = "10.42.0.0/16";
 const SUBNET_CIDR = "10.42.0.0/24";
@@ -19,6 +19,7 @@ const API_VERSIONS = {
 };
 const DELETE_RETRY_ATTEMPTS = 13;
 const DELETE_RETRY_DELAY_MS = 15_000;
+const MIN_LRO_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_AZURE_LINUX_IMAGE = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest";
 const DEFAULT_AZURE_WINDOWS_IMAGE =
   "MicrosoftWindowsServer:windowsserver2022:2022-datacenter-smalldisk-g2:latest";
@@ -36,7 +37,28 @@ interface AzureVM {
   properties?: {
     provisioningState?: string;
     hardwareProfile?: { vmSize?: string };
+    storageProfile?: {
+      osDisk?: {
+        managedDisk?: { id?: string };
+        osType?: string;
+        diffDiskSettings?: { option?: string; placement?: string };
+      };
+    };
   };
+}
+
+interface AzureManagedImage {
+  id?: string;
+  name?: string;
+  location?: string;
+  properties?: { provisioningState?: string };
+}
+
+interface AzureSnapshot {
+  id?: string;
+  name?: string;
+  location?: string;
+  properties?: { provisioningState?: string; completionPercent?: number };
 }
 
 interface AzurePublicIP {
@@ -388,30 +410,45 @@ export class AzureClient {
         },
       },
     );
-    const image = parseImageRef(this.imageForConfig(config));
     const customData = btoa(
       config.target === "windows" ? azureWindowsBootstrapPowerShell(config) : cloudInit(config),
     );
-    const osDisk: Record<string, unknown> = {
-      name: `${name}-osdisk`,
-      createOption: "FromImage",
-    };
-    if (await this.supportsEphemeralOS(config.serverType, location)) {
-      osDisk["caching"] = "ReadOnly";
-      osDisk["diffDiskSettings"] = { option: "Local" };
-    } else {
-      osDisk["caching"] = "ReadWrite";
-      osDisk["managedDisk"] = { storageAccountType: "StandardSSD_LRS" };
-    }
+    const storageProfile: Record<string, unknown> = {};
     const vmProperties: Record<string, unknown> = {
       hardwareProfile: { vmSize: config.serverType },
-      storageProfile: {
-        imageReference: image,
-        osDisk,
-      },
-      osProfile: this.osProfile(config, name, leaseID, customData),
+      storageProfile,
       networkProfile: { networkInterfaces: [{ id: nicID }] },
     };
+    if (config.azureSnapshot) {
+      const diskID = await this.createDiskFromSnapshot(
+        config.azureSnapshot,
+        `${name}-osdisk`,
+        location,
+        tags,
+      );
+      storageProfile["osDisk"] = {
+        createOption: "Attach",
+        managedDisk: { id: diskID },
+        osType: config.target === "windows" ? "Windows" : "Linux",
+        caching: "ReadWrite",
+      };
+    } else {
+      const image = azureImageReference(this.imageForConfig(config));
+      const osDisk: Record<string, unknown> = {
+        name: `${name}-osdisk`,
+        createOption: "FromImage",
+      };
+      if (await this.useEphemeralOSDisk(config, location)) {
+        osDisk["caching"] = "ReadOnly";
+        osDisk["diffDiskSettings"] = { option: "Local" };
+      } else {
+        osDisk["caching"] = "ReadWrite";
+        osDisk["managedDisk"] = { storageAccountType: "StandardSSD_LRS" };
+      }
+      storageProfile["imageReference"] = image;
+      storageProfile["osDisk"] = osDisk;
+      vmProperties["osProfile"] = this.osProfile(config, name, leaseID, customData);
+    }
     if (config.capacityMarket === "spot") {
       vmProperties["priority"] = "Spot";
       vmProperties["evictionPolicy"] = "Delete";
@@ -421,6 +458,9 @@ export class AzureClient {
       tags,
       properties: vmProperties,
     });
+    if (config.azureSnapshot && config.target !== "windows") {
+      await this.installLinuxSSHKeyExtension(location, name, tags, config);
+    }
     if (config.target === "windows") {
       await this.installWindowsBootstrapExtension(location, name, tags);
     }
@@ -504,6 +544,196 @@ export class AzureClient {
     );
   }
 
+  private async installLinuxSSHKeyExtension(
+    location: string,
+    vmName: string,
+    tags: Record<string, string>,
+    config: LeaseConfig,
+  ): Promise<void> {
+    const user = shellQuote(config.sshUser || "crabbox");
+    const key = shellQuote(config.sshPublicKey);
+    const command = [
+      "set -eu",
+      `user=${user}`,
+      `key=${key}`,
+      `if ! id "$user" >/dev/null 2>&1; then useradd -m -s /bin/bash "$user"; fi`,
+      `home=$(getent passwd "$user" | cut -d: -f6)`,
+      `install -d -m 700 -o "$user" -g "$user" "$home/.ssh"`,
+      `printf '%s\\n' "$key" > "$home/.ssh/authorized_keys"`,
+      `chown "$user:$user" "$home/.ssh/authorized_keys"`,
+      `chmod 600 "$home/.ssh/authorized_keys"`,
+      `if command -v cloud-init >/dev/null 2>&1; then cloud-init clean --logs || true; fi`,
+    ].join("; ");
+    await this.arm(
+      "PUT",
+      `${vmPath(this.resourceGroup, vmName)}/extensions/crabbox-bootstrap`,
+      API_VERSIONS.compute,
+      {
+        location,
+        tags,
+        properties: {
+          publisher: "Microsoft.Azure.Extensions",
+          type: "CustomScript",
+          typeHandlerVersion: "2.1",
+          autoUpgradeMinorVersion: true,
+          settings: { timestamp: Math.trunc(Date.now() / 1000) },
+          protectedSettings: {
+            commandToExecute: `/bin/sh -c ${shellQuote(command)}`,
+          },
+        },
+      },
+    );
+  }
+
+  async createDiskSnapshot(vmName: string, name: string): Promise<ProviderImage> {
+    const vm = await this.arm<AzureVM>(
+      "GET",
+      vmPath(this.resourceGroup, vmName),
+      API_VERSIONS.compute,
+    );
+    const osDisk = vm.properties?.storageProfile?.osDisk;
+    // Azure ARM accepts snapshot requests against the phantom managed-disk identity of
+    // an ephemeral OS disk and reports Succeeded, but the resulting snapshot captures
+    // the base image rather than live state - any fork silently loses the source workdir.
+    // Azure documents "Local" as the only diffDiskSettings.option value; treat unknown
+    // values as snapshottable so a schema addition does not break managed-disk leases.
+    if (osDisk?.diffDiskSettings?.option === "Local") {
+      throw new Error(
+        `azure ephemeral OS disk on vm ${vmName} cannot be snapshotted; ` +
+          `use --mode archive or relaunch the lease with a managed Azure OS disk`,
+      );
+    }
+    const sourceDiskID = osDisk?.managedDisk?.id;
+    if (!sourceDiskID) {
+      throw new Error(`azure os disk not found for vm ${vmName}`);
+    }
+    const location = vm.location || this.defaultLocation;
+    const snapshot = await this.arm<AzureSnapshot>(
+      "PUT",
+      azureSnapshotPath(this.resourceGroup, name),
+      API_VERSIONS.disks,
+      {
+        location,
+        tags: { crabbox: "true", managed_by: "crabbox" },
+        properties: {
+          creationData: {
+            createOption: "Copy",
+            sourceResourceId: sourceDiskID,
+          },
+        },
+      },
+    );
+    return azureSnapshotProviderImage(snapshot, name, location);
+  }
+
+  async getImage(name: string, kind?: string): Promise<ProviderImage> {
+    if (kind === "azure-os-disk-snapshot") {
+      return await this.getDiskSnapshot(name);
+    }
+    const imageName = azureResourceName(name);
+    if (kind === "azure-managed-image") {
+      const image = await this.arm<AzureManagedImage>(
+        "GET",
+        azureImagePath(this.resourceGroup, imageName),
+        API_VERSIONS.compute,
+      );
+      return azureProviderImage(image, imageName, image.location || this.defaultLocation);
+    }
+    const image = await this.arm<AzureManagedImage>(
+      "GET",
+      azureImagePath(this.resourceGroup, imageName),
+      API_VERSIONS.compute,
+    ).catch((error) => {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    });
+    if (!image) return await this.getDiskSnapshot(name);
+    return azureProviderImage(image, imageName, image.location || this.defaultLocation);
+  }
+
+  async deleteImage(name: string, kind?: string): Promise<void> {
+    if (kind === "azure-os-disk-snapshot") {
+      await this.deleteDiskSnapshot(name);
+      return;
+    }
+    const imageName = azureResourceName(name);
+    if (kind === "azure-managed-image") {
+      await this.arm(
+        "DELETE",
+        azureImagePath(this.resourceGroup, imageName),
+        API_VERSIONS.compute,
+      ).catch((error) => {
+        if (isNotFound(error)) return undefined;
+        throw error;
+      });
+      return;
+    }
+    const image = await this.arm(
+      "DELETE",
+      azureImagePath(this.resourceGroup, imageName),
+      API_VERSIONS.compute,
+    ).catch((error) => {
+      if (isNotFound(error)) return "not-found";
+      throw error;
+    });
+    if (image !== "not-found") return;
+    await this.deleteDiskSnapshot(name);
+  }
+
+  private async getDiskSnapshot(name: string): Promise<ProviderImage> {
+    const snapshot = await this.arm<AzureSnapshot>(
+      "GET",
+      azureSnapshotPath(this.resourceGroup, azureResourceName(name)),
+      API_VERSIONS.disks,
+    );
+    return azureSnapshotProviderImage(
+      snapshot,
+      azureResourceName(name),
+      snapshot.location || this.defaultLocation,
+    );
+  }
+
+  private async deleteDiskSnapshot(name: string): Promise<void> {
+    await this.arm(
+      "DELETE",
+      azureSnapshotPath(this.resourceGroup, azureResourceName(name)),
+      API_VERSIONS.disks,
+    ).catch((error) => {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    });
+  }
+
+  private async createDiskFromSnapshot(
+    snapshotID: string,
+    diskName: string,
+    location: string,
+    tags: Record<string, string>,
+  ): Promise<string> {
+    const sourceResourceId = snapshotID.startsWith("/subscriptions/")
+      ? snapshotID
+      : `/subscriptions/${this.subscription}${azureSnapshotPath(this.resourceGroup, snapshotID)}`;
+    const disk = await this.arm<{ id?: string }>(
+      "PUT",
+      `/resourceGroups/${this.resourceGroup}/providers/Microsoft.Compute/disks/${diskName}`,
+      API_VERSIONS.disks,
+      {
+        location,
+        tags,
+        properties: {
+          creationData: {
+            createOption: "Copy",
+            sourceResourceId,
+          },
+        },
+      },
+    );
+    return (
+      disk.id ??
+      `/subscriptions/${this.subscription}/resourceGroups/${this.resourceGroup}/providers/Microsoft.Compute/disks/${diskName}`
+    );
+  }
+
   private async publicIP(name: string): Promise<string> {
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
@@ -575,6 +805,18 @@ export class AzureClient {
     return this.ephemeralOSSupport.get(vmSize) ?? azureSupportsEphemeralOS(vmSize);
   }
 
+  private async useEphemeralOSDisk(config: LeaseConfig, location: string): Promise<boolean> {
+    const mode = config.azureOSDisk;
+    if (mode !== "ephemeral") return false;
+    const supported = await this.supportsEphemeralOS(config.serverType, location);
+    if (!supported) {
+      throw new Error(
+        `azureOSDisk=ephemeral requires an Azure VM size with ephemeral OS disk support; ${config.serverType} is not supported`,
+      );
+    }
+    return supported;
+  }
+
   private async loadEphemeralOSSupport(location: string): Promise<Map<string, boolean>> {
     const token = await this.token();
     const url = new URL(
@@ -603,8 +845,7 @@ export class AzureClient {
     const asyncURL =
       response.headers.get("azure-asyncoperation") ?? response.headers.get("location");
     if (!asyncURL) return;
-    const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
-    const interval = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 3_000;
+    const interval = azureLROPollIntervalMS(response.headers.get("retry-after"));
     const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
       // oxlint-disable-next-line eslint/no-await-in-loop -- LRO must wait between status reads.
@@ -687,6 +928,20 @@ function networkPath(rg: string, kind: string, name: string): string {
   return `/resourceGroups/${rg}/providers/Microsoft.Network/${kind}/${name}`;
 }
 
+function azureImageReference(value: string):
+  | { id: string }
+  | {
+      publisher: string;
+      offer: string;
+      sku: string;
+      version: string;
+    } {
+  if (value.startsWith("/subscriptions/")) {
+    return { id: value };
+  }
+  return parseImageRef(value);
+}
+
 function parseImageRef(value: string): {
   publisher: string;
   offer: string;
@@ -698,6 +953,59 @@ function parseImageRef(value: string): {
     throw new Error(`azure image must be Publisher:Offer:SKU:Version, got ${value}`);
   }
   return { publisher: parts[0]!, offer: parts[1]!, sku: parts[2]!, version: parts[3]! };
+}
+
+function azureImagePath(rg: string, name: string): string {
+  return `/resourceGroups/${rg}/providers/Microsoft.Compute/images/${name}`;
+}
+
+function azureSnapshotPath(rg: string, name: string): string {
+  return `/resourceGroups/${rg}/providers/Microsoft.Compute/snapshots/${name}`;
+}
+
+function azureResourceName(value: string): string {
+  return value.slice(value.lastIndexOf("/") + 1);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function azureProviderImage(
+  image: AzureManagedImage,
+  fallbackName: string,
+  location: string,
+): ProviderImage {
+  const out: ProviderImage = {
+    id: image.name ?? fallbackName,
+    name: image.name ?? fallbackName,
+    state: image.properties?.provisioningState?.toLowerCase() || "succeeded",
+    provider: "azure",
+    kind: "azure-managed-image",
+    region: location,
+  };
+  if (image.id) out.resourceID = image.id;
+  return out;
+}
+
+function azureSnapshotProviderImage(
+  snapshot: AzureSnapshot,
+  fallbackName: string,
+  location: string,
+): ProviderImage {
+  const out: ProviderImage = {
+    id: snapshot.name ?? fallbackName,
+    name: snapshot.name ?? fallbackName,
+    state: snapshot.properties?.provisioningState?.toLowerCase() || "succeeded",
+    provider: "azure",
+    kind: "azure-os-disk-snapshot",
+    region: location,
+  };
+  if (snapshot.id) {
+    out.resourceID = snapshot.id;
+    out.snapshots = [snapshot.id];
+  }
+  return out;
 }
 
 function toMachine(vm: AzureVM, ip: string): ProviderMachine {
@@ -778,6 +1086,12 @@ function nextNSGPriority(used: Set<number>): number {
     }
   }
   throw new Error("azure nsg: no available security rule priorities");
+}
+
+export function azureLROPollIntervalMS(retryAfter: string | null): number {
+  const seconds = Number.parseInt(retryAfter ?? "", 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return MIN_LRO_POLL_INTERVAL_MS;
+  return Math.max(seconds * 1000, MIN_LRO_POLL_INTERVAL_MS);
 }
 
 export function azureSupportsEphemeralOS(vmSize: string): boolean {

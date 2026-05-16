@@ -13,8 +13,13 @@ crabbox list --provider sprites
 crabbox list --provider daytona
 crabbox list --provider islo
 crabbox list --provider e2b
+crabbox list --provider cloudflare --refresh
 crabbox list --json
 ```
+
+`--refresh` asks providers with local claims, such as Cloudflare, to check live
+runner state before printing the list. Without it, Cloudflare list stays
+credential-free and reports local claims only.
 
 `crabbox pool list` remains as a compatibility alias.
 
@@ -40,7 +45,7 @@ lease view.
 Flags:
 
 ```text
---provider hetzner|aws|azure|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
+--provider hetzner|aws|azure|gcp|proxmox|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
 --target linux|macos|windows
 --windows-mode normal|wsl2
 --static-host <host>

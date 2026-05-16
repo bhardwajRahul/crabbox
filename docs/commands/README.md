@@ -31,6 +31,7 @@ Command docs live here, one file per top-level command. Keep `docs/cli.md` as th
 - [admin](admin.md)
 - [actions](actions.md)
 - [capsule](capsule.md)
+- [checkpoint](checkpoint.md)
 - [ssh](ssh.md)
 - [vnc](vnc.md)
 - [webvnc](webvnc.md)

@@ -1,6 +1,8 @@
 bin/
 dist/
+dist-cloudflare/
 artifacts/
+.crabbox/
 node_modules/
 .wrangler/
 *.test

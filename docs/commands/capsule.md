@@ -6,6 +6,10 @@ The first implementation is Actions-first and local-first. It writes a
 `capsule.yaml` plus bounded local evidence, then reuses `crabbox run` for
 replay.
 
+A capsule is not a VM snapshot. Use `crabbox checkpoint` or `crabbox image` for
+environment state. Use `crabbox capsule` for the failure source, replay command,
+oracle, and replay history.
+
 ## Create From GitHub Actions
 
 ```sh
@@ -53,6 +57,16 @@ nonzero replay with a different signature records `fail_new` and returns
 nonzero so the mismatch is visible. A zero exit records `pass` and returns
 nonzero because the captured failure did not reproduce.
 
+Replay can target an environment prepared by other Crabbox features:
+
+```sh
+crabbox actions hydrate --id blue-lobster
+crabbox capsule replay capsules/example-org-my-app-actions-123/capsule.yaml --id blue-lobster --keep
+
+crabbox checkpoint fork chk_123 --class beast
+crabbox capsule replay capsules/example-org-my-app-actions-123/capsule.yaml --id purple-whale
+```
+
 ## Inspect
 
 ```sh
@@ -76,4 +90,5 @@ Related docs:
 
 - [Capsules](../features/capsules.md)
 - [Actions hydration](../features/actions-hydration.md)
+- [checkpoint](checkpoint.md)
 - [run](run.md)

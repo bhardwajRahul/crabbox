@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -228,6 +229,30 @@ func TestCoordinatorHTTPAddsAccessHeaders(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAdminLeaseAudit(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/admin/lease-audit" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"audits":[{"leaseID":"cbx_123","provider":"aws","state":"expired","target":"linux","owner":"alice@example.com","org":"example-org","cloudID":"i-123","cloudStatus":"found","cloudState":"running"}]}`))
+	}))
+	defer server.Close()
+	client := CoordinatorClient{BaseURL: server.URL, Client: server.Client()}
+	audits, err := client.AdminLeaseAudit(context.Background(), "expired", "aws", "alice@example.com", "example-org", 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery.Get("state") != "expired" || gotQuery.Get("provider") != "aws" || gotQuery.Get("owner") != "alice@example.com" || gotQuery.Get("org") != "example-org" || gotQuery.Get("limit") != "25" {
+		t.Fatalf("query=%v", gotQuery)
+	}
+	if len(audits) != 1 || audits[0].LeaseID != "cbx_123" || audits[0].CloudStatus != "found" {
+		t.Fatalf("audits=%#v", audits)
+	}
+}
+
 func TestHeartbeatRequestBodyOmitsIdleTimeoutForTouch(t *testing.T) {
 	if body := heartbeatRequestBody(nil, nil); len(body) != 0 {
 		t.Fatalf("touch heartbeat body=%v, want empty", body)
@@ -442,11 +467,15 @@ func TestCoordinatorLeaseWatchCancelsWhenLeaseReleased(t *testing.T) {
 func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 	var body struct {
 		Provider           string   `json:"provider"`
+		AWSSnapshot        string   `json:"awsSnapshot"`
 		AWSSSHCIDRs        []string `json:"awsSSHCIDRs"`
 		AzureLocation      string   `json:"azureLocation"`
 		AzureImage         string   `json:"azureImage"`
+		AzureSnapshot      string   `json:"azureSnapshot"`
+		AzureOSDisk        string   `json:"azureOSDisk"`
 		GCPProject         string   `json:"gcpProject"`
 		GCPZone            string   `json:"gcpZone"`
+		GCPSnapshot        string   `json:"gcpSnapshot"`
 		GCPNetwork         string   `json:"gcpNetwork"`
 		GCPTags            []string `json:"gcpTags"`
 		GCPSSHCIDRs        []string `json:"gcpSSHCIDRs"`
@@ -469,21 +498,26 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 
 	client := CoordinatorClient{BaseURL: server.URL, Client: server.Client()}
 	_, err := client.CreateLease(context.Background(), Config{
-		Provider:           "google",
-		ServerType:         "t3.small",
-		ServerTypeExplicit: true,
-		AWSSSHCIDRs:        []string{"198.51.100.7/32"},
-		AzureLocation:      "eastus",
-		AzureImage:         "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest",
-		GCPProject:         "crabbox-project",
-		gcpProjectExplicit: true,
-		GCPZone:            "europe-west2-b",
-		GCPImage:           "projects/custom/global/images/crabbox",
-		GCPNetwork:         "crabbox-net",
-		GCPTags:            []string{"crabbox-ci"},
-		GCPSSHCIDRs:        []string{"198.51.100.11/32"},
-		GCPRootGB:          900,
-		SSHFallbackPorts:   []string{"22", "2022"},
+		Provider:            "google",
+		ServerType:          "t3.small",
+		ServerTypeExplicit:  true,
+		AWSSnapshot:         "snap-123",
+		AWSSSHCIDRs:         []string{"198.51.100.7/32"},
+		AzureLocation:       "eastus",
+		AzureImage:          "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest",
+		AzureSnapshot:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/snapshots/checkpoint",
+		AzureOSDisk:         "managed",
+		AzureOSDiskExplicit: true,
+		GCPProject:          "crabbox-project",
+		gcpProjectExplicit:  true,
+		GCPZone:             "europe-west2-b",
+		GCPImage:            "projects/custom/global/images/crabbox",
+		GCPNetwork:          "crabbox-net",
+		GCPTags:             []string{"crabbox-ci"},
+		GCPSSHCIDRs:         []string{"198.51.100.11/32"},
+		GCPSnapshot:         "projects/crabbox-project/global/snapshots/checkpoint",
+		GCPRootGB:           900,
+		SSHFallbackPorts:    []string{"22", "2022"},
 		Capacity: CapacityConfig{
 			Market:   "spot",
 			Strategy: "most-available",
@@ -506,6 +540,12 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 	if body.AzureImage != "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest" {
 		t.Fatalf("azureImage=%q", body.AzureImage)
 	}
+	if body.AWSSnapshot != "snap-123" || body.AzureSnapshot == "" || body.GCPSnapshot == "" {
+		t.Fatalf("snapshot fields not forwarded: aws=%q azure=%q gcp=%q", body.AWSSnapshot, body.AzureSnapshot, body.GCPSnapshot)
+	}
+	if body.AzureOSDisk != "managed" {
+		t.Fatalf("azureOSDisk=%q", body.AzureOSDisk)
+	}
 	if body.GCPProject != "crabbox-project" || body.GCPZone != "europe-west2-b" || body.GCPNetwork != "crabbox-net" || body.GCPRootGB != 900 {
 		t.Fatalf("unexpected gcp body: %#v", body)
 	}
@@ -520,6 +560,38 @@ func TestCoordinatorCreateLeaseSendsAWSSSHCIDRs(t *testing.T) {
 	}
 	if body.Capacity != nil {
 		t.Fatalf("default capacity fields should be omitted for mixed-version brokers: %#v", body.Capacity)
+	}
+}
+
+func TestCoordinatorCreateLeaseOmitsDefaultAzureOSDisk(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/leases" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"lease":{"id":"cbx_123","provider":"azure","state":"active","host":"192.0.2.10"}}`))
+	}))
+	defer server.Close()
+
+	client := CoordinatorClient{BaseURL: server.URL, Client: server.Client()}
+	_, err := client.CreateLease(context.Background(), Config{
+		Provider:         "azure",
+		AzureLocation:    "eastus",
+		AzureImage:       defaultAzureLinuxImage,
+		AzureOSDisk:      AzureOSDiskManaged,
+		SSHFallbackPorts: []string{"22"},
+		TTL:              time.Hour,
+		IdleTimeout:      30 * time.Minute,
+	}, "ssh-ed25519 test", false, "cbx_123", "blue-crab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["azureOSDisk"]; ok {
+		t.Fatalf("azureOSDisk forwarded despite default-only config: %#v", body["azureOSDisk"])
 	}
 }
 
@@ -808,6 +880,13 @@ func TestCoordinatorImageCreateAndPromote(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"image":{"id":"ami-12345678","name":"openclaw-crabbox-test","state":"pending","region":"eu-west-1"}}`))
 		case "/v1/images/ami-12345678":
+			if r.Method == http.MethodDelete {
+				if got := r.URL.Query().Get("kind"); got != "aws-ami" {
+					t.Fatalf("delete kind=%q", got)
+				}
+				_, _ = w.Write([]byte(`{"imageID":"ami-12345678","deleted":true}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"image":{"id":"ami-12345678","name":"openclaw-crabbox-test","state":"available","region":"eu-west-1"}}`))
 		case "/v1/images/ami-12345678/promote":
 			if r.Method != http.MethodPost {
@@ -833,6 +912,9 @@ func TestCoordinatorImageCreateAndPromote(t *testing.T) {
 	}
 	if promoted, err := client.PromoteImage(context.Background(), "ami-12345678"); err != nil || promoted.PromotedAt == "" {
 		t.Fatalf("promoted=%#v err=%v", promoted, err)
+	}
+	if err := client.DeleteImage(context.Background(), "ami-12345678", CoordinatorImageRef{Provider: "aws", Region: "eu-west-1", Kind: "aws-ami"}); err != nil {
+		t.Fatalf("delete image: %v", err)
 	}
 }
 

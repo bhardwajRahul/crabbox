@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -63,6 +64,17 @@ func touchDirectLeaseBestEffort(ctx context.Context, cfg Config, server Server, 
 		}
 		return server
 	}
+	if cfg.Provider == "proxmox" || server.Provider == "proxmox" {
+		client, err := NewProxmoxClient(cfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "warning: direct touch state=%s: %v\n", state, err)
+			return server
+		}
+		if err := client.SetLabels(ctx, server.CloudID, server.Labels); err != nil {
+			fmt.Fprintf(stderr, "warning: direct touch state=%s: %v\n", state, err)
+		}
+		return server
+	}
 	client, err := newHetznerClient()
 	if err != nil {
 		fmt.Fprintf(stderr, "warning: direct touch state=%s: %v\n", state, err)
@@ -79,18 +91,46 @@ func TouchDirectLeaseBestEffort(ctx context.Context, cfg Config, server Server, 
 }
 
 func acquireAttemptsRetry(rt Runtime, keep bool, acquire func() (LeaseTarget, error)) (LeaseTarget, error) {
-	var lastErr error
-	attempts := acquireAttempts(keep)
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		lease, err := acquire()
 		if err == nil {
 			return lease, nil
 		}
-		lastErr = err
-		if attempt == attempts || !isBootstrapWaitError(err) {
+		if !isRetryableAcquireError(err) || attempt >= acquireAttemptsForError(keep, err) {
 			return LeaseTarget{}, err
 		}
-		fmt.Fprintf(rt.Stderr, "warning: bootstrap failed; retrying with fresh lease: %v\n", err)
+		if isCoordinatorStaleInstanceCleanedError(err) {
+			fmt.Fprintf(rt.Stderr, "warning: coordinator returned stale instance; retrying with fresh lease: %v\n", err)
+		} else {
+			fmt.Fprintf(rt.Stderr, "warning: bootstrap failed; retrying with fresh lease: %v\n", err)
+		}
 	}
-	return LeaseTarget{}, lastErr
+}
+
+func acquireAttemptsForError(keep bool, err error) int {
+	if isCoordinatorStaleInstanceCleanedError(err) {
+		return 5
+	}
+	return acquireAttempts(keep)
+}
+
+func isRetryableAcquireError(err error) bool {
+	return isBootstrapWaitError(err) || isCoordinatorStaleInstanceCleanedError(err)
+}
+
+type coordinatorStaleInstanceCleanedError struct {
+	err error
+}
+
+func (e coordinatorStaleInstanceCleanedError) Error() string {
+	return e.err.Error()
+}
+
+func (e coordinatorStaleInstanceCleanedError) Unwrap() error {
+	return e.err
+}
+
+func isCoordinatorStaleInstanceCleanedError(err error) bool {
+	var cleaned coordinatorStaleInstanceCleanedError
+	return errors.As(err, &cleaned)
 }

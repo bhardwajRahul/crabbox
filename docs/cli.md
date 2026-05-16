@@ -25,16 +25,16 @@ Primary output goes to stdout. Progress, diagnostics, and errors go to stderr. J
 
 ```text
 crabbox doctor
-crabbox login [--url <url>] [--provider hetzner|aws|azure] [--no-browser]
-crabbox login --url <url> --token-stdin [--provider hetzner|aws|azure]
+crabbox login [--url <url>] [--provider hetzner|aws|azure|gcp] [--no-browser]
+crabbox login --url <url> --token-stdin [--provider hetzner|aws|azure|gcp]
 crabbox logout
 crabbox whoami [--json]
 crabbox init [--force]
 crabbox config show [--json]
 crabbox config path
-crabbox config set-broker --url <url> --token-stdin [--provider hetzner|aws|azure]
-crabbox warmup [--provider hetzner|aws|azure|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b] [--target linux|macos|windows] [--desktop] [--browser] [--code] [--tailscale] [--network auto|tailscale|public] [--profile <name>] [--idle-timeout <duration>] [--timing-json]
-crabbox run [--id <lease-id-or-slug>] [--provider hetzner|aws|azure|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b] [--target linux|macos|windows] [--windows-mode normal|wsl2] [--desktop] [--browser] [--code] [--tailscale] [--network auto|tailscale|public] [--shell] [--checksum] [--debug] [--force-sync-large] [--capture-stdout <path>] [--download remote=local] [--timing-json] [--blacksmith-workflow <workflow>] -- <command...>
+crabbox config set-broker --url <url> --token-stdin [--provider hetzner|aws|azure|gcp]
+crabbox warmup [--provider hetzner|aws|azure|gcp|proxmox|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b] [--target linux|macos|windows] [--windows-mode normal|wsl2] [--desktop] [--browser] [--code] [--tailscale] [--network auto|tailscale|public] [--profile <name>] [--idle-timeout <duration>] [--timing-json]
+crabbox run [--id <lease-id-or-slug>] [--provider hetzner|aws|azure|gcp|proxmox|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b] [--target linux|macos|windows] [--windows-mode normal|wsl2] [--desktop] [--browser] [--code] [--tailscale] [--network auto|tailscale|public] [--keep-on-failure] [--shell] [--script <file>|--script-stdin] [--fresh-pr <owner/repo#number>] [--allow-env <name>] [--env-from-profile <file>] [--checksum] [--debug] [--force-sync-large] [--preflight] [--preflight-tools <tools>] [--capture-stdout <path>] [--capture-stderr <path>] [--capture-on-fail] [--download remote=local] [--timing-json] [--blacksmith-workflow <workflow>] -- <command...>
 crabbox job list
 crabbox job run [--id <lease-id-or-slug>] [--dry-run] [--no-hydrate] [--stop auto|always|success|failure|never] <name>
 crabbox desktop launch --id <lease-id-or-slug> [--browser] [--url <url>] [--egress <profile>] [--webvnc] [--open] [-- <command...>]
@@ -76,12 +76,19 @@ crabbox capsule from-actions <run-url> --replay '<command>' [--output <dir>]
 crabbox capsule replay <capsule.yaml> [--keep]
 crabbox capsule inspect <capsule.yaml> [--json]
 crabbox capsule promote <capsule.yaml> --regression
+crabbox checkpoint create --id <lease-id-or-slug> [--name <name>] [--mode auto|native|archive] [--workdir <path>]
+crabbox checkpoint list [--json]
+crabbox checkpoint inspect <checkpoint-id> [--json]
+crabbox checkpoint restore <checkpoint-id> --id <lease-id-or-slug> [--clear=false]
+crabbox checkpoint fork <checkpoint-id> [--class <class>] [--keep]
+crabbox checkpoint delete <checkpoint-id> [--local-only]
 crabbox status --id <lease-id-or-slug> [--network auto|tailscale|public] [--wait]
 crabbox list [--json]
 crabbox share --id <lease-id-or-slug> [--user <email>] [--org] [--role use|manage] [--list] [--json]
 crabbox unshare --id <lease-id-or-slug> [--user <email>] [--org] [--all] [--json]
 crabbox usage [--scope user|org|all] [--user <email>] [--org <name>] [--month YYYY-MM] [--json]
 crabbox admin leases [--state active|released|expired|failed] [--owner <email>] [--org <name>] [--json]
+crabbox admin lease-audit [--state expired] [--provider aws] [--fail-on-live] [--json]
 crabbox admin release <lease-id-or-slug> [--delete]
 crabbox admin delete <lease-id-or-slug> --force
 crabbox ssh --id <lease-id-or-slug> [--network auto|tailscale|public]
@@ -162,6 +169,14 @@ crabbox ssh --id blue-lobster
 crabbox capsule promote capsules/openclaw-crabbox-actions-123/capsule.yaml --regression
 ```
 
+Save and fork a prepared workspace:
+
+```sh
+crabbox run --id blue-lobster --shell 'npm ci && npm test'
+crabbox checkpoint create --id blue-lobster --name after-npm-ci
+crabbox checkpoint fork chk_123 --class beast
+```
+
 Use Blacksmith Testboxes through the same Crabbox surface:
 
 ```sh
@@ -180,10 +195,13 @@ crabbox run --provider ssh --target windows --windows-mode normal --static-host 
 crabbox run --provider ssh --target windows --windows-mode wsl2 --static-host win-dev.local -- pnpm test
 ```
 
-Create managed AWS desktop boxes:
+Create managed cloud Windows boxes:
 
 ```sh
 crabbox warmup --provider aws --target windows --desktop
+crabbox warmup --provider azure --target windows --desktop
+crabbox warmup --provider aws --target windows --windows-mode wsl2
+crabbox warmup --provider azure --target windows --windows-mode wsl2
 CRABBOX_AWS_MAC_HOST_ID=h-... crabbox warmup --provider aws --target macos --desktop --market on-demand
 crabbox vnc --id blue-lobster
 crabbox screenshot --id blue-lobster --output desktop.png
@@ -192,12 +210,13 @@ crabbox screenshot --id blue-lobster --output desktop.png
 Managed provider targets are intentionally narrow:
 
 - Hetzner managed provisioning supports Linux only.
-- AWS supports Linux, native Windows (`--target windows --windows-mode normal`),
-  Windows WSL2 (`--target windows --windows-mode wsl2`), and EC2 Mac
-  (`--target macos`) when the Mac Dedicated Host is provided.
-- Azure supports Linux and native Windows (`--target windows --windows-mode
-  normal`). Azure Windows does not provide managed desktop, browser, WSL2, or
-  macOS targets.
+- AWS and Azure both support Linux, native Windows (`--target windows
+  --windows-mode normal`) with managed desktop/VNC, and Windows WSL2
+  (`--target windows --windows-mode wsl2`) for POSIX sync, run, and Actions
+  hydration. Use native Windows for desktop/VNC; use WSL2 for Linux tooling on
+  a Windows host.
+- AWS also supports EC2 Mac (`--target macos`) when the Mac Dedicated Host is
+  provided. Azure does not have a managed macOS target.
 - Existing macOS and Windows machines belong on `provider=ssh`.
 
 Use Tailscale as an optional network plane:
@@ -271,6 +290,7 @@ Trusted operator lease controls:
 
 ```sh
 crabbox admin leases --state active
+crabbox admin lease-audit --state expired --provider aws --fail-on-live
 crabbox admin release blue-lobster
 crabbox admin delete cbx_abcdef123456 --force
 ```
@@ -280,6 +300,7 @@ Trusted operator image controls:
 ```sh
 crabbox image create --id cbx_abcdef123456 --name openclaw-crabbox-20260501-1246 --wait
 crabbox image promote ami-1234567890abcdef0
+crabbox image delete ami-1234567890abcdef0 --region eu-west-1
 ```
 
 ## `run`
@@ -317,6 +338,7 @@ Flags:
 --profile <name>        profile to run on
 --class <name>          machine class override
 --type <name>           provider server or instance type override
+--azure-os-disk <mode> Azure OS disk mode: managed, ephemeral, or auto
 --market spot|on-demand AWS capacity market override
 --ttl <duration>        maximum lease lifetime, default 90m
 --idle-timeout <duration> idle expiry, default 30m
@@ -334,11 +356,22 @@ Flags:
 --sync-only             sync and exit
 --force-sync-large      allow a sync candidate above configured fail thresholds
 --keep                  keep lease after command exits
+--keep-on-failure       keep a newly acquired failed lease for SSH/debug until idle/TTL expiry
 --shell                 run the command string through bash -lc
+--script <file>         upload a local script file and run it remotely
+--script-stdin          read a script from stdin, upload it, and run it remotely
+--fresh-pr <spec>       clone and checkout a GitHub PR remotely instead of syncing the local tree
+--apply-local-patch     apply the local git diff on top of --fresh-pr checkout
+--allow-env <name>      allow an environment variable for this run; repeatable or comma-separated
+--env-from-profile <file> load allowed environment values from a local profile file; repeatable
 --checksum              use checksum rsync instead of size/time
 --debug                 print sync timing and itemized rsync output
 --junit <paths>         comma-separated remote JUnit XML paths to attach to run history
+--preflight             print remote capability preflight before running the command
+--preflight-tools <tools> comma-separated preflight tools to probe; overrides run.preflightTools
 --capture-stdout <path> write remote stdout to a local file, skipping stdout run-log capture
+--capture-stderr <path> write remote stderr to a local file, skipping stderr run-log capture
+--capture-on-fail       compatibility alias; failure bundles are saved by default on non-zero exit
 --download remote=local copy a remote file back after a successful command; repeatable
 --reclaim              claim an existing lease for the current repo
 --timing-json          print a final JSON timing record
@@ -364,6 +397,10 @@ Flags:
 --e2b-template <id>     E2B sandbox template
 --e2b-workdir <path>    E2B sandbox working directory
 --e2b-user <user>       E2B sandbox user override
+--modal-app <name>      Modal app name
+--modal-image <image>   Modal sandbox registry image
+--modal-workdir <path>  Modal sandbox working directory
+--modal-python <path>   Python binary for the local Modal client
 ```
 
 Secrets must not be accepted as flag values. Env forwarding is name-based only.
@@ -398,6 +435,12 @@ through E2B file/envd APIs, and streams command output through E2B process APIs.
 Auth comes from `CRABBOX_E2B_API_KEY` or `E2B_API_KEY`. E2B is not an SSH lease,
 so `ssh`, `desktop`, `vnc`, `code`, Actions hydration, and `--checksum` are not
 supported.
+
+With `provider: modal`, Crabbox creates Modal Sandboxes through the local Modal
+Python client, uploads the sync archive through Sandbox exec, and streams command
+output through Modal process APIs. Auth comes from `python3 -m modal setup` or
+`MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`. Modal is not an SSH lease, so `ssh`,
+`desktop`, `vnc`, `code`, Actions hydration, and `--checksum` are not supported.
 
 ## Exit Codes
 
@@ -699,6 +742,10 @@ CRABBOX_E2B_DOMAIN
 CRABBOX_E2B_TEMPLATE
 CRABBOX_E2B_WORKDIR
 CRABBOX_E2B_USER
+CRABBOX_MODAL_APP
+CRABBOX_MODAL_IMAGE
+CRABBOX_MODAL_WORKDIR
+CRABBOX_MODAL_PYTHON
 CRABBOX_RESULTS_JUNIT
 CRABBOX_SYNC_CHECKSUM
 CRABBOX_SYNC_DELETE
@@ -747,6 +794,7 @@ HCLOUD_TOKEN/HETZNER_TOKEN
 AWS_PROFILE/AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN
 SEMAPHORE_HOST/SEMAPHORE_API_TOKEN/SEMAPHORE_PROJECT
 E2B_API_KEY/E2B_API_URL/E2B_DOMAIN
+MODAL_TOKEN_ID/MODAL_TOKEN_SECRET
 GITHUB_TOKEN
 ```
 

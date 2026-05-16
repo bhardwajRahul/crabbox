@@ -207,6 +207,18 @@ func TestReleaseLeaseCleansNamespaceSSHFiles(t *testing.T) {
 	}
 }
 
+func TestNamespaceRejectsUnsafeWorkRoot(t *testing.T) {
+	for _, workRoot := range []string{"/", "/workspaces", "/tmp", "relative"} {
+		cfg := Config{Namespace: NamespaceConfig{WorkRoot: workRoot}}
+		if err := validateNamespaceConfig(cfg); err == nil {
+			t.Fatalf("expected %q to be rejected", workRoot)
+		}
+	}
+	if err := validateNamespaceConfig(Config{Namespace: NamespaceConfig{WorkRoot: "/workspaces/crabbox"}}); err != nil {
+		t.Fatalf("valid work root rejected: %v", err)
+	}
+}
+
 func TestNamespaceLifecycleCommandFallbacks(t *testing.T) {
 	runner := &namespaceRecordingRunner{failFirst: true}
 	backend := &namespaceLeaseBackend{rt: Runtime{Stdout: io.Discard, Stderr: io.Discard, Exec: runner}}
@@ -228,13 +240,31 @@ func TestNamespaceLifecycleCommandFallbacks(t *testing.T) {
 	}
 }
 
+func TestNamespacePrepareReportsPrepareFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	runner := &namespaceRecordingRunner{failAll: true}
+	backend := &namespaceLeaseBackend{rt: Runtime{Stdout: io.Discard, Stderr: io.Discard, Exec: runner}}
+
+	_, err := backend.prepareDevbox(context.Background(), "crabbox-blue-lobster-deadbeef")
+	if err == nil || !strings.Contains(err.Error(), "namespace devbox failed") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(runner.calls) != 2 || runner.calls[0] != "devbox configure-ssh" || runner.calls[1] != "devbox prepare crabbox-blue-lobster-deadbeef" {
+		t.Fatalf("prepare calls=%#v", runner.calls)
+	}
+}
+
 type namespaceRecordingRunner struct {
 	calls     []string
+	failAll   bool
 	failFirst bool
 }
 
 func (r *namespaceRecordingRunner) Run(_ context.Context, req LocalCommandRequest) (LocalCommandResult, error) {
 	r.calls = append(r.calls, req.Name+" "+strings.Join(req.Args, " "))
+	if r.failAll {
+		return LocalCommandResult{ExitCode: 2}, errors.New("unsupported")
+	}
 	if r.failFirst {
 		r.failFirst = false
 		return LocalCommandResult{ExitCode: 2}, errors.New("unsupported")

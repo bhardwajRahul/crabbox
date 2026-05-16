@@ -2,7 +2,7 @@
 
 Read when:
 
-- changing Hetzner, AWS, Azure, Google Cloud, or Blacksmith Testbox provisioning;
+- changing Hetzner, AWS, Azure, Google Cloud, Proxmox, or Blacksmith Testbox provisioning;
 - adding a backend;
 - adjusting machine classes, fallback order, regions, or images.
 
@@ -17,8 +17,8 @@ gcp         Google Cloud Compute Engine instances
 
 Brokered Hetzner leases are Linux targets. Brokered AWS supports Linux, native
 Windows Server, Windows WSL2, and EC2 Mac when a Dedicated Host is configured.
-Brokered Azure supports Linux and native Windows SSH/sync/run. Brokered GCP
-supports Linux SSH/sync/run. Static SSH still
+Brokered Azure supports Linux, native Windows, and Windows WSL2 SSH/sync/run.
+Brokered GCP supports Linux SSH/sync/run. Static SSH still
 exists for reusing existing macOS and Windows machines:
 
 ```text
@@ -28,12 +28,15 @@ ssh         Existing SSH host selected by static.host
 Direct provider backends can also run without the Crabbox coordinator:
 
 ```text
+proxmox    Proxmox VE QEMU VM clones exposed as SSH leases
 semaphore  Semaphore CI jobs exposed as SSH leases
 namespace  Namespace Devboxes exposed as SSH leases
 sprites    Sprites microVMs exposed as SSH leases through sprite proxy
 daytona    Daytona sandboxes with SDK/toolbox run and short-lived SSH access
 islo       Islo sandboxes with delegated command execution
 e2b        E2B sandboxes with delegated command execution
+modal      Modal Sandboxes with delegated command execution
+tensorlake Tensorlake Firecracker sandboxes with delegated command execution
 ```
 
 ## Provider Pages
@@ -43,6 +46,7 @@ e2b        E2B sandboxes with delegated command execution
 - [Azure](../providers/azure.md): Azure Linux/native Windows, shared infra, capacity, and cleanup.
 - [Google Cloud](../providers/gcp.md): GCP Compute Engine Linux SSH leases.
 - [Hetzner](../providers/hetzner.md): Linux-only managed provider behavior, classes, and cleanup.
+- [Proxmox](../providers/proxmox.md): direct Proxmox VE Linux QEMU VM clones.
 - [Static SSH](../providers/ssh.md): existing Linux, macOS, and Windows SSH hosts.
 - [Blacksmith Testbox](../providers/blacksmith-testbox.md): delegated Testbox backend behavior.
 - [Namespace Devbox](../providers/namespace-devbox.md): Namespace Devbox SSH leases with Crabbox sync/run.
@@ -51,6 +55,8 @@ e2b        E2B sandboxes with delegated command execution
 - [Daytona](../providers/daytona.md): Daytona SDK/toolbox sandbox leases.
 - [Islo](../providers/islo.md): delegated Islo sandbox execution.
 - [E2B](../providers/e2b.md): delegated E2B sandbox execution.
+- [Modal](../providers/modal.md): delegated Modal Sandbox execution.
+- [Tensorlake](../providers/tensorlake.md): delegated Tensorlake Firecracker sandbox execution.
 - [Provider backends](../provider-backends.md): implementation guide for adding a new provider/backend/plugin.
 
 ## Hetzner Summary
@@ -67,9 +73,9 @@ e2b        E2B sandboxes with delegated command execution
 - imports or reuses an EC2 key pair;
 - creates or reuses the `crabbox-runners` security group with SSH ingress limited to configured CIDRs or the request source IP;
 - launches one-time Linux Spot or On-Demand instances;
-- launches AWS Windows Server desktop leases with EC2Launch PowerShell user
-  data, OpenSSH, Git for Windows, TightVNC, and first-network flyout
-  suppression when `target=windows`;
+- launches AWS Windows Server leases with EC2Launch PowerShell user data, then a
+  post-SSH Crabbox bootstrap for OpenSSH/Git/user setup; `--desktop` adds
+  TightVNC, auto-logon, and first-network flyout suppression;
 - launches EC2 Mac leases only with an explicit Dedicated Host id
   (`CRABBOX_AWS_MAC_HOST_ID` or `aws.macHostId`) and On-Demand capacity;
 - tags instances, volumes, and Spot requests;
@@ -131,7 +137,7 @@ large     L
 beast     XL
 ```
 
-Direct provider mode still exists when no coordinator is configured. It uses local AWS credentials, Azure credentials, Google Application Default Credentials, or `HCLOUD_TOKEN`/`HETZNER_TOKEN` and should stay secondary to the brokered path.
+Direct provider mode still exists when no coordinator is configured. It uses local AWS credentials, Azure credentials, Google Application Default Credentials, Proxmox API tokens, or `HCLOUD_TOKEN`/`HETZNER_TOKEN` and should stay secondary to the brokered path when a brokered provider is available.
 
 Tailscale is not a provider. Use `--tailscale` to add tailnet reachability to
 new managed Linux leases, or set a static host to a MagicDNS name/100.x address
@@ -156,6 +162,11 @@ has no Durable Object alarm; cleanup is best-effort through provider labels and
 manual `crabbox cleanup`. Direct AWS fallback can retry provider types, but the
 structured quota preflight and `provisioningAttempts` metadata belong to the
 brokered Worker path.
+
+Use `--provider proxmox` with `CRABBOX_PROXMOX_*` config for direct Proxmox
+smoke. Proxmox clones a configured Linux QEMU template, injects SSH via
+cloud-init, discovers the IP and bootstraps the VM through the QEMU guest agent,
+then uses normal Crabbox SSH sync/run/release.
 
 Crabbox can also wrap Blacksmith Testboxes with `provider: blacksmith-testbox`. That backend does not use the Crabbox broker or direct cloud credentials. It shells out to the authenticated Blacksmith CLI for `testbox warmup`, `run`, `status`, `list`, and `stop`, while Crabbox keeps local slugs, repo claims, config, and timing summaries. See [Blacksmith Testbox](blacksmith-testbox.md).
 
@@ -190,6 +201,11 @@ Crabbox can use E2B sandboxes with `provider: e2b`. E2B is a delegated run
 backend: Crabbox creates E2B sandboxes, syncs a gzipped archive through the
 sandbox file API, and streams command output from E2B's process API. See
 [E2B](e2b.md).
+
+Crabbox can use Modal Sandboxes with `provider: modal`. Modal is a delegated run
+backend: Crabbox creates Modal Sandboxes through the local Python client, syncs a
+gzipped archive through Sandbox exec, and streams command output from Modal's
+process API. See [Modal](../providers/modal.md).
 
 Static SSH targets:
 
@@ -230,6 +246,7 @@ Related docs:
 - [Provider reference](../providers/README.md)
 - [AWS](../providers/aws.md)
 - [Hetzner](../providers/hetzner.md)
+- [Proxmox](../providers/proxmox.md)
 - [Tailscale](tailscale.md)
 - [Blacksmith Testbox](../providers/blacksmith-testbox.md)
 - [Namespace Devbox](../providers/namespace-devbox.md)
@@ -238,5 +255,6 @@ Related docs:
 - [Daytona](../providers/daytona.md)
 - [Islo](../providers/islo.md)
 - [E2B](../providers/e2b.md)
+- [Modal](../providers/modal.md)
 - [Runner bootstrap](runner-bootstrap.md)
 - [Cost and usage](cost-usage.md)

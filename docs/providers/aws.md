@@ -15,7 +15,7 @@ desktop tunnels, and cleanup.
 
 Use AWS when you need:
 
-- managed Windows or WSL2 test machines;
+- managed Windows or WSL2 test machines on EC2 capacity;
 - EC2 Mac desktops through a configured Dedicated Host;
 - broad Linux capacity with Spot and On-Demand fallback;
 - coordinator-owned cloud credentials and cost accounting.
@@ -82,7 +82,7 @@ Brokered AWS credentials belong in the Worker, not on developer machines.
 | Target | Notes |
 | --- | --- |
 | Linux | Ubuntu bootstrap, SSH, rsync, optional desktop/browser/code. |
-| Windows native | EC2Launch, OpenSSH, Git for Windows, TightVNC, archive sync, first-network flyout suppression. |
+| Windows native | EC2Launch, OpenSSH, Git for Windows, archive sync; optional TightVNC/autologon with `--desktop`. |
 | Windows WSL2 | Nested virtualization families; POSIX sync and commands through WSL. |
 | macOS | Requires `CRABBOX_AWS_MAC_HOST_ID` or `aws.macHostId`; On-Demand only. |
 
@@ -93,7 +93,7 @@ Brokered AWS credentials belong in the Worker, not on developer machines.
 3. Launch EC2 instance, Spot request, Windows instance, or EC2 Mac host-backed
    instance.
 4. Tag instance, volumes, and Spot requests with Crabbox lease labels.
-5. Wait for SSH and `crabbox-ready`.
+5. Wait for SSH readiness, and for `crabbox-ready` on POSIX targets.
 6. Let core sync and run over SSH.
 7. Terminate on release, cleanup, or coordinator expiry.
 
@@ -118,7 +118,9 @@ provider labels and `crabbox cleanup`.
 - During capacity pressure, prefer `standard` or `fast` plus multiple
   `CRABBOX_CAPACITY_REGIONS`; `beast` starts at 48xlarge candidates and can
   consume 192 vCPUs per request.
-- Windows WSL2 needs nested virtualization instance families.
+- Windows WSL2 needs nested virtualization instance families. If you pass an
+  exact `--type`, use the listed C8i/M8i/M8i Flex/R8i families; M7/T3-style
+  Windows types are rejected before leasing.
 - EC2 Mac needs an explicit Dedicated Host id.
 - VNC stays behind SSH tunnels; do not expose VNC ports directly.
 

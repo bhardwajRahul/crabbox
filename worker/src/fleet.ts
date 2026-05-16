@@ -4,10 +4,11 @@ import {
   EC2SpotClient,
   awsProvisioningErrorCategory,
   awsRegionCandidates,
+  isAWSInstanceCleanedAfterReadinessFailure,
   isRetryableAWSProvisioningError,
 } from "./aws";
 import { AzureClient } from "./azure";
-import { azureLocationFor, leaseConfig, validCIDRs } from "./config";
+import { azureLocationFor, leaseConfig, validCIDRs, type LeaseConfig } from "./config";
 import { GCPClient } from "./gcp";
 import { HetznerClient } from "./hetzner";
 import { errorMessage, json, pathParts, readJson, requestOwner } from "./http";
@@ -69,11 +70,17 @@ const maxExternalRunnerSyncItems = 200;
 const webVNCTicketTTLSeconds = 120;
 const codeTicketTTLSeconds = 120;
 const egressTicketTTLSeconds = 120;
+const leaseCleanupRetryDelayMs = 5 * 60 * 1000;
+const awsOrphanSweepInitialDelayMs = 60 * 1000;
+const defaultAWSOrphanSweepIntervalSeconds = 60 * 60;
+const defaultAWSOrphanSweepGraceSeconds = 15 * 60;
 const maxPendingWebVNCBytes = 1024 * 1024;
 const maxCodeRequestBytes = 10 * 1024 * 1024;
 const maxCodeWebSocketFrameChunkBytes = 15 * 1024;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const awsOrphanSweepRecordKey = "aws-orphan-sweep:last";
+const awsOrphanSweepFirstAlarmKey = "aws-orphan-sweep:first-alarm";
 
 interface WebVNCTicketRecord {
   ticket: string;
@@ -189,6 +196,69 @@ interface CodePendingWebSocketFrame {
   chunks: string[];
 }
 
+interface LeaseCloudAudit {
+  leaseID: string;
+  slug?: string;
+  provider: Provider;
+  state: LeaseRecord["state"];
+  target: LeaseRecord["target"];
+  owner: string;
+  org: string;
+  region?: string;
+  cloudID: string;
+  host: string;
+  serverType: string;
+  expiresAt: string;
+  cleanupAttempts?: number;
+  cleanupError?: string;
+  cleanupRetryAt?: string;
+  cloudStatus: "found" | "missing" | "error";
+  cloudState?: string;
+  cloudHost?: string;
+  cloudServerType?: string;
+  message?: string;
+}
+
+interface AWSOrphanSweepConfig {
+  enabled: boolean;
+  deleteEnabled: boolean;
+  intervalSeconds: number;
+  graceSeconds: number;
+  regions: string[];
+}
+
+interface AWSOrphanSweepCandidate {
+  region: string;
+  cloudID: string;
+  name: string;
+  status: string;
+  serverType: string;
+  host?: string;
+  leaseID?: string;
+  slug?: string;
+  owner?: string;
+  reason: string;
+  createdAt?: string;
+  expiresAt?: string;
+  activeCloudID?: string;
+  action: "reported" | "terminated" | "terminate_failed";
+  error?: string;
+}
+
+interface AWSOrphanSweepRecord {
+  startedAt: string;
+  finishedAt: string;
+  mode: "report" | "delete";
+  trigger: "alarm" | "admin";
+  enabled: boolean;
+  regions: string[];
+  scanned: number;
+  candidates: AWSOrphanSweepCandidate[];
+  terminated: number;
+  errors: Array<{ region: string; message: string }>;
+  nextRunAt?: string;
+}
+
 type BridgeAttachment =
   | { kind: "webvnc-agent"; leaseID: string; id: string }
   | {
@@ -272,6 +342,9 @@ export class FleetDurableObject implements DurableObject {
       if (method === "GET" && parts.join("/") === "v1/health") {
         return json({ ok: true, fleet: fleetID });
       }
+      if (method === "POST" && parts.join("/") === "v1/internal/scheduled") {
+        return await this.scheduledMaintenance(request);
+      }
       if (parts[0] === "v1" && parts[1] === "auth" && parts[2] === "github") {
         return await githubAuthRoute(request, parts[3], this.state.storage, this.env);
       }
@@ -307,6 +380,15 @@ export class FleetDurableObject implements DurableObject {
       }
       if (method === "GET" && parts.join("/") === "v1/admin/leases") {
         return await this.adminLeases(request);
+      }
+      if (method === "GET" && parts.join("/") === "v1/admin/lease-audit") {
+        return await this.adminLeaseAudit(request);
+      }
+      if (
+        (method === "GET" || method === "POST") &&
+        parts.join("/") === "v1/admin/aws-orphan-sweep"
+      ) {
+        return await this.adminAWSOrphanSweep(request);
       }
       if (parts[0] === "v1" && parts[1] === "admin" && parts[2] === "leases" && parts[3]) {
         return await this.adminLeaseRoute(request, parts[3], parts[4]);
@@ -804,7 +886,20 @@ export class FleetDurableObject implements DurableObject {
   }
 
   async alarm(): Promise<void> {
+    await this.runMaintenance();
+  }
+
+  private async scheduledMaintenance(request: Request): Promise<Response> {
+    if (request.headers.get("x-crabbox-internal") !== "scheduled") {
+      return json({ error: "unauthorized" }, { status: 401 });
+    }
+    await this.runMaintenance();
+    return json({ ok: true });
+  }
+
+  private async runMaintenance(): Promise<void> {
     await this.expireLeases();
+    await this.runAWSOrphanSweepIfDue("alarm");
     await this.scheduleAlarm();
   }
 
@@ -812,12 +907,28 @@ export class FleetDurableObject implements DurableObject {
     const owner = requestOwner(request);
     const org = requestOrg(request, this.env);
     const input = await readJson<LeaseRequest>(request);
-    const config = leaseConfig(input);
+    const config = leaseConfig(
+      input,
+      this.env.CRABBOX_AZURE_OS_DISK ? { azureOSDisk: this.env.CRABBOX_AZURE_OS_DISK } : undefined,
+    );
+    if (!isAdminRequest(request) && hasNativeLeaseSource(config)) {
+      return json(
+        {
+          error: "admin_required",
+          message: "native snapshot/image lease sources require admin-token auth",
+        },
+        { status: 403 },
+      );
+    }
     if (config.provider === "aws" && config.awsSSHCIDRs.length === 0) {
       config.awsSSHCIDRs = requestSourceCIDRs(request);
     }
-    if (config.provider === "aws" && !config.awsAMI) {
-      config.awsAMI = (await this.promotedAWSImage())?.id ?? "";
+    if (config.provider === "aws" && !config.awsAMI && !config.awsSnapshot) {
+      const promoted = await this.promotedAWSImage();
+      config.awsAMI = promoted?.id ?? "";
+      if (promoted?.region) {
+        config.awsRegion = promoted.region;
+      }
     }
     if (config.provider === "azure" && !config.azureLocation) {
       config.azureLocation = azureLocationFor(this.env, "");
@@ -1041,6 +1152,7 @@ export class FleetDurableObject implements DurableObject {
     lease.updatedAt = now.toISOString();
     lease.lastTouchedAt = now.toISOString();
     lease.expiresAt = recomputeLeaseExpiresAt(lease, now).toISOString();
+    clearLeaseCleanupMetadata(lease);
     await this.putLease(lease);
     await this.scheduleAlarm();
   }
@@ -2517,6 +2629,127 @@ export class FleetDurableObject implements DurableObject {
     return json({ leases: this.filterLeases(await this.leaseRecords(), request) });
   }
 
+  private async adminLeaseAudit(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const provider = (url.searchParams.get("provider") ?? "aws").trim().toLowerCase();
+    if (provider !== "aws") {
+      return json(
+        {
+          error: "unsupported_provider",
+          message: "lease audit currently supports provider=aws",
+        },
+        { status: 400 },
+      );
+    }
+    const state = url.searchParams.get("state") ?? "expired";
+    const owner = url.searchParams.get("owner") ?? "";
+    const org = url.searchParams.get("org") ?? "";
+    const limit = clampLimit(url.searchParams.get("limit"), 100);
+    const leases = (await this.leaseRecords())
+      .filter((lease) => lease.provider === "aws")
+      .filter((lease) => !state || lease.state === state)
+      .filter((lease) => !owner || lease.owner === owner)
+      .filter((lease) => !org || lease.org === org)
+      .filter((lease) => Boolean(lease.cloudID))
+      .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+    const audits = await Promise.all(leases.map((lease) => this.auditAWSLeaseCloud(lease)));
+    return json({ audits });
+  }
+
+  private async adminAWSOrphanSweep(request: Request): Promise<Response> {
+    const config = this.awsOrphanSweepConfig();
+    const lastRun =
+      (await this.state.storage.get<AWSOrphanSweepRecord>(awsOrphanSweepRecordKey)) ?? null;
+    if (request.method.toUpperCase() === "GET") {
+      return json({ config, lastRun });
+    }
+    if (!config.enabled) {
+      return json(
+        {
+          error: "aws_orphan_sweep_disabled",
+          message: "AWS orphan sweep is disabled or AWS broker credentials are not configured",
+          config,
+          lastRun,
+        },
+        { status: 409 },
+      );
+    }
+    const sweep = await this.runAWSOrphanSweep("admin", config);
+    await this.scheduleAlarm();
+    return json({ config, sweep });
+  }
+
+  private async auditAWSLeaseCloud(lease: LeaseRecord): Promise<LeaseCloudAudit> {
+    const audit: LeaseCloudAudit = {
+      leaseID: lease.id,
+      provider: lease.provider,
+      state: lease.state,
+      target: lease.target,
+      owner: lease.owner,
+      org: lease.org,
+      cloudID: lease.cloudID,
+      host: lease.host,
+      serverType: lease.serverType,
+      expiresAt: lease.expiresAt,
+      cloudStatus: "error",
+    };
+    if (lease.slug) {
+      audit.slug = lease.slug;
+    }
+    if (lease.region) {
+      audit.region = lease.region;
+    }
+    if (lease.cleanupAttempts !== undefined) {
+      audit.cleanupAttempts = lease.cleanupAttempts;
+    }
+    if (lease.cleanupError) {
+      audit.cleanupError = lease.cleanupError;
+    }
+    if (lease.cleanupRetryAt) {
+      audit.cleanupRetryAt = lease.cleanupRetryAt;
+    }
+    try {
+      const server = await this.awsLeaseServer(lease);
+      if (isAWSTerminalInstanceState(server.status)) {
+        return {
+          ...audit,
+          cloudStatus: "missing",
+          cloudState: server.status,
+          message: `aws instance is ${server.status}`,
+        };
+      }
+      return {
+        ...audit,
+        cloudStatus: "found",
+        cloudState: server.status,
+        cloudHost: server.host,
+        cloudServerType: server.serverType,
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      if (isCloudNotFoundError(message)) {
+        return { ...audit, cloudStatus: "missing", message };
+      }
+      return { ...audit, cloudStatus: "error", message };
+    }
+  }
+
+  private async awsLeaseServer(lease: LeaseRecord): Promise<ProviderMachine> {
+    const provider = this.provider("aws", lease.region);
+    if (provider.getServer) {
+      return await provider.getServer(lease.cloudID);
+    }
+    const machines = await provider.listCrabboxServers();
+    const server = machines.find(
+      (machine) => machine.cloudID === lease.cloudID || String(machine.id) === lease.cloudID,
+    );
+    if (!server) {
+      throw new Error(`aws instance not found: ${lease.cloudID}`);
+    }
+    return server;
+  }
+
   private async adminLeaseRoute(
     request: Request,
     leaseID: string,
@@ -2912,6 +3145,7 @@ export class FleetDurableObject implements DurableObject {
       id?: string;
       name?: string;
       noReboot?: boolean;
+      strategy?: string;
     }>(request);
     const leaseID = input.leaseID ?? input.id ?? "";
     const name = input.name ?? "";
@@ -2925,34 +3159,108 @@ export class FleetDurableObject implements DurableObject {
     if (!lease) {
       return notFound();
     }
-    if (lease.provider !== "aws" || !lease.cloudID) {
+    if (!lease.cloudID || !providerSupportsNativeImages(lease.provider)) {
       return json(
-        { error: "unsupported_provider", message: "only AWS leases can be imaged" },
+        {
+          error: "unsupported_provider",
+          message: "native images are supported for AWS, Azure, and GCP leases",
+        },
         { status: 400 },
       );
     }
-    const image = await this.provider("aws", lease.region).createImage(
+    const strategy = checkpointStrategy(input.strategy);
+    if (!strategy) {
+      return json(
+        {
+          error: "invalid_strategy",
+          message: "checkpoint strategy must be auto, disk-snapshot, or image",
+        },
+        { status: 400 },
+      );
+    }
+    if (lease.provider === "azure" && strategy === "image") {
+      return json(
+        {
+          error: "unsupported_strategy",
+          message:
+            "Azure managed images require a stopped/generalized source VM; use disk-snapshot checkpoints for active Azure leases",
+        },
+        { status: 400 },
+      );
+    }
+    const image = await this.provider(
+      lease.provider,
+      lease.region,
+      lease.providerProject,
+    ).createImage(
       lease.cloudID,
-      name,
+      providerImageResourceName(lease.provider, name, leaseID),
       input.noReboot ?? true,
+      strategy,
     );
     return json({ image }, { status: 201 });
   }
 
   private async imageRoute(request: Request, imageID: string, action?: string): Promise<Response> {
     const method = request.method.toUpperCase();
-    if (!validImageID(imageID)) {
+    const decodedImageID = decodeImageRouteID(imageID);
+    if (!validImageRouteID(decodedImageID)) {
       return json({ error: "invalid_image_id" }, { status: 400 });
     }
+    const url = new URL(request.url);
+    const provider = providerFromQuery(url.searchParams.get("provider"));
+    if (!provider) {
+      return json(
+        { error: "unsupported_provider", message: "image provider must be aws, azure, or gcp" },
+        { status: 400 },
+      );
+    }
+    const region = url.searchParams.get("region") ?? undefined;
+    const project = url.searchParams.get("project") ?? undefined;
+    const kind = url.searchParams.get("kind") ?? undefined;
     if (method === "GET" && action === undefined) {
-      const image = await this.provider("aws").getImage(imageID);
+      let image: ProviderImage;
+      try {
+        image = await this.provider(provider, region, project).getImage(decodedImageID, kind);
+      } catch (error) {
+        if (isProviderImageNotFound(error)) {
+          return json(
+            { error: "not_found", message: `image ${decodedImageID} not found` },
+            { status: 404 },
+          );
+        }
+        throw error;
+      }
       return json({ image });
     }
+    if (method === "DELETE" && action === undefined) {
+      const promoted =
+        provider === "aws"
+          ? await this.state.storage.get<PromotedImageRecord>(promotedAWSImageKey())
+          : undefined;
+      if (promoted?.id === decodedImageID) {
+        return json(
+          {
+            error: "image_promoted",
+            message: `image ${decodedImageID} is the promoted AWS image; promote another image before deleting it`,
+          },
+          { status: 409 },
+        );
+      }
+      await this.provider(provider, region, project).deleteImage(decodedImageID, kind);
+      return json({ imageID: decodedImageID, deleted: true });
+    }
     if (method === "POST" && action === "promote") {
-      const image = await this.provider("aws").getImage(imageID);
+      if (provider !== "aws") {
+        return json(
+          { error: "unsupported_provider", message: "image promotion is currently AWS-only" },
+          { status: 400 },
+        );
+      }
+      const image = await this.provider("aws", region).getImage(decodedImageID);
       if (image.state !== "available") {
         return json(
-          { error: "image_not_available", message: `image ${imageID} is ${image.state}` },
+          { error: "image_not_available", message: `image ${decodedImageID} is ${image.state}` },
           { status: 409 },
         );
       }
@@ -2971,11 +3279,29 @@ export class FleetDurableObject implements DurableObject {
     );
     await Promise.all(
       expired.map(async (lease) => {
-        await this.deleteLeaseServer(lease).catch(() => undefined);
+        const retryAt = Date.parse(lease.cleanupRetryAt ?? "");
+        if (Number.isFinite(retryAt) && retryAt > now) {
+          return;
+        }
         const nowISO = new Date().toISOString();
+        try {
+          await this.deleteLeaseServer(lease);
+        } catch (error) {
+          lease.cleanupAttempts = (lease.cleanupAttempts ?? 0) + 1;
+          lease.cleanupError = errorMessage(error);
+          lease.cleanupFailedAt = nowISO;
+          lease.cleanupRetryAt = new Date(now + leaseCleanupRetryDelayMs).toISOString();
+          lease.updatedAt = nowISO;
+          await this.putLease(lease);
+          console.warn(
+            `lease cleanup failed lease=${lease.id} provider=${lease.provider} cloud=${lease.cloudID}: ${lease.cleanupError}`,
+          );
+          return;
+        }
         lease.state = "expired";
         lease.updatedAt = nowISO;
         lease.endedAt = nowISO;
+        clearLeaseCleanupMetadata(lease);
         await this.putLease(lease);
       }),
     );
@@ -2983,15 +3309,156 @@ export class FleetDurableObject implements DurableObject {
 
   private async scheduleAlarm(): Promise<void> {
     const leases = await this.state.storage.list<LeaseRecord>({ prefix: "lease:" });
-    const activeExpiries = [...leases.values()]
+    const alarmTimes = [...leases.values()]
       .filter((lease) => lease.state === "active")
-      .map((lease) => Date.parse(lease.expiresAt))
+      .map((lease) => nextLeaseAlarmTime(lease))
       .filter((time) => Number.isFinite(time));
-    if (activeExpiries.length === 0) {
+    const orphanSweepAlarm = await this.nextAWSOrphanSweepAlarmTime();
+    if (orphanSweepAlarm !== undefined) {
+      alarmTimes.push(orphanSweepAlarm);
+    }
+    if (alarmTimes.length === 0) {
       await this.state.storage.deleteAlarm();
       return;
     }
-    await this.state.storage.setAlarm(Math.min(...activeExpiries));
+    await this.state.storage.setAlarm(Math.min(...alarmTimes));
+  }
+
+  private async nextAWSOrphanSweepAlarmTime(): Promise<number | undefined> {
+    const config = this.awsOrphanSweepConfig();
+    if (!config.enabled) {
+      return undefined;
+    }
+    const lastRun = await this.state.storage.get<AWSOrphanSweepRecord>(awsOrphanSweepRecordKey);
+    const lastFinishedAt = Date.parse(lastRun?.finishedAt ?? "");
+    const now = Date.now();
+    if (!Number.isFinite(lastFinishedAt)) {
+      const stored = await this.state.storage.get<number>(awsOrphanSweepFirstAlarmKey);
+      if (typeof stored === "number" && Number.isFinite(stored)) {
+        return Math.max(now + 1000, stored);
+      }
+      const next = now + Math.min(config.intervalSeconds * 1000, awsOrphanSweepInitialDelayMs);
+      await this.state.storage.put(awsOrphanSweepFirstAlarmKey, next);
+      return next;
+    }
+    return Math.max(now + 1000, lastFinishedAt + config.intervalSeconds * 1000);
+  }
+
+  private async runAWSOrphanSweepIfDue(trigger: "alarm" | "admin"): Promise<void> {
+    const config = this.awsOrphanSweepConfig();
+    if (!config.enabled) {
+      return;
+    }
+    const lastRun = await this.state.storage.get<AWSOrphanSweepRecord>(awsOrphanSweepRecordKey);
+    const lastFinishedAt = Date.parse(lastRun?.finishedAt ?? "");
+    if (
+      trigger !== "admin" &&
+      Number.isFinite(lastFinishedAt) &&
+      Date.now() < lastFinishedAt + config.intervalSeconds * 1000
+    ) {
+      return;
+    }
+    await this.runAWSOrphanSweep(trigger, config);
+  }
+
+  private async runAWSOrphanSweep(
+    trigger: "alarm" | "admin",
+    config = this.awsOrphanSweepConfig(),
+  ): Promise<AWSOrphanSweepRecord> {
+    const startedAt = new Date().toISOString();
+    const leases = [...(await this.state.storage.list<LeaseRecord>({ prefix: "lease:" })).values()];
+    const activeAWSLeases = leases.filter(
+      (lease) => lease.provider === "aws" && lease.state === "active",
+    );
+    const activeLeases = new Map(activeAWSLeases.map((lease) => [lease.id, lease]));
+    const activeCloudIDs = new Set(activeAWSLeases.map((lease) => lease.cloudID).filter(Boolean));
+    const candidates: AWSOrphanSweepCandidate[] = [];
+    const errors: AWSOrphanSweepRecord["errors"] = [];
+    let scanned = 0;
+    for (const region of config.regions) {
+      try {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- regions are swept independently.
+        const machines = await this.provider("aws", region).listCrabboxServers();
+        scanned += machines.length;
+        for (const machine of machines) {
+          const candidate = awsOrphanSweepCandidate(
+            machine,
+            activeLeases,
+            activeCloudIDs,
+            region,
+            config.graceSeconds,
+          );
+          if (!candidate) {
+            continue;
+          }
+          if (config.deleteEnabled) {
+            try {
+              // oxlint-disable-next-line eslint/no-await-in-loop -- delete failures must stay attached to the candidate.
+              await this.provider("aws", region).deleteServer(
+                machine.cloudID || String(machine.id),
+              );
+              candidate.action = "terminated";
+            } catch (error) {
+              candidate.action = "terminate_failed";
+              candidate.error = errorMessage(error);
+              console.warn(
+                `aws orphan sweep terminate failed region=${region} cloud=${machine.cloudID}: ${candidate.error}`,
+              );
+            }
+          }
+          candidates.push(candidate);
+        }
+      } catch (error) {
+        const message = errorMessage(error);
+        errors.push({ region, message });
+        console.warn(`aws orphan sweep failed region=${region}: ${message}`);
+      }
+    }
+    const finishedAt = new Date().toISOString();
+    const record: AWSOrphanSweepRecord = {
+      startedAt,
+      finishedAt,
+      mode: config.deleteEnabled ? "delete" : "report",
+      trigger,
+      enabled: config.enabled,
+      regions: config.regions,
+      scanned,
+      candidates,
+      terminated: candidates.filter((candidate) => candidate.action === "terminated").length,
+      errors,
+      nextRunAt: new Date(Date.parse(finishedAt) + config.intervalSeconds * 1000).toISOString(),
+    };
+    await this.state.storage.put(awsOrphanSweepRecordKey, record);
+    await this.state.storage.delete(awsOrphanSweepFirstAlarmKey);
+    if (candidates.length > 0 || errors.length > 0) {
+      console.warn(
+        `aws orphan sweep mode=${record.mode} scanned=${record.scanned} candidates=${candidates.length} terminated=${record.terminated} errors=${errors.length}`,
+      );
+    }
+    return record;
+  }
+
+  private awsOrphanSweepConfig(): AWSOrphanSweepConfig {
+    const hasAWSCredentials = Boolean(this.env.AWS_ACCESS_KEY_ID && this.env.AWS_SECRET_ACCESS_KEY);
+    const enabled =
+      hasAWSCredentials && !envFlagDisabled(this.env.CRABBOX_AWS_ORPHAN_SWEEP_ENABLED);
+    return {
+      enabled,
+      deleteEnabled: enabled && envFlagEnabled(this.env.CRABBOX_AWS_ORPHAN_SWEEP_DELETE),
+      intervalSeconds: positiveEnvInt(
+        this.env.CRABBOX_AWS_ORPHAN_SWEEP_INTERVAL_SECONDS,
+        defaultAWSOrphanSweepIntervalSeconds,
+      ),
+      graceSeconds: positiveEnvInt(
+        this.env.CRABBOX_AWS_ORPHAN_SWEEP_GRACE_SECONDS,
+        defaultAWSOrphanSweepGraceSeconds,
+      ),
+      regions: awsRegionCandidates(
+        { awsRegion: "", capacityRegions: [] },
+        this.env,
+        this.env.CRABBOX_AWS_REGION || "eu-west-1",
+      ),
+    };
   }
 
   private async getLease(leaseID: string): Promise<LeaseRecord | undefined> {
@@ -3278,6 +3745,7 @@ export class FleetDurableObject implements DurableObject {
     lease.updatedAt = now;
     lease.releasedAt = now;
     lease.endedAt = now;
+    clearLeaseCleanupMetadata(lease);
     if (options.keep !== undefined) {
       lease.keep = options.keep;
     }
@@ -3510,12 +3978,98 @@ function validEgressSessionID(value: string | undefined): value is string {
   return typeof value === "string" && /^egress_[A-Za-z0-9_.:-]{6,80}$/.test(value);
 }
 
-function validImageID(value: string | undefined): value is string {
-  return typeof value === "string" && /^ami-[a-f0-9]{8,32}$/.test(value);
+function validImageRouteID(value: string | undefined): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_./:-]{1,512}$/.test(value);
+}
+
+function decodeImageRouteID(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return "";
+  }
 }
 
 function validImageName(value: string): boolean {
   return /^[A-Za-z0-9()[\]./_ -]{3,128}$/.test(value);
+}
+
+function providerSupportsNativeImages(provider: Provider): boolean {
+  return provider === "aws" || provider === "azure" || provider === "gcp";
+}
+
+function hasNativeLeaseSource(config: LeaseConfig): boolean {
+  return Boolean(
+    config.awsSnapshot || config.azureSnapshot || config.gcpMachineImage || config.gcpSnapshot,
+  );
+}
+
+function isProviderImageNotFound(error: unknown): boolean {
+  const message = errorMessage(error);
+  return (
+    message.includes("InvalidAMIID.NotFound") ||
+    message.includes("InvalidSnapshot.NotFound") ||
+    message.includes("ResourceNotFound") ||
+    message.includes("aws image not found") ||
+    message.includes("aws snapshot not found") ||
+    message.includes("http 404")
+  );
+}
+
+function checkpointStrategy(value: string | undefined): "image" | "disk-snapshot" | undefined {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "image":
+    case "ami":
+    case "machine-image":
+    case "managed-image":
+      return "image";
+    case "":
+    case "auto":
+    case "snapshot":
+    case "disk":
+    case "disk-snapshot":
+    case "disk_snapshot":
+      return "disk-snapshot";
+    default:
+      return undefined;
+  }
+}
+
+function providerFromQuery(value: string | null): Provider | undefined {
+  const provider = (value ?? "").trim().toLowerCase();
+  if (!provider) return "aws";
+  if (provider === "azure" || provider === "gcp" || provider === "aws") {
+    return provider;
+  }
+  return undefined;
+}
+
+function providerImageResourceName(provider: Provider, name: string, leaseID: string): string {
+  if (provider === "aws") {
+    return name;
+  }
+  const allowed = provider === "gcp" ? /[^a-z0-9-]/g : /[^a-z0-9_.-]/g;
+  const normalized = name.trim().toLowerCase().replaceAll(allowed, "-");
+  const trimmed =
+    provider === "gcp"
+      ? normalized
+          .replaceAll(/^[^a-z]+/g, "")
+          .replaceAll(/-+/g, "-")
+          .replaceAll(/-+$/g, "")
+      : normalized
+          .replaceAll(/^[^a-z]+/g, "")
+          .replaceAll(/-+/g, "-")
+          .replaceAll(/[-.]+$/g, "");
+  const fallback = leaseID.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-");
+  const maxLength = provider === "gcp" ? 63 : 80;
+  const truncated = (trimmed || `checkpoint-${fallback}`).slice(0, maxLength);
+  return provider === "gcp"
+    ? truncated.replaceAll(/-+$/g, "")
+    : truncated.replaceAll(/[-.]+$/g, "");
+}
+
+function unsupportedProviderImageLifecycle(provider: Provider) {
+  return () => Promise.reject(new Error(`${provider} images are not supported`));
 }
 
 function validCrabboxProviderKey(value: string | undefined): value is string {
@@ -3552,11 +4106,30 @@ function adminRouteError(request: Request, method: string, parts: string[]): Res
   return json({ error: "forbidden", message: "admin token required" }, { status: 403 });
 }
 
+function isCloudNotFoundError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("not found") ||
+    lower.includes("invalidinstanceid.notfound") ||
+    lower.includes("does not exist")
+  );
+}
+
+function isAWSTerminalInstanceState(state: string): boolean {
+  return state === "shutting-down" || state === "terminated";
+}
+
 function isAdminRoute(method: string, parts: string[]): boolean {
   if (method === "GET" && parts.join("/") === "v1/pool") {
     return true;
   }
   if (method === "GET" && parts.join("/") === "v1/admin/leases") {
+    return true;
+  }
+  if (method === "GET" && parts.join("/") === "v1/admin/lease-audit") {
+    return true;
+  }
+  if ((method === "GET" || method === "POST") && parts.join("/") === "v1/admin/aws-orphan-sweep") {
     return true;
   }
   if (parts[0] === "v1" && parts[1] === "admin" && parts[2] === "leases" && Boolean(parts[3])) {
@@ -4502,6 +5075,26 @@ function activeSlugCollision(
   );
 }
 
+function nextLeaseAlarmTime(lease: LeaseRecord): number {
+  const now = Date.now();
+  const expiresAt = Date.parse(lease.expiresAt);
+  const cleanupRetryAt = Date.parse(lease.cleanupRetryAt ?? "");
+  if (Number.isFinite(cleanupRetryAt) && cleanupRetryAt > now) {
+    if (Number.isFinite(expiresAt) && expiresAt <= now) {
+      return cleanupRetryAt;
+    }
+    return Math.min(expiresAt, cleanupRetryAt);
+  }
+  return expiresAt;
+}
+
+function clearLeaseCleanupMetadata(lease: LeaseRecord): void {
+  delete lease.cleanupAttempts;
+  delete lease.cleanupError;
+  delete lease.cleanupFailedAt;
+  delete lease.cleanupRetryAt;
+}
+
 function normalizeShareUser(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -4640,6 +5233,15 @@ function envFlagDisabled(value: string | undefined): boolean {
   return ["0", "false", "no", "off"].includes((value || "").trim().toLowerCase());
 }
 
+function envFlagEnabled(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes((value || "").trim().toLowerCase());
+}
+
+function positiveEnvInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -4653,8 +5255,93 @@ function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return out;
 }
 
+function awsOrphanSweepCandidate(
+  machine: ProviderMachine,
+  activeLeases: Map<string, LeaseRecord>,
+  activeCloudIDs: Set<string>,
+  region: string,
+  graceSeconds: number,
+): AWSOrphanSweepCandidate | undefined {
+  const cloudID = machine.cloudID || String(machine.id);
+  if (activeCloudIDs.has(cloudID)) {
+    return undefined;
+  }
+  const labels = machine.labels ?? {};
+  if (envFlagEnabled(labels["keep"])) {
+    return undefined;
+  }
+  const leaseID = (labels["lease"] ?? "").trim();
+  const activeLease = leaseID ? activeLeases.get(leaseID) : undefined;
+  if (activeLease?.cloudID === machine.cloudID) {
+    return undefined;
+  }
+  const now = Date.now();
+  const graceMs = Math.max(0, graceSeconds) * 1000;
+  const createdAt = parseProviderLabelTime(labels["created_at"]);
+  const expiresAt = parseProviderLabelTime(labels["expires_at"]);
+  const oldEnough = Number.isFinite(createdAt) && createdAt + graceMs <= now;
+  const expired = Number.isFinite(expiresAt) && expiresAt + graceMs <= now;
+  let reason = "";
+  if (activeLease && oldEnough) {
+    reason = "lease-cloud-mismatch";
+  } else if (expired) {
+    reason = "expired-provider-tag";
+  } else if (!leaseID && oldEnough) {
+    reason = "missing-lease-label";
+  } else if (leaseID && !activeLease && oldEnough) {
+    reason = "no-active-lease";
+  }
+  if (!reason) {
+    return undefined;
+  }
+  const candidate: AWSOrphanSweepCandidate = {
+    region,
+    cloudID,
+    name: machine.name,
+    status: machine.status,
+    serverType: machine.serverType,
+    reason,
+    action: "reported",
+  };
+  if (machine.host) {
+    candidate.host = machine.host;
+  }
+  if (leaseID) {
+    candidate.leaseID = leaseID;
+  }
+  if (labels["slug"]) {
+    candidate.slug = labels["slug"];
+  }
+  if (labels["owner"]) {
+    candidate.owner = labels["owner"];
+  }
+  if (Number.isFinite(createdAt)) {
+    candidate.createdAt = new Date(createdAt).toISOString();
+  }
+  if (Number.isFinite(expiresAt)) {
+    candidate.expiresAt = new Date(expiresAt).toISOString();
+  }
+  if (activeLease?.cloudID) {
+    candidate.activeCloudID = activeLease.cloudID;
+  }
+  return candidate;
+}
+
+function parseProviderLabelTime(value: string | undefined): number {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+  if (/^\d+$/.test(raw)) {
+    const seconds = Number.parseInt(raw, 10);
+    return Number.isFinite(seconds) ? seconds * 1000 : Number.NaN;
+  }
+  return Date.parse(raw);
+}
+
 interface CloudProvider {
   listCrabboxServers(): Promise<ProviderMachine[]>;
+  getServer?(id: string): Promise<ProviderMachine>;
   createServerWithFallback(
     config: ReturnType<typeof leaseConfig>,
     leaseID: string,
@@ -4667,8 +5354,14 @@ interface CloudProvider {
     attempts?: ProvisioningAttempt[];
   }>;
   deleteServer(id: string): Promise<void>;
-  createImage(instanceID: string, name: string, noReboot: boolean): Promise<ProviderImage>;
-  getImage(imageID: string): Promise<ProviderImage>;
+  createImage(
+    instanceID: string,
+    name: string,
+    noReboot: boolean,
+    strategy: "image" | "disk-snapshot",
+  ): Promise<ProviderImage>;
+  getImage(imageID: string, kind?: string): Promise<ProviderImage>;
+  deleteImage(imageID: string, kind?: string): Promise<void>;
   deleteSSHKey(name: string): Promise<void>;
   hourlyPriceUSD(
     serverType: string,
@@ -4712,13 +5405,9 @@ class HetznerProvider implements CloudProvider {
     await this.client.deleteServer(Number(id));
   }
 
-  createImage(): Promise<ProviderImage> {
-    throw new Error("hetzner images are not supported");
-  }
-
-  getImage(): Promise<ProviderImage> {
-    throw new Error("hetzner images are not supported");
-  }
+  createImage = unsupportedProviderImageLifecycle("hetzner");
+  getImage = unsupportedProviderImageLifecycle("hetzner");
+  deleteImage = unsupportedProviderImageLifecycle("hetzner");
 
   async deleteSSHKey(name: string): Promise<void> {
     await this.client.deleteSSHKey(name);
@@ -4761,12 +5450,28 @@ class AzureProvider implements CloudProvider {
     return this.client.deleteServer(id);
   }
 
-  createImage(): Promise<ProviderImage> {
-    throw new Error("azure images are not supported");
+  createImage(
+    instanceID: string,
+    name: string,
+    _noReboot: boolean,
+    strategy: "image" | "disk-snapshot",
+  ): Promise<ProviderImage> {
+    if (strategy === "image") {
+      return Promise.reject(
+        new Error(
+          "Azure managed images require a stopped/generalized source VM; use disk-snapshot checkpoints for active Azure leases",
+        ),
+      );
+    }
+    return this.client.createDiskSnapshot(instanceID, name);
   }
 
-  getImage(): Promise<ProviderImage> {
-    throw new Error("azure images are not supported");
+  getImage(imageID: string, kind?: string): Promise<ProviderImage> {
+    return this.client.getImage(imageID, kind);
+  }
+
+  deleteImage(imageID: string, kind?: string): Promise<void> {
+    return this.client.deleteImage(imageID, kind);
   }
 
   async deleteSSHKey(): Promise<void> {
@@ -4807,12 +5512,23 @@ class GCPProvider implements CloudProvider {
     return this.client.deleteServer(id);
   }
 
-  createImage(): Promise<ProviderImage> {
-    throw new Error("gcp images are not supported");
+  createImage(
+    instanceID: string,
+    name: string,
+    _noReboot: boolean,
+    strategy: "image" | "disk-snapshot",
+  ): Promise<ProviderImage> {
+    return strategy === "image"
+      ? this.client.createImage(instanceID, name)
+      : this.client.createDiskSnapshot(instanceID, name);
   }
 
-  getImage(): Promise<ProviderImage> {
-    throw new Error("gcp images are not supported");
+  getImage(imageID: string, kind?: string): Promise<ProviderImage> {
+    return this.client.getImage(imageID, kind);
+  }
+
+  deleteImage(imageID: string, kind?: string): Promise<void> {
+    return this.client.deleteImage(imageID, kind);
   }
 
   deleteSSHKey(): Promise<void> {
@@ -4840,6 +5556,10 @@ class AWSProvider implements CloudProvider {
     return this.client.listCrabboxServers();
   }
 
+  getServer(id: string): Promise<ProviderMachine> {
+    return this.client.getServer(id);
+  }
+
   async createServerWithFallback(
     config: ReturnType<typeof leaseConfig>,
     leaseID: string,
@@ -4864,8 +5584,30 @@ class AWSProvider implements CloudProvider {
           slug,
           owner,
         );
-        // oxlint-disable-next-line eslint/no-await-in-loop -- wait on the region that created the instance.
-        const readyServer = await client.waitForServerIP(server.cloudID);
+        let readyServer: ProviderMachine;
+        try {
+          // oxlint-disable-next-line eslint/no-await-in-loop -- wait on the region that created the instance.
+          readyServer = await client.waitForServerIP(server.cloudID);
+        } catch (error) {
+          const waitMessage = error instanceof Error ? error.message : String(error);
+          try {
+            // oxlint-disable-next-line eslint/no-await-in-loop -- clean up the exact instance before any fallback.
+            await client.deleteServer(server.cloudID);
+          } catch (deleteError) {
+            const deleteMessage =
+              deleteError instanceof Error ? deleteError.message : String(deleteError);
+            if (!isAWSInstanceCleanedAfterReadinessFailure(waitMessage, deleteMessage)) {
+              throw new Error(
+                `${waitMessage}; cleanup failed for AWS instance ${server.cloudID}: ${deleteMessage}`,
+                { cause: deleteError },
+              );
+            }
+          }
+          throw new Error(
+            `${waitMessage}; crabbox_aws_stale_instance_cleaned; deleted AWS instance ${server.cloudID} after readiness failure`,
+            { cause: error },
+          );
+        }
         const result: {
           server: ProviderMachine;
           serverType: string;
@@ -4902,12 +5644,23 @@ class AWSProvider implements CloudProvider {
     await this.client.deleteServer(id);
   }
 
-  createImage(instanceID: string, name: string, noReboot: boolean): Promise<ProviderImage> {
-    return this.client.createImage(instanceID, name, noReboot);
+  createImage(
+    instanceID: string,
+    name: string,
+    noReboot: boolean,
+    strategy: "image" | "disk-snapshot",
+  ): Promise<ProviderImage> {
+    return strategy === "image"
+      ? this.client.createImage(instanceID, name, noReboot)
+      : this.client.createDiskSnapshot(instanceID, name);
   }
 
   getImage(imageID: string): Promise<ProviderImage> {
     return this.client.getImage(imageID);
+  }
+
+  deleteImage(imageID: string): Promise<void> {
+    return this.client.deleteImage(imageID);
   }
 
   async deleteSSHKey(name: string): Promise<void> {

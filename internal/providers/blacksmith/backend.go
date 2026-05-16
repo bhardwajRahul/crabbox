@@ -118,8 +118,12 @@ func (b *blacksmithBackend) Run(ctx context.Context, req RunRequest) (RunResult,
 			return RunResult{}, err
 		}
 	}
-	if acquired && !req.Keep {
+	shouldStop := acquired && !req.Keep
+	if shouldStop {
 		defer func() {
+			if !shouldStop {
+				return
+			}
 			if err := b.Stop(context.Background(), StopRequest{ID: leaseID}); err != nil {
 				fmt.Fprintf(b.rt.Stderr, "warning: blacksmith stop failed for %s: %v\n", leaseID, err)
 				return
@@ -129,27 +133,61 @@ func (b *blacksmithBackend) Run(ctx context.Context, req RunRequest) (RunResult,
 		}()
 	}
 	fmt.Fprintf(b.rt.Stderr, "provider=blacksmith-testbox id=%s sync=delegated auth=blacksmith\n", leaseID)
+	if req.EnvSummary || strings.TrimSpace(os.Getenv("CRABBOX_ENV_ALLOW")) != "" {
+		core.PrintEnvForwardingSummary(b.rt.Stderr, blacksmithTestboxProvider, "unsupported", req.Options.EnvAllow, req.Env)
+		fmt.Fprintf(b.rt.Stderr, "env forwarding note=blacksmith-testbox delegates execution to the Blacksmith CLI; configure secrets in the Testbox workflow instead\n")
+	}
+	stdoutCapture, stdoutCapturePath, stdoutCleanup, err := b.openFailureStreamCapture("stdout")
+	if err != nil {
+		return RunResult{}, err
+	}
+	defer stdoutCleanup()
+	stderrCapture, stderrCapturePath, stderrCleanup, err := b.openFailureStreamCapture("stderr")
+	if err != nil {
+		return RunResult{}, err
+	}
+	defer stderrCleanup()
 	commandStart := b.rt.Clock.Now()
-	code := b.runTestbox(ctx, leaseID, req.Command, req.DebugSync, req.ShellMode)
-	commandDuration := b.rt.Clock.Now().Sub(commandStart)
-	total := b.rt.Clock.Now().Sub(started)
+	phaseTracker := core.NewCommandPhaseTracker(commandStart)
+	code := b.runTestbox(ctx, leaseID, req.Command, req.DebugSync, req.ShellMode, phaseTracker, stdoutCapture, stderrCapture)
+	if closeErr := stdoutCapture.Close(); closeErr != nil && code == 0 {
+		return RunResult{}, core.Exit(2, "blacksmith failure bundle stdout close: %v", closeErr)
+	}
+	if closeErr := stderrCapture.Close(); closeErr != nil && code == 0 {
+		return RunResult{}, core.Exit(2, "blacksmith failure bundle stderr close: %v", closeErr)
+	}
+	finished := b.rt.Clock.Now()
+	commandDuration := finished.Sub(commandStart)
+	commandPhases := core.FinishCommandPhaseTracker(phaseTracker, finished)
+	total := finished.Sub(started)
 	fmt.Fprintf(b.rt.Stderr, "blacksmith run summary sync=delegated command=%s total=%s exit=%d\n", commandDuration.Round(time.Millisecond), total.Round(time.Millisecond), code)
+	report := delegatedTimingReport(blacksmithTestboxProvider, leaseID, slug, "blacksmith-testbox owns sync", commandDuration, commandPhases, total, code)
 	if req.TimingJSON {
-		if err := writeTimingJSON(b.rt.Stderr, timingReport{
-			Provider:      blacksmithTestboxProvider,
-			LeaseID:       leaseID,
-			Slug:          slug,
-			SyncPhases:    []timingPhase{{Name: "delegated", Skipped: true, Reason: "blacksmith-testbox owns sync"}},
-			SyncDelegated: true,
-			CommandMs:     commandDuration.Milliseconds(),
-			TotalMs:       total.Milliseconds(),
-			ExitCode:      code,
-		}); err != nil {
+		if err := writeTimingJSON(b.rt.Stderr, report); err != nil {
 			return RunResult{}, err
 		}
 	}
 	result := RunResult{ExitCode: code, Command: commandDuration, Total: total, SyncDelegated: true}
 	if code != 0 {
+		local, bytes, bundleErr := core.CaptureLocalFailureBundle(leaseID, core.FailureCaptureMetadata{
+			Provider:   blacksmithTestboxProvider,
+			LeaseID:    leaseID,
+			Slug:       slug,
+			Workdir:    "blacksmith-testbox",
+			ExitCode:   code,
+			Timing:     report,
+			EnvAllow:   req.Options.EnvAllow,
+			Env:        req.Env,
+			Config:     b.cfg,
+			StdoutPath: stdoutCapturePath,
+			StderrPath: stderrCapturePath,
+		})
+		if bundleErr != nil {
+			fmt.Fprintf(b.rt.Stderr, "warning: failure bundle failed: %v\n", bundleErr)
+		} else {
+			fmt.Fprintf(b.rt.Stderr, "failure-bundle local=%s bytes=%d secret_risk=caller-redacts-before-sharing\n", local, bytes)
+		}
+		core.HandleDelegatedRunFailure(b.rt.Stderr, req, blacksmithTestboxProvider, leaseID, slug, blacksmithIdleTimeout(b.cfg), b.cfg.TTL, acquired, &shouldStop)
 		return result, ExitError{Code: code, Message: fmt.Sprintf("blacksmith testbox run exited %d", code)}
 	}
 	return result, nil
@@ -174,6 +212,20 @@ func (b *blacksmithBackend) ListJSON(ctx context.Context, req ListRequest) (any,
 		return nil, err
 	}
 	return parseBlacksmithList(out), nil
+}
+
+func delegatedTimingReport(provider, leaseID, slug, syncReason string, commandDuration time.Duration, commandPhases []timingPhase, total time.Duration, exitCode int) timingReport {
+	return timingReport{
+		Provider:      provider,
+		LeaseID:       leaseID,
+		Slug:          slug,
+		SyncPhases:    []timingPhase{{Name: "delegated", Skipped: true, Reason: syncReason}},
+		SyncDelegated: true,
+		CommandMs:     commandDuration.Milliseconds(),
+		CommandPhases: commandPhases,
+		TotalMs:       total.Milliseconds(),
+		ExitCode:      exitCode,
+	}
 }
 
 func (b *blacksmithBackend) listArgs(req ListRequest) []string {
@@ -240,7 +292,7 @@ func (b *blacksmithBackend) warmupLease(ctx context.Context, repo Repo, reclaim 
 	output := result.Stdout + result.Stderr
 	if err != nil {
 		b.cleanupFailedWarmup(ctx, beforeWarmup, output)
-		return "", "", exit(result.ExitCode, "blacksmith testbox warmup failed: %v", err)
+		return "", "", exit(result.ExitCode, "blacksmith testbox warmup failed: %v; if the delegated queue is unavailable, rerun with a coordinator-backed provider such as --provider aws", err)
 	}
 	leaseID := parseBlacksmithID(output)
 	if leaseID == "" {
@@ -260,14 +312,31 @@ func (b *blacksmithBackend) warmupLease(ctx context.Context, repo Repo, reclaim 
 	return leaseID, slug, nil
 }
 
-func (b *blacksmithBackend) runTestbox(ctx context.Context, leaseID string, command []string, debug, shellMode bool) int {
+func (b *blacksmithBackend) openFailureStreamCapture(label string) (io.WriteCloser, string, func(), error) {
+	file, err := os.CreateTemp("", "crabbox-blacksmith-failure-*."+label+".log")
+	if err != nil {
+		return nil, "", func() {}, core.Exit(2, "blacksmith failure bundle %s temp: %v", label, err)
+	}
+	path := file.Name()
+	cleanup := func() {
+		_ = file.Close()
+		_ = os.Remove(path)
+	}
+	return core.NewCappedFailureBundleStream(file), path, cleanup, nil
+}
+
+func (b *blacksmithBackend) runTestbox(ctx context.Context, leaseID string, command []string, debug, shellMode bool, phaseTracker *core.CommandPhaseTracker, stdoutExtra, stderrExtra io.Writer) int {
 	keyPath, err := testboxKeyPath(leaseID)
 	if err != nil {
 		fmt.Fprintf(b.rt.Stderr, "blacksmith key path failed: %v\n", err)
 		return 2
 	}
 	args := blacksmithRunArgs(b.cfg, leaseID, keyPath, command, debug || b.cfg.Blacksmith.Debug, shellMode)
-	result, timedOut, err := b.runCommandWithSyncGuard(ctx, args, b.rt.Stdout, b.rt.Stderr)
+	stdout, stdoutPhaseWriter := commandPhaseWriter(mergeWriters(b.rt.Stdout, stdoutExtra), phaseTracker)
+	stderr, stderrPhaseWriter := commandPhaseWriter(mergeWriters(b.rt.Stderr, stderrExtra), phaseTracker)
+	result, timedOut, err := b.runCommandWithSyncGuard(ctx, args, stdout, stderr)
+	stdoutPhaseWriter.Flush()
+	stderrPhaseWriter.Flush()
 	if timedOut {
 		fmt.Fprintf(
 			b.rt.Stderr,
@@ -281,6 +350,30 @@ func (b *blacksmithBackend) runTestbox(ctx context.Context, leaseID string, comm
 		return result.ExitCode
 	}
 	return 0
+}
+
+func commandPhaseWriter(w io.Writer, tracker *core.CommandPhaseTracker) (io.Writer, *core.PhaseMarkerWriter) {
+	phaseWriter := core.NewPhaseMarkerWriter(tracker)
+	if w == nil {
+		return phaseWriter, phaseWriter
+	}
+	return io.MultiWriter(w, phaseWriter), phaseWriter
+}
+
+func mergeWriters(writers ...io.Writer) io.Writer {
+	nonNil := make([]io.Writer, 0, len(writers))
+	for _, writer := range writers {
+		if writer != nil {
+			nonNil = append(nonNil, writer)
+		}
+	}
+	if len(nonNil) == 0 {
+		return nil
+	}
+	if len(nonNil) == 1 {
+		return nonNil[0]
+	}
+	return io.MultiWriter(nonNil...)
 }
 
 func (b *blacksmithBackend) commandOutput(ctx context.Context, args []string) (string, error) {

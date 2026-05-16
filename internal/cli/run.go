@@ -66,7 +66,11 @@ func (a App) warmup(ctx context.Context, args []string) error {
 	}
 	options := leaseOptionsFromConfig(cfg)
 	if delegated, ok := backend.(DelegatedRunBackend); ok {
-		return delegated.Warmup(ctx, WarmupRequest{Repo: repo, Options: options, Keep: *keep, Reclaim: *reclaim, ActionsRunner: *actionsRunner, TimingJSON: *timingJSON})
+		if err := delegated.Warmup(ctx, WarmupRequest{Repo: repo, Options: options, Keep: *keep, Reclaim: *reclaim, ActionsRunner: *actionsRunner, TimingJSON: *timingJSON}); err != nil {
+			return err
+		}
+		a.syncExternalRunnersBestEffort(ctx, cfg, backend)
+		return nil
 	}
 	sshBackend, ok := backend.(SSHLeaseBackend)
 	if !ok {
@@ -143,16 +147,32 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	leaseFlags := registerLeaseCreateFlags(fs, defaults)
 	leaseIDFlag := fs.String("id", "", "existing lease or server id")
 	keep := fs.Bool("keep", false, "keep server after command")
+	keepOnFailure := fs.Bool("keep-on-failure", false, "keep a newly acquired lease when the remote command exits non-zero")
 	noSync := fs.Bool("no-sync", false, "skip rsync")
 	syncOnly := fs.Bool("sync-only", false, "sync and exit")
 	debugSync := fs.Bool("debug", false, "print detailed sync timing")
 	shellMode := fs.Bool("shell", false, "run command through the remote shell")
 	checksumSync := fs.Bool("checksum", false, "use checksum rsync instead of size/time")
 	forceSyncLarge := fs.Bool("force-sync-large", false, "allow unusually large sync candidates")
+	fullResync := fs.Bool("full-resync", false, "reset the remote workdir and force a complete sync")
+	freshSync := fs.Bool("fresh-sync", false, "alias for --full-resync")
 	junitResults := fs.String("junit", "", "comma-separated remote JUnit XML paths to record")
 	captureStdout := fs.String("capture-stdout", "", "write remote stdout to a local file instead of the terminal")
+	captureStderr := fs.String("capture-stderr", "", "write remote stderr to a local file instead of the terminal")
+	captureOnFail := fs.Bool("capture-on-fail", false, "compatibility alias; failure bundles are saved by default on non-zero exit")
+	preflight := fs.Bool("preflight", false, "print remote capability preflight before running the command")
+	preflightTools := fs.String("preflight-tools", "", "comma-separated preflight tools to probe; overrides run.preflightTools")
+	scriptPath := fs.String("script", "", "upload and run a local script file")
+	scriptStdin := fs.Bool("script-stdin", false, "read a script from stdin, upload it, and run it")
+	freshPRValue := fs.String("fresh-pr", "", "run from a fresh remote checkout of a GitHub PR: owner/repo#123, URL, or number")
+	applyLocalPatch := fs.Bool("apply-local-patch", false, "apply the local git diff on top of --fresh-pr checkout")
+	envHelper := fs.String("env-helper", "", "persist profile env as a reusable remote helper name under .crabbox/env/")
 	var downloads stringListFlag
+	var allowEnvFlags stringListFlag
+	var envProfileFlags stringListFlag
 	fs.Var(&downloads, "download", "download a remote file after command success: remote=local; repeatable")
+	fs.Var(&allowEnvFlags, "allow-env", "allow an environment variable for this run; repeatable or comma-separated")
+	fs.Var(&envProfileFlags, "env-from-profile", "load allowed environment values from a local profile file; repeatable")
 	reclaim := fs.Bool("reclaim", false, "claim this lease for the current repo")
 	timingJSON := fs.Bool("timing-json", false, "print final timing as JSON")
 	if err := parseFlags(fs, args); err != nil {
@@ -162,12 +182,13 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	if len(command) > 0 && command[0] == "--" {
 		command = command[1:]
 	}
-	if len(command) == 0 && !*syncOnly {
+	if len(command) == 0 && *scriptPath == "" && !*scriptStdin && !*syncOnly {
 		return exit(2, "usage: crabbox run [flags] -- <command...>")
 	}
-	if err := preflightRunLocalOutputs(*captureStdout, downloads); err != nil {
+	if err := preflightRunLocalOutputs(*captureStdout, *captureStderr, downloads); err != nil {
 		return err
 	}
+	fullResyncRequested := *fullResync || *freshSync
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -175,6 +196,17 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	}
 	if err := applyLeaseCreateFlags(&cfg, fs, leaseFlags); err != nil {
 		return err
+	}
+	for _, value := range allowEnvFlags {
+		cfg.EnvAllow = appendUniqueStrings(cfg.EnvAllow, splitCommaList(value)...)
+	}
+	if *preflightTools != "" {
+		cfg.Run.PreflightTools = normalizePreflightToolNames(splitCommaList(*preflightTools))
+	}
+	if *preflight {
+		if err := validatePreflightTools(cfg.Run.PreflightTools); err != nil {
+			return err
+		}
 	}
 	if flagWasSet(fs, "checksum") {
 		cfg.Sync.Checksum = *checksumSync
@@ -186,38 +218,103 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	freshPR, err := parseFreshPRSpec(*freshPRValue, repo)
+	if err != nil {
+		return err
+	}
+	if !freshPR.Empty() {
+		if *noSync {
+			return exit(2, "--fresh-pr cannot be combined with --no-sync")
+		}
+		if *syncOnly {
+			return exit(2, "--fresh-pr cannot be combined with --sync-only")
+		}
+		if fullResyncRequested {
+			return exit(2, "--full-resync is redundant with --fresh-pr")
+		}
+	} else if *applyLocalPatch {
+		return exit(2, "--apply-local-patch requires --fresh-pr")
+	}
+	if fullResyncRequested && *noSync {
+		return exit(2, "--full-resync cannot be combined with --no-sync")
+	}
+	if (*scriptPath != "" || *scriptStdin) && *syncOnly {
+		return exit(2, "--script cannot be combined with --sync-only")
+	}
+	envSelection, err := selectRunEnv(cfg.EnvAllow, envProfileFlags, len(allowEnvFlags) > 0)
+	if err != nil {
+		return err
+	}
+	envHelperName := strings.TrimSpace(*envHelper)
+	if envHelperName != "" && len(envSelection.Profile) == 0 {
+		return exit(2, "--env-helper requires --env-from-profile values selected by --allow-env")
+	}
+	if envHelperName != "" {
+		if *syncOnly {
+			return exit(2, "--env-helper cannot be combined with --sync-only")
+		}
+		if _, err := safeEnvHelperName(envHelperName); err != nil {
+			return err
+		}
+	}
 	backend, err := loadBackend(cfg, runtimeForApp(a))
 	if err != nil {
 		return err
 	}
 	options := leaseOptionsFromConfig(cfg)
+	scriptRequested := *scriptPath != "" || *scriptStdin
 	runReq := RunRequest{
-		Repo:           repo,
-		ID:             *leaseIDFlag,
-		Options:        options,
-		Keep:           *keep,
-		Reclaim:        *reclaim,
-		NoSync:         *noSync,
-		SyncOnly:       *syncOnly,
-		DebugSync:      *debugSync,
-		ShellMode:      *shellMode,
-		ChecksumSync:   *checksumSync,
-		ForceSyncLarge: *forceSyncLarge,
-		CaptureStdout:  *captureStdout,
-		Downloads:      downloads,
-		Command:        command,
-		TimingJSON:     *timingJSON,
+		Repo:            repo,
+		ID:              *leaseIDFlag,
+		Options:         options,
+		Keep:            *keep,
+		KeepOnFailure:   *keepOnFailure,
+		Reclaim:         *reclaim,
+		NoSync:          *noSync,
+		SyncOnly:        *syncOnly,
+		DebugSync:       *debugSync,
+		ShellMode:       *shellMode,
+		ChecksumSync:    *checksumSync,
+		ForceSyncLarge:  *forceSyncLarge,
+		FullResync:      fullResyncRequested,
+		EnvHelper:       envHelperName,
+		CaptureStdout:   *captureStdout,
+		CaptureStderr:   *captureStderr,
+		CaptureOnFail:   *captureOnFail,
+		Preflight:       *preflight,
+		Downloads:       downloads,
+		Env:             envSelection.Effective,
+		EnvSummary:      envSelection.SummaryRequested,
+		ScriptRequested: scriptRequested,
+		FreshPR:         freshPR,
+		ApplyLocalPatch: *applyLocalPatch,
+		Command:         command,
+		TimingJSON:      *timingJSON,
 	}
 	if delegated, ok := backend.(DelegatedRunBackend); ok {
-		if err := RejectDelegatedSyncOptions(backend.Spec().Name, runReq); err != nil {
+		if err := RejectDelegatedSyncOptionsForSpec(backend.Spec(), runReq); err != nil {
 			return err
 		}
-		_, err := delegated.Run(ctx, runReq)
-		return err
+		if runReq.Preflight {
+			printDelegatedPreflightUnsupported(a.Stderr, backend.Spec().Name)
+		}
+		result, runErr := delegated.Run(ctx, runReq)
+		if runErr == nil || result.Command > 0 || result.Total > 0 {
+			a.syncExternalRunnersBestEffort(ctx, cfg, backend)
+		}
+		return runErr
 	}
 	sshBackend, ok := backend.(SSHLeaseBackend)
 	if !ok {
 		return exit(2, "provider=%s does not support run", backend.Spec().Name)
+	}
+	var script *RunScriptSpec
+	if scriptRequested {
+		script, err = loadRunScript(*scriptPath, *scriptStdin, a.Stdin)
+		if err != nil {
+			return err
+		}
+		runReq.Script = script
 	}
 
 	var server Server
@@ -231,8 +328,9 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	recordFailure := func(failure error) error {
 		return recordRunFailure(&runFailure, failure)
 	}
+	recordCommand := runScriptRecordCommand(script, command)
 	if useCoordinator {
-		recorder = newRunRecorder(ctx, coord, cfg, command, a.Stderr)
+		recorder = newRunRecorder(ctx, coord, cfg, recordCommand, a.Stderr)
 		defer func() {
 			recorder.Failed(runFailure)
 		}()
@@ -294,13 +392,20 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 			fmt.Fprintf(a.Stderr, "warning: direct touch failed for %s: %v\n", leaseID, touchErr)
 		}
 	}
+	keepFailedLease := false
 	if acquired {
 		defer func() {
-			if !*keep {
+			if !*keep && !keepFailedLease {
 				a.releaseBackendLeaseBestEffort(context.Background(), sshBackend, LeaseTarget{Server: server, SSH: target, LeaseID: leaseID, Coordinator: coord})
 				recorder.Event("lease.released", "released", "")
 			}
 		}()
+	}
+	if envHelperName != "" {
+		// Reject target-specific helper gaps before SSH wait or sync mutates the remote.
+		if err := validateRunEnvHelperTarget(target, runEnvHelperPath(envHelperName)); err != nil {
+			return recordFailure(err)
+		}
 	}
 	if useCoordinator && leaseID != "" {
 		var heartbeatIdleTimeout *time.Duration
@@ -323,9 +428,12 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	exitNodeEgressChecked := false
 	workdir := remoteJoin(cfg, leaseID, repo.Name)
 	actionsEnvFile := ""
+	profileEnvFile := ""
 	actionsURL := ""
 	hydratedByActions := false
-	if state, err := readActionsHydrationState(ctx, target, leaseID); err == nil && state.Workspace != "" {
+	if !freshPR.Empty() {
+		workdir = remoteJoin(cfg, leaseID, freshPR.WorkdirName())
+	} else if state, err := readActionsHydrationState(ctx, target, leaseID); err == nil && state.Workspace != "" {
 		workdir = state.Workspace
 		actionsEnvFile = state.EnvFile
 		if state.RunID != "" {
@@ -338,9 +446,37 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	} else if commandNeedsHydrationHint(command, *shellMode) && cfg.Actions.Workflow != "" {
 		fmt.Fprintf(a.Stderr, "warning: no GitHub Actions hydration marker found for %s; JS package commands may fail on a raw box. Run \"crabbox actions hydrate --id %s\" first, or include runtime setup in the command.\n", leaseID, leaseID)
 	}
+	contextPrinted := false
+	preflightPrinted := false
+	printContext := func(currentTarget SSHTarget) {
+		if contextPrinted {
+			return
+		}
+		printRunContextSummary(a.Stderr, coord, cfg, server, currentTarget, leaseID, workdir, hydratedByActions, actionsURL, recorder)
+		contextPrinted = true
+	}
+	printPreflight := func(currentTarget SSHTarget) {
+		if !*preflight || preflightPrinted {
+			return
+		}
+		hydrateTarget := currentTarget
+		if hydrateTarget.TargetOS == "" {
+			hydrateTarget.TargetOS = cfg.TargetOS
+		}
+		if hydrateTarget.WindowsMode == "" {
+			hydrateTarget.WindowsMode = cfg.WindowsMode
+		}
+		hydrateSupported := supportsActionsRunnerTarget(hydrateTarget)
+		printRemoteCapabilityPreflight(ctx, a.Stderr, cfg, currentTarget, leaseID, workdir, remoteRunEnvFiles(actionsEnvFile, profileEnvFile), hydratedByActions, actionsURL, hydrateSupported, envSelection.Inline)
+		preflightPrinted = true
+	}
 	if !*noSync {
 		syncStart := time.Now()
-		fmt.Fprintf(a.Stderr, "syncing %s -> %s:%s\n", repo.Root, target.Host, workdir)
+		if freshPR.Empty() {
+			fmt.Fprintf(a.Stderr, "syncing %s -> %s:%s\n", repo.Root, target.Host, workdir)
+		} else {
+			fmt.Fprintf(a.Stderr, "fresh-pr checkout %s -> %s:%s\n", freshPR.Slug(), target.Host, workdir)
+		}
 		stepStart := time.Now()
 		recorder.Event("bootstrap.waiting", "bootstrap", "waiting for SSH before sync")
 		target = bootstrapNetworkTarget(cfg, server, target)
@@ -356,6 +492,7 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 				fmt.Fprintf(a.Stderr, "network fallback %s\n", resolved.FallbackReason)
 			}
 		}
+		printContext(target)
 		if !exitNodeEgressChecked {
 			if err := validateTailscaleExitNodeEgress(ctx, server, target); err != nil {
 				return recordFailure(err)
@@ -366,16 +503,36 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 		recorder.StartTelemetrySampler(ctx, target)
 		recorder.Event("sync.started", "sync", "")
 		timings.syncSteps.sshReady = time.Since(stepStart)
+		if !freshPR.Empty() {
+			if isWindowsNativeTarget(target) {
+				return recordFailure(exit(2, "--fresh-pr is not supported for native Windows targets"))
+			}
+			stepStart = time.Now()
+			if out, err := runSSHCombinedOutput(ctx, target, remoteFreshPRCheckoutCommand(workdir, freshPR)); err != nil {
+				return recordFailure(exit(6, "fresh-pr checkout failed: %v: %s", err, strings.TrimSpace(out)))
+			}
+			timings.syncSteps.gitSeed = time.Since(stepStart)
+			if *applyLocalPatch {
+				stepStart = time.Now()
+				applied, err := applyLocalPatchToFreshPR(ctx, target, workdir, repo)
+				if err != nil {
+					return recordFailure(err)
+				}
+				timings.syncSteps.finalize = time.Since(stepStart)
+				if applied {
+					fmt.Fprintln(a.Stderr, "fresh-pr local_patch=applied")
+				} else {
+					fmt.Fprintln(a.Stderr, "fresh-pr local_patch=none")
+				}
+			}
+			timings.sync = time.Since(syncStart)
+			fmt.Fprintf(a.Stderr, "fresh-pr checkout complete in %s\n", timings.sync.Round(time.Millisecond))
+			recorder.Event("sync.finished", "synced", fmt.Sprintf("duration=%s fresh_pr=%s", timings.sync.Round(time.Millisecond), freshPR.Slug()))
+			goto afterSync
+		}
 		excludes, err := syncExcludes(repo.Root, cfg)
 		if err != nil {
 			return recordFailure(err)
-		}
-		if isWindowsNativeTarget(target) {
-			stepStart = time.Now()
-			if err := runSSHQuiet(ctx, target, windowsRemoteMkdir(workdir)); err != nil {
-				return recordFailure(exit(7, "create remote workdir: %v", err))
-			}
-			timings.syncSteps.mkdir = time.Since(stepStart)
 		}
 		stepStart = time.Now()
 		manifest, err := syncManifest(repo.Root, excludes)
@@ -388,25 +545,14 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 			return recordFailure(err)
 		}
 		timings.syncSteps.preflight = time.Since(stepStart)
-		if isWindowsNativeTarget(target) {
-			stepStart = time.Now()
-			if err := syncWindowsNative(ctx, target, repo, cfg, workdir, manifest, a.Stdout, a.Stderr, rsyncOptions{Debug: *debugSync, Delete: cfg.Sync.Delete, Checksum: cfg.Sync.Checksum, Timeout: cfg.Sync.Timeout, HeartbeatInterval: 15 * time.Second}); err != nil {
-				return recordFailure(err)
-			}
-			timings.syncSteps.rsync = time.Since(stepStart)
-			timings.sync = time.Since(syncStart)
-			fmt.Fprintf(a.Stderr, "sync complete in %s\n", timings.sync.Round(time.Millisecond))
-			recorder.Event("sync.finished", "synced", fmt.Sprintf("duration=%s mode=archive", timings.sync.Round(time.Millisecond)))
-			goto afterSync
-		}
 		fingerprint := ""
-		if cfg.Sync.Fingerprint {
+		if cfg.Sync.Fingerprint && !isWindowsNativeTarget(target) {
 			stepStart = time.Now()
 			fingerprint, err = syncFingerprintForManifest(repo, cfg, manifest, excludes)
 			timings.syncSteps.fingerprintLocal = time.Since(stepStart)
 			if err != nil {
 				fmt.Fprintf(a.Stderr, "warning: sync fingerprint failed: %v\n", err)
-			} else if fingerprint != "" {
+			} else if !fullResyncRequested && fingerprint != "" {
 				stepStart = time.Now()
 				remoteFingerprint, err := runSSHOutput(ctx, target, remoteReadSyncFingerprint(workdir))
 				timings.syncSteps.fingerprintRemote = time.Since(stepStart)
@@ -418,6 +564,35 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 					goto afterSync
 				}
 			}
+		}
+		if fullResyncRequested {
+			stepStart = time.Now()
+			fmt.Fprintf(a.Stderr, "full-resync resetting remote workdir %s\n", workdir)
+			resetCommand := remoteResetWorkdir(workdir)
+			if isWindowsNativeTarget(target) {
+				resetCommand = windowsRemoteResetWorkdir(workdir)
+			}
+			if err := runSSHQuiet(ctx, target, resetCommand); err != nil {
+				return recordFailure(exit(7, "reset remote workdir: %v", err))
+			}
+			timings.syncSteps.reset = time.Since(stepStart)
+		} else if isWindowsNativeTarget(target) {
+			stepStart = time.Now()
+			if err := runSSHQuiet(ctx, target, windowsRemoteMkdir(workdir)); err != nil {
+				return recordFailure(exit(7, "create remote workdir: %v", err))
+			}
+			timings.syncSteps.mkdir = time.Since(stepStart)
+		}
+		if isWindowsNativeTarget(target) {
+			stepStart = time.Now()
+			if err := syncWindowsNative(ctx, target, repo, cfg, workdir, manifest, a.Stdout, a.Stderr, rsyncOptions{Debug: *debugSync, Delete: cfg.Sync.Delete, Checksum: cfg.Sync.Checksum, FullResync: fullResyncRequested, Timeout: cfg.Sync.Timeout, HeartbeatInterval: 15 * time.Second}); err != nil {
+				return recordFailure(err)
+			}
+			timings.syncSteps.rsync = time.Since(stepStart)
+			timings.sync = time.Since(syncStart)
+			fmt.Fprintf(a.Stderr, "sync complete in %s\n", timings.sync.Round(time.Millisecond))
+			recorder.Event("sync.finished", "synced", fmt.Sprintf("duration=%s mode=archive", timings.sync.Round(time.Millisecond)))
+			goto afterSync
 		}
 		if cfg.Sync.GitSeed && remoteGitSeedCandidate(repo) {
 			stepStart = time.Now()
@@ -433,8 +608,10 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 			return recordFailure(exit(7, "write sync manifests: %v", err))
 		}
 		timings.syncSteps.manifestWrite = time.Since(stepStart)
-		if cfg.Sync.Delete {
-			if hydratedByActions {
+		if shouldPruneRemoteSync(cfg.Sync.Delete, fullResyncRequested) {
+			// Full resync can git-seed files that are absent from the local manifest.
+			// Seed the old manifest from git so prune removes those resurrected paths.
+			if shouldSeedRemotePruneManifest(hydratedByActions, fullResyncRequested) {
 				if err := runSSHQuiet(ctx, target, remoteSeedSyncManifestFromGit(workdir)); err != nil {
 					return recordFailure(exit(6, "remote sync seed manifest failed: %v", err))
 				}
@@ -485,6 +662,7 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 	}
 afterSync:
 	if *syncOnly {
+		printPreflight(target)
 		fmt.Fprintf(a.Stdout, "synced %s\n", workdir)
 		fmt.Fprintln(a.Stderr, formatRunSummary(timings, time.Since(timings.started), 0))
 		if *timingJSON {
@@ -512,6 +690,7 @@ afterSync:
 			fmt.Fprintf(a.Stderr, "network fallback %s\n", resolved.FallbackReason)
 		}
 	}
+	printContext(target)
 	if !exitNodeEgressChecked {
 		if err := validateTailscaleExitNodeEgress(ctx, server, target); err != nil {
 			return recordFailure(err)
@@ -529,6 +708,42 @@ afterSync:
 			return recordFailure(exit(7, "create remote workdir: %v", err))
 		}
 	}
+	if len(envSelection.Profile) > 0 {
+		profileEnvFile = runEnvProfilePath(firstNonBlank(recorder.runID, leaseID, "run"))
+		envHelperPath := ""
+		if envHelperName != "" {
+			safeName, _ := safeEnvHelperName(envHelperName)
+			profileEnvFile = runEnvProfilePath(safeName)
+			envHelperPath = runEnvHelperPath(safeName)
+		}
+		if err := validateRunEnvHelperTarget(target, envHelperPath); err != nil {
+			return recordFailure(err)
+		}
+		if err := uploadRunEnvProfile(ctx, target, workdir, profileEnvFile, envSelection.Profile); err != nil {
+			return recordFailure(err)
+		}
+		persistEnvProfile := false
+		defer func() {
+			// Helper mode intentionally keeps the profile; all failure paths clean it up.
+			if persistEnvProfile {
+				return
+			}
+			if out, cleanupErr := runSSHCombinedOutput(context.Background(), target, removeRunEnvProfileCommand(target, workdir, profileEnvFile)); cleanupErr != nil {
+				fmt.Fprintf(a.Stderr, "warning: remote env profile cleanup failed: %v: %s\n", cleanupErr, strings.TrimSpace(out))
+			}
+		}()
+		if err := probeRunEnvProfile(ctx, target, workdir, profileEnvFile, envSelection.Profile, a.Stderr); err != nil {
+			return recordFailure(err)
+		}
+		if envHelperPath != "" {
+			if err := uploadRunEnvHelper(ctx, target, workdir, envHelperPath, profileEnvFile); err != nil {
+				return recordFailure(err)
+			}
+			persistEnvProfile = true
+			fmt.Fprintf(a.Stderr, "env helper remote=%s usage=%s\n", envHelperPath, shellQuote("./"+envHelperPath+" <command>"))
+		}
+	}
+	printPreflight(target)
 	if !useCoordinator {
 		if touched, touchErr := sshBackend.Touch(context.Background(), TouchRequest{Lease: LeaseTarget{Server: server, SSH: target, LeaseID: leaseID}, State: "running", IdleTimeout: cfg.IdleTimeout}); touchErr == nil {
 			server = touched
@@ -543,56 +758,88 @@ afterSync:
 			}
 		}()
 	}
-	fmt.Fprintf(a.Stderr, "running on %s %s\n", target.Host, strings.Join(command, " "))
-	recorder.Event("command.started", "command", strings.Join(command, " "))
+	commandDisplay := strings.Join(command, " ")
+	if script != nil {
+		script = runScriptForTarget(script, target)
+		if err := uploadRunScript(ctx, target, workdir, script); err != nil {
+			return recordFailure(err)
+		}
+		fmt.Fprintf(a.Stderr, "uploaded script %s -> %s\n", script.Source, script.RemotePath)
+		recorder.Event("script.uploaded", "script", script.RemotePath)
+		commandDisplay = runScriptDisplay(script, command)
+	}
+	fmt.Fprintf(a.Stderr, "running on %s %s\n", target.Host, commandDisplay)
+	recorder.Event("command.started", "command", commandDisplay)
 	capabilityEnv, err := requestedCapabilityEnv(ctx, cfg, target)
 	if err != nil {
 		return recordFailure(err)
 	}
-	runEnv := mergeEnv(allowedEnv(cfg.EnvAllow), capabilityEnv)
-	remote := remoteCommandWithEnvFile(workdir, runEnv, actionsEnvFile, command)
-	if *shellMode {
-		remote = remoteShellCommandWithEnvFile(workdir, runEnv, actionsEnvFile, strings.Join(command, " "))
+	if envSelection.SummaryRequested {
+		printEnvForwardingSummary(a.Stderr, cfg.Provider, "forwarded", cfg.EnvAllow, envSelection.Effective)
+	} else {
+		maybePrintEnvForwardingSummary(a.Stderr, cfg.Provider, "forwarded", cfg.EnvAllow, envSelection.Effective)
+	}
+	runEnv := mergeEnv(envSelection.Inline, capabilityEnv)
+	envFiles := remoteRunEnvFiles(actionsEnvFile, profileEnvFile)
+	remote := remoteCommandWithEnvFiles(workdir, runEnv, envFiles, command)
+	if script != nil {
+		remote = remoteRunScriptCommandWithEnvFiles(workdir, runEnv, envFiles, script, command)
+	} else if *shellMode {
+		remote = remoteShellCommandWithEnvFiles(workdir, runEnv, envFiles, strings.Join(command, " "))
 	} else if shouldUseShell(command) {
-		remote = remoteShellCommandWithEnvFile(workdir, runEnv, actionsEnvFile, shellScriptFromArgv(command))
+		remote = remoteShellCommandWithEnvFiles(workdir, runEnv, envFiles, shellScriptFromArgv(command))
 	}
 	if isWindowsNativeTarget(target) {
-		remote = windowsRemoteCommandWithEnvFile(workdir, runEnv, actionsEnvFile, command)
-		if *shellMode || shouldUseShell(command) {
-			remote = windowsRemoteShellCommandWithEnvFile(workdir, runEnv, actionsEnvFile, strings.Join(command, " "))
+		remote = windowsRemoteCommandWithEnvFiles(workdir, runEnv, envFiles, command)
+		if script != nil {
+			remote = windowsRemoteRunScriptCommandWithEnvFiles(workdir, runEnv, envFiles, script, command)
+		} else if *shellMode || shouldUseShell(command) {
+			remote = windowsRemoteShellCommandWithEnvFiles(workdir, runEnv, envFiles, strings.Join(command, " "))
 		}
 	}
 	var logBuffer runLogBuffer
 	stdoutEvents := recorder.StreamWriter("stdout")
 	stderrEvents := recorder.StreamWriter("stderr")
-	stdout := io.MultiWriter(a.Stdout, &logBuffer, stdoutEvents)
-	stderr := io.MultiWriter(a.Stderr, &logBuffer, stderrEvents)
-	var stdoutCapture *countingWriteCloser
-	if *captureStdout != "" {
-		file, err := os.Create(*captureStdout)
-		if err != nil {
-			return recordFailure(exit(2, "capture stdout: %v", err))
-		}
-		stdoutCapture = &countingWriteCloser{WriteCloser: file}
-		stdout = stdoutCapture
+	stdoutTail := newStreamTailBuffer(failureTailLines)
+	stderrTail := newStreamTailBuffer(failureTailLines)
+	streamCaptures, err := openFailureStreamCaptures(*captureStdout, *captureStderr)
+	if err != nil {
+		return recordFailure(err)
+	}
+	defer streamCaptures.cleanup()
+	phaseTracker := newCommandPhaseTracker(commandStart)
+	stdoutPhaseWriter := &phaseMarkerWriter{tracker: phaseTracker}
+	stderrPhaseWriter := &phaseMarkerWriter{tracker: phaseTracker}
+	stdout := io.MultiWriter(a.Stdout, &logBuffer, stdoutEvents, stdoutTail, stdoutPhaseWriter)
+	stderr := io.MultiWriter(a.Stderr, &logBuffer, stderrEvents, stderrTail, stderrPhaseWriter)
+	stdout, stdoutCaptured, err := streamCaptures.stdout.writer(stdout, stdoutPhaseWriter, a.Stderr)
+	if err != nil {
+		return recordFailure(err)
+	}
+	if stdoutCaptured {
 		stdoutEvents = nil
-		fmt.Fprintf(a.Stderr, "capturing stdout to %s\n", *captureStdout)
+	}
+	stderr, stderrCaptured, err := streamCaptures.stderr.writer(stderr, stderrPhaseWriter, a.Stderr)
+	if err != nil {
+		return recordFailure(err)
+	}
+	if stderrCaptured {
+		stderrEvents = nil
 	}
 	code, streamErr := runSSHStreamResult(ctx, target, remote, stdout, stderr)
-	if stdoutCapture != nil {
-		if streamErr != nil && !isSSHCommandExitError(streamErr) {
-			_ = stdoutCapture.Close()
-			return recordFailure(exit(2, "capture stdout: %v", streamErr))
-		}
-		if closeErr := stdoutCapture.Close(); closeErr != nil && code == 0 {
-			return recordFailure(exit(2, "capture stdout close: %v", closeErr))
-		}
-		fmt.Fprintf(a.Stderr, "captured stdout=%s bytes=%d\n", *captureStdout, stdoutCapture.N)
-	} else {
+	if err := streamCaptures.closeAfterStream(streamErr, code, a.Stderr); err != nil {
+		return recordFailure(err)
+	}
+	if !stdoutCaptured {
 		stdoutEvents.Flush()
 	}
-	stderrEvents.Flush()
+	if !stderrCaptured {
+		stderrEvents.Flush()
+	}
+	stdoutPhaseWriter.Flush()
+	stderrPhaseWriter.Flush()
 	timings.command = time.Since(commandStart)
+	timings.commandPhases = phaseTracker.Finish(time.Now())
 	var results *TestResultSummary
 	if len(cfg.Results.JUnit) > 0 {
 		results, err = collectRemoteJUnitResults(ctx, target, workdir, cfg.Results.JUnit)
@@ -613,14 +860,47 @@ afterSync:
 	}
 	recorder.Finish(ctx, target, code, timings.sync, timings.command, logBuffer.String(), logBuffer.Truncated(), results)
 	total := time.Since(timings.started)
+	report := timingReportFromRunWithActionsURL(cfg.Provider, leaseID, serverSlug(server), timings, total, code, actionsURL)
 	fmt.Fprintf(a.Stderr, "command complete in %s total=%s\n", timings.command.Round(time.Millisecond), total.Round(time.Millisecond))
 	fmt.Fprintln(a.Stderr, formatRunSummary(timings, total, code))
 	if *timingJSON {
-		if err := writeTimingJSON(a.Stderr, timingReportFromRunWithActionsURL(cfg.Provider, leaseID, serverSlug(server), timings, total, code, actionsURL)); err != nil {
+		if err := writeTimingJSON(a.Stderr, report); err != nil {
 			return recordFailure(err)
 		}
 	}
 	if code != 0 {
+		capture := FailureCaptureMetadata{
+			Provider:       cfg.Provider,
+			LeaseID:        leaseID,
+			Slug:           serverSlug(server),
+			RunID:          recorder.runID,
+			Workdir:        workdir,
+			ExitCode:       code,
+			ActionsRunURL:  actionsURL,
+			Timing:         report,
+			EnvAllow:       cfg.EnvAllow,
+			Env:            envSelection.Effective,
+			Config:         cfg,
+			StdoutPath:     streamCaptures.stdout.path(),
+			StderrPath:     streamCaptures.stderr.path(),
+			CaptureFlagSet: *captureOnFail,
+		}
+		if local, bytes, captureErr := captureFailureBundle(ctx, target, workdir, leaseID, recorder.runID, capture); captureErr != nil {
+			fmt.Fprintf(a.Stderr, "warning: failure bundle failed: %v\n", captureErr)
+			if local != "" {
+				fmt.Fprintf(a.Stderr, "failure-bundle local=%s bytes=%d secret_risk=caller-redacts-before-sharing\n", local, bytes)
+			}
+		} else {
+			fmt.Fprintf(a.Stderr, "failure-bundle local=%s bytes=%d secret_risk=caller-redacts-before-sharing\n", local, bytes)
+		}
+		if *keepOnFailure {
+			if acquired && !*keep {
+				keepFailedLease = true
+			}
+			printKeepOnFailureSSHHint(a.Stderr, cfg, leaseID, server, target)
+		}
+		printFailureTail(a.Stderr, "stdout", stdoutTail, *captureStdout)
+		printFailureTail(a.Stderr, "stderr", stderrTail, *captureStderr)
 		return recordFailure(ExitError{Code: code, Message: fmt.Sprintf("remote command exited %d", code)})
 	}
 	return nil
@@ -645,11 +925,12 @@ func recordRunFailure(dst *error, failure error) error {
 }
 
 type runTimings struct {
-	started     time.Time
-	sync        time.Duration
-	command     time.Duration
-	syncSteps   syncStepTimings
-	syncSkipped bool
+	started       time.Time
+	sync          time.Duration
+	command       time.Duration
+	syncSteps     syncStepTimings
+	commandPhases []timingPhase
+	syncSkipped   bool
 }
 
 type syncStepTimings struct {
@@ -657,6 +938,7 @@ type syncStepTimings struct {
 	mkdir                time.Duration
 	manifest             time.Duration
 	preflight            time.Duration
+	reset                time.Duration
 	fingerprintLocal     time.Duration
 	fingerprintRemote    time.Duration
 	gitSeed              time.Duration
@@ -683,6 +965,9 @@ func formatRunSummary(timings runTimings, total time.Duration, exitCode int) str
 	if breakdown := formatSyncStepTimings(timings.syncSteps); breakdown != "" {
 		summary += " sync_steps=" + breakdown
 	}
+	if breakdown := formatCommandPhaseTimings(timings.commandPhases); breakdown != "" {
+		summary += " command_phases=" + breakdown
+	}
 	return summary
 }
 
@@ -697,6 +982,7 @@ func formatSyncStepTimings(steps syncStepTimings) string {
 	appendStep("mkdir", steps.mkdir)
 	appendStep("manifest", steps.manifest)
 	appendStep("preflight", steps.preflight)
+	appendStep("reset", steps.reset)
 	appendStep("fingerprint", steps.fingerprintLocal)
 	appendStep("fingerprint_remote", steps.fingerprintRemote)
 	appendStep("git_seed", steps.gitSeed)
@@ -713,6 +999,14 @@ func formatSyncStepTimings(steps syncStepTimings) string {
 	appendStep("finalize", steps.finalize)
 	appendStep("fingerprint_write", steps.fingerprintWrite)
 	return strings.Join(parts, ",")
+}
+
+func shouldPruneRemoteSync(deleteEnabled, fullResync bool) bool {
+	return deleteEnabled || fullResync
+}
+
+func shouldSeedRemotePruneManifest(hydratedByActions, fullResync bool) bool {
+	return hydratedByActions || fullResync
 }
 
 func commandNeedsHydrationHint(command []string, shellMode bool) bool {
@@ -1197,6 +1491,13 @@ func deleteServer(ctx context.Context, cfg Config, server Server) error {
 	}
 	if cfg.Provider == "azure" || server.Provider == "azure" {
 		return deleteAzureServer(ctx, cfg, server)
+	}
+	if cfg.Provider == "proxmox" || server.Provider == "proxmox" {
+		client, err := NewProxmoxClient(cfg)
+		if err != nil {
+			return err
+		}
+		return client.DeleteServer(ctx, server.CloudID)
 	}
 	client, err := newHetznerClient()
 	if err != nil {

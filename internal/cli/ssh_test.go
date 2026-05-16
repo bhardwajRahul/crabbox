@@ -24,8 +24,8 @@ func TestVersion(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"--version"}); err != nil {
 		t.Fatalf("Run(--version) error: %v", err)
 	}
-	if got := strings.TrimSpace(out.String()); got != version {
-		t.Fatalf("Run(--version)=%q want %q", got, version)
+	if got := strings.TrimSpace(out.String()); got != currentVersion() {
+		t.Fatalf("Run(--version)=%q want %q", got, currentVersion())
 	}
 }
 
@@ -78,6 +78,46 @@ func TestRemoteCommandSourcesActionsEnvFile(t *testing.T) {
 	}
 }
 
+func TestRemoteCommandSourcesMultipleEnvFilesWithoutInlineSecret(t *testing.T) {
+	got := remoteCommandWithEnvFiles("/work/repo", map[string]string{"CI": "1"}, []string{
+		"/home/runner/.crabbox/actions/cbx-123.env.sh",
+		".crabbox/env/run.env.sh",
+	}, []string{"pnpm", "test"})
+	for _, want := range []string{
+		"if [ -f '/home/runner/.crabbox/actions/cbx-123.env.sh' ]; then . '/home/runner/.crabbox/actions/cbx-123.env.sh'; fi",
+		"if [ -f '.crabbox/env/run.env.sh' ]; then . '.crabbox/env/run.env.sh'; fi",
+		"CI='1'",
+		"'exec \"$@\"' bash 'pnpm' 'test'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("remoteCommandWithEnvFiles() missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "API_TOKEN") || strings.Contains(got, "secret") {
+		t.Fatalf("remoteCommandWithEnvFiles() should not inline profile secrets: %q", got)
+	}
+}
+
+func TestRemoteResetWorkdirRemovesExistingCheckout(t *testing.T) {
+	got := remoteResetWorkdir("/work/crabbox/cbx_1/repo")
+	for _, want := range []string{
+		"rm -rf --",
+		"/work/crabbox/cbx_1/repo",
+		"mkdir -p",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("remoteResetWorkdir() missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestSSHWaitNextActionMentionsFullResyncBeforeSync(t *testing.T) {
+	got := sshWaitNextAction("before sync")
+	if !strings.Contains(got, "--full-resync") || !strings.Contains(got, "fresh lease") {
+		t.Fatalf("sshWaitNextAction(before sync)=%q", got)
+	}
+}
+
 func TestWindowsNativeRemoteCommandUsesPowerShell(t *testing.T) {
 	got := windowsRemoteCommandWithEnvFile(`C:\crabbox\cbx\repo`, map[string]string{"CI": "1"}, "", []string{"pwsh", "-NoProfile", "-Command", "echo ok"})
 	if !strings.HasPrefix(got, powerShellEncodedCommandPrefix) {
@@ -86,6 +126,23 @@ func TestWindowsNativeRemoteCommandUsesPowerShell(t *testing.T) {
 	decoded := decodePowerShellCommand(t, got)
 	if !strings.HasPrefix(decoded, "$ProgressPreference = \"SilentlyContinue\"\n") {
 		t.Fatalf("windows command should suppress PowerShell progress records: %q", decoded)
+	}
+}
+
+func TestWindowsNativeRemoteCommandSourcesMultipleEnvFiles(t *testing.T) {
+	got := windowsRemoteCommandWithEnvFiles(`C:\crabbox\cbx\repo`, map[string]string{"CI": "1"}, []string{
+		`.crabbox\actions.env`,
+		`.crabbox\env\run.env`,
+	}, []string{"pwsh", "-NoProfile", "-Command", "echo ok"})
+	decoded := decodePowerShellCommand(t, got)
+	for _, want := range []string{
+		`Get-Content -Encoding UTF8 -LiteralPath '.crabbox\actions.env'`,
+		`Get-Content -Encoding UTF8 -LiteralPath '.crabbox\env\run.env'`,
+		`$env:CI = '1'`,
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("windows command missing %q in %q", want, decoded)
+		}
 	}
 }
 
@@ -103,6 +160,83 @@ func TestWindowsNativeRemoteShellRunsScriptDirectly(t *testing.T) {
 	}
 	if strings.Contains(decoded, `& 'powershell.exe'`) {
 		t.Fatalf("windows shell command should not spawn nested powershell: %q", decoded)
+	}
+}
+
+func TestWindowsPruneSeededSyncManifestDeletesSeededExtras(t *testing.T) {
+	got := windowsPruneSeededSyncManifest(`C:\crabbox\cbx\repo`)
+	decoded := decodePowerShellCommand(t, got)
+	for _, want := range []string{
+		`git -c core.quotePath=false ls-files`,
+		`Read-NulList $manifestBytes`,
+		`Read-NulList $deletedBytes`,
+		`-not $wanted.ContainsKey($rel)`,
+		`$deleted.ContainsKey($rel)`,
+		`Remove-SafeRepoPath $rel`,
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("windows prune command missing %q in %q", want, decoded)
+		}
+	}
+}
+
+func TestSyncWindowsNativeFullResyncPrunesAfterGitSeed(t *testing.T) {
+	dir := t.TempDir()
+	sshPath := filepath.Join(dir, "ssh")
+	logPath := filepath.Join(dir, "ssh.log")
+	script := `#!/bin/sh
+printf 'ssh\n' >> "$CRABBOX_FAKE_SSH_LOG"
+cat >/dev/null
+exit 0
+`
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CRABBOX_FAKE_SSH_LOG", logPath)
+
+	repoRoot := filepath.Join(dir, "repo")
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "alice@example.com")
+	runGit("config", "user.name", "Alice")
+	mustWriteTestFile(t, filepath.Join(repoRoot, "keep.txt"), "keep")
+	mustWriteTestFile(t, filepath.Join(repoRoot, "stale.txt"), "stale")
+	runGit("add", "keep.txt", "stale.txt")
+	runGit("commit", "-q", "-m", "seed")
+	head := gitOutput(repoRoot, "rev-parse", "HEAD")
+	runGit("update-ref", "refs/remotes/origin/main", head)
+	if err := os.Remove(filepath.Join(repoRoot, "stale.txt")); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := syncManifest(repoRoot, configuredExcludes(baseConfig()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := baseConfig()
+	cfg.Sync.Delete = false
+	target := SSHTarget{User: "crabbox", Host: "203.0.113.10", Port: "22", TargetOS: targetWindows, WindowsMode: windowsModeNormal}
+	repo := Repo{Root: repoRoot, RemoteURL: "https://example.test/repo.git", Head: head}
+	if err := syncWindowsNative(context.Background(), target, repo, cfg, `C:\crabbox\cbx\repo`, manifest, io.Discard, io.Discard, rsyncOptions{FullResync: true}); err != nil {
+		t.Fatal(err)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Count(string(logData), "ssh\n"), 4; got != want {
+		t.Fatalf("ssh calls=%d want %d; log:\n%s", got, want, logData)
 	}
 }
 
@@ -206,6 +340,18 @@ func TestEnvAllowlist(t *testing.T) {
 	}
 	if envAllowed("PROJECT_TOKEN", []string{"CI", "NODE_OPTIONS"}) {
 		t.Fatal("unexpected env forwarding without config")
+	}
+}
+
+func TestEnvAllowlistRejectsEmptyWildcardPrefix(t *testing.T) {
+	if envAllowed("CRABBOX_PROOF_API_TOKEN", []string{"*"}) {
+		t.Fatal("bare wildcard must not forward every local environment variable")
+	}
+	if envAllowed("CRABBOX_PROOF_API_TOKEN", []string{"  *  "}) {
+		t.Fatal("trimmed bare wildcard must not forward every local environment variable")
+	}
+	if !envAllowed("PROJECT_FLAG", []string{"PROJECT_*"}) {
+		t.Fatal("non-empty prefix wildcard should still work")
 	}
 }
 
@@ -792,6 +938,83 @@ func TestAcquireAttemptsRetriesWarmupBootstrapFailures(t *testing.T) {
 	}
 }
 
+func TestAcquireAttemptsDoesNotRetryUnconfirmedCoordinatorStaleInstanceFailures(t *testing.T) {
+	var stderr strings.Builder
+	attempts := 0
+	_, err := acquireAttemptsRetry(Runtime{Stderr: &stderr}, false, func() (LeaseTarget, error) {
+		attempts++
+		return LeaseTarget{}, CoordinatorHTTPError{
+			Method:     "POST",
+			Path:       "/v1/leases",
+			StatusCode: 500,
+			Message:    `{"error":"InvalidInstanceID.NotFound"}`,
+		}
+	})
+	if err == nil {
+		t.Fatal("expected stale instance error")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
+	}
+	if strings.Contains(stderr.String(), "retrying with fresh lease") {
+		t.Fatalf("unexpected retry warning: %q", stderr.String())
+	}
+}
+
+func TestAcquireAttemptsRetriesCleanedCoordinatorStaleInstanceFailures(t *testing.T) {
+	var stderr strings.Builder
+	attempts := 0
+	lease, err := acquireAttemptsRetry(Runtime{Stderr: &stderr}, false, func() (LeaseTarget, error) {
+		attempts++
+		if attempts == 1 {
+			err := CoordinatorHTTPError{
+				Method:     "POST",
+				Path:       "/v1/leases",
+				StatusCode: 500,
+				Message:    `{"error":"InvalidInstanceID.NotFound"}`,
+			}
+			return LeaseTarget{}, coordinatorStaleInstanceCleanedError{err: err}
+		}
+		return LeaseTarget{LeaseID: "cbx_ok"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || lease.LeaseID != "cbx_ok" {
+		t.Fatalf("attempts=%d lease=%#v", attempts, lease)
+	}
+	if !strings.Contains(stderr.String(), "coordinator returned stale instance") {
+		t.Fatalf("missing stale retry warning: %q", stderr.String())
+	}
+}
+
+func TestAcquireAttemptsRetriesRepeatedCleanedCoordinatorStaleInstanceFailures(t *testing.T) {
+	var stderr strings.Builder
+	attempts := 0
+	lease, err := acquireAttemptsRetry(Runtime{Stderr: &stderr}, false, func() (LeaseTarget, error) {
+		attempts++
+		if attempts < 5 {
+			err := CoordinatorHTTPError{
+				Method:     "POST",
+				Path:       "/v1/leases",
+				StatusCode: 500,
+				Message:    `{"error":"InvalidInstanceID.NotFound"}`,
+			}
+			return LeaseTarget{}, coordinatorStaleInstanceCleanedError{err: err}
+		}
+		return LeaseTarget{LeaseID: "cbx_ok"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 5 || lease.LeaseID != "cbx_ok" {
+		t.Fatalf("attempts=%d lease=%#v", attempts, lease)
+	}
+	if got := strings.Count(stderr.String(), "coordinator returned stale instance"); got != 4 {
+		t.Fatalf("stale retry warnings=%d want 4: %q", got, stderr.String())
+	}
+}
+
 func TestBootstrapWaitTimeoutExtendsForDesktopBrowser(t *testing.T) {
 	if got := bootstrapWaitTimeout(Config{}); got != 20*time.Minute {
 		t.Fatalf("plain bootstrap timeout=%s want 20m", got)
@@ -889,6 +1112,57 @@ func TestAWSServerTypeForClass(t *testing.T) {
 	}
 }
 
+func TestCloudflareContainerInstanceTypeMapping(t *testing.T) {
+	tests := []struct {
+		class string
+		want  string
+	}{
+		{class: "", want: "standard-4"},
+		{class: "standard", want: "standard-4"},
+		{class: "fast", want: "standard-4"},
+		{class: "large", want: "standard-4"},
+		{class: "beast", want: "standard-4"},
+		{class: "lite", want: "lite"},
+		{class: "basic", want: "basic"},
+		{class: "standard-3", want: "standard-3"},
+	}
+	for _, tt := range tests {
+		if got := cloudflareContainerInstanceTypeForClass(tt.class); got != tt.want {
+			t.Fatalf("cloudflareContainerInstanceTypeForClass(%q)=%q want %q", tt.class, got, tt.want)
+		}
+		if got := CloudflareContainerInstanceTypeForClass(tt.class); got != tt.want {
+			t.Fatalf("CloudflareContainerInstanceTypeForClass(%q)=%q want %q", tt.class, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeCloudflareContainerInstanceType(t *testing.T) {
+	for _, valid := range CloudflareContainerInstanceTypes() {
+		got, ok := NormalizeCloudflareContainerInstanceType(" " + strings.ToUpper(valid) + " ")
+		if !ok || got != valid {
+			t.Fatalf("NormalizeCloudflareContainerInstanceType(%q)=(%q,%t), want (%q,true)", valid, got, ok, valid)
+		}
+	}
+	if got, ok := NormalizeCloudflareContainerInstanceType("ccx63"); ok || got != "" {
+		t.Fatalf("NormalizeCloudflareContainerInstanceType(ccx63)=(%q,%t), want empty,false", got, ok)
+	}
+}
+
+func TestCloudflareServerTypeForConfig(t *testing.T) {
+	tests := []struct {
+		cfg  Config
+		want string
+	}{
+		{cfg: Config{Provider: "cloudflare", Class: "standard"}, want: "standard-4"},
+		{cfg: Config{Provider: "cf", Class: "large"}, want: "standard-4"},
+	}
+	for _, tt := range tests {
+		if got := serverTypeForConfig(tt.cfg); got != tt.want {
+			t.Fatalf("serverTypeForConfig(%+v)=%q want %q", tt.cfg, got, tt.want)
+		}
+	}
+}
+
 func TestServerTypeForProviderClassDirectProviders(t *testing.T) {
 	tests := []struct {
 		provider string
@@ -900,6 +1174,8 @@ func TestServerTypeForProviderClassDirectProviders(t *testing.T) {
 		{provider: "islo", class: "beast", want: ""},
 		{provider: "e2b", class: "beast", want: "base"},
 		{provider: "daytona", class: "beast", want: "snapshot"},
+		{provider: "cloudflare", class: "standard", want: "standard-4"},
+		{provider: "cf", class: "beast", want: "standard-4"},
 		{provider: "azure", class: "standard", want: "Standard_D32ads_v6"},
 		{provider: "google", class: "standard", want: "c4-standard-32"},
 		{provider: "google-cloud", class: "standard", want: "c4-standard-32"},

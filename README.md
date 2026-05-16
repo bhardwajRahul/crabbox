@@ -25,9 +25,13 @@ Supported providers:
 - [AWS EC2](docs/providers/aws.md) (`provider: aws`): brokered or direct Linux,
   native Windows, Windows WSL2, and EC2 Mac.
 - [Azure](docs/providers/azure.md) (`provider: azure`): brokered or direct
-  Linux and native Windows VMs.
+  Linux, native Windows, and Windows WSL2 VMs.
+- [Google Cloud](docs/providers/gcp.md) (`provider: gcp`): brokered or direct
+  Linux Compute Engine VMs.
 - [Hetzner Cloud](docs/providers/hetzner.md) (`provider: hetzner`): brokered or
   direct Linux VMs.
+- [Proxmox](docs/providers/proxmox.md) (`provider: proxmox`): direct Linux QEMU
+  VM clones from private Proxmox VE templates.
 - [Static SSH](docs/providers/ssh.md) (`provider: ssh`): existing Linux, macOS,
   Windows, or WSL2 hosts.
 - [Blacksmith Testbox](docs/providers/blacksmith-testbox.md)
@@ -44,6 +48,13 @@ Supported providers:
   execution.
 - [E2B](docs/providers/e2b.md) (`provider: e2b`): delegated E2B sandbox
   execution.
+- [Modal](docs/providers/modal.md) (`provider: modal`): delegated Modal
+  Sandbox execution through the local Python client.
+- [Tensorlake](docs/providers/tensorlake.md) (`provider: tensorlake`):
+  delegated Tensorlake Firecracker sandbox execution through the Tensorlake CLI.
+- [Cloudflare](docs/providers/cloudflare.md)
+  (`provider: cloudflare`): delegated Cloudflare execution through a Worker and
+  container runner.
 
 ---
 
@@ -59,6 +70,14 @@ No Homebrew? Grab a [GoReleaser archive](https://github.com/openclaw/crabbox/rel
 Prerequisites on the laptop: `git`, `ssh`, `ssh-keygen`, `rsync`, `curl`.
 
 ## Quick start
+
+The hosted broker at `https://crabbox.openclaw.ai` is restricted to the
+configured GitHub org/team. If `crabbox login` completes GitHub OAuth and then
+returns an org-membership error, use direct-provider mode for a personal cloud
+account or self-host the Worker broker with your own provider credentials and
+spend caps. See [Getting started](docs/getting-started.md#hosted-broker-access)
+and [Infrastructure](docs/infrastructure.md#self-hosted-broker-minimum) for the
+setup paths.
 
 ```sh
 # log in once per machine (stores a broker token in user config)
@@ -87,7 +106,7 @@ Every lease has a stable `cbx_...` ID and a friendly crustacean slug (`blue-lobs
 ```text
 your laptop                Cloudflare Worker            cloud provider
 -------------              ------------------           --------------
-crabbox CLI    -- HTTPS --> Fleet Durable Object  -->   Hetzner / AWS EC2 / Azure
+crabbox CLI    -- HTTPS --> Fleet Durable Object  -->   Hetzner / AWS / Azure / GCP
    |                         lease + cost state              |
    |                                                         |
    +------------ SSH + rsync to leased runner <--------------+
@@ -97,7 +116,7 @@ crabbox CLI    -- HTTPS --> Fleet Durable Object  -->   Hetzner / AWS EC2 / Azur
 - **Broker** — Cloudflare Worker at `crabbox.openclaw.ai` plus a single Durable Object. Owns provider credentials, serializes lease state, enforces active-lease and monthly spend caps, and expires stale leases by alarm. Auth is GitHub login or a shared bearer token.
 - **Runner** — a throwaway SSH machine prepared with SSH on the primary port, default `2222`, plus configured fallback ports and Crabbox's sync/run prerequisites. Linux uses Ubuntu with cloud-init and `/work/crabbox`; native Windows uses OpenSSH, Git for Windows, and `C:\crabbox`. No broker credentials live on the box. Project runtimes (Go, Node, Docker, services, secrets) come from your repo's GitHub Actions hydration, devcontainer, Nix, mise/asdf, or setup scripts — not from Crabbox.
 
-A direct-provider mode (`--provider hetzner|aws|azure` with local credentials) exists for debugging the broker itself; the brokered path is the default.
+A direct-provider mode (`--provider hetzner|aws|azure|gcp|proxmox` with local credentials) exists for debugging the broker itself or using private infrastructure; the brokered path is the default where supported.
 
 For the full mental model, see [How Crabbox Works](docs/how-it-works.md). For the doc-to-code map, see [Source Map](docs/source-map.md).
 
@@ -108,18 +127,26 @@ For the full mental model, see [How Crabbox Works](docs/how-it-works.md). For th
 - **Run observability.** Every coordinator-backed run gets an early `run_...` handle. Use `crabbox attach <run-id>` while it is active, `crabbox events <run-id> --after <seq> --limit <n>` for durable lifecycle/output events, and `crabbox logs <run-id>` for retained output after completion.
 - **Stable timing records.** `--timing-json` on `run`, `warmup`, and `actions hydrate` gives scripts one machine-readable sync/command/total timing schema across AWS, Hetzner, and Blacksmith Testboxes.
 - **Local-first workspace sync.** No clean-checkout requirement. Tracked + nonignored files only, fingerprint skip on no-op runs, sanity checks against suspicious mass deletions, optional shallow base-ref hydration for changed-test workflows.
-- **Brokered cloud.** Maintainers and agents share infra without sharing provider tokens. Hetzner, AWS EC2, and Azure are managed providers; AWS also owns Windows WSL2 and EC2 Mac targets. Linux defaults to Spot unless capacity config says otherwise. Providers fall back across compatible instance families when capacity or quota rejects a request.
-- **Azure Linux and native Windows.** `provider: azure` provisions Linux and native Windows VMs in a configurable Azure subscription using `DefaultAzureCredential` in direct mode or service-principal secrets in the broker. Crabbox creates a shared resource group, vnet, subnet, and NSG on first use, then per-lease public IPs, NICs, and VMs. Linux uses cloud-init; Windows uses VM Agent Custom Script Extension to install OpenSSH/Git and configure the Crabbox user.
+- **Brokered cloud.** Maintainers and agents share infra without sharing provider tokens. Hetzner, AWS EC2, Azure, and Google Cloud are managed providers; AWS owns EC2 Mac targets. Linux defaults to Spot unless capacity config says otherwise. Providers fall back across compatible instance families when capacity or quota rejects a request.
+- **Azure Linux and Windows.** `provider: azure` provisions Linux, native Windows, and Windows WSL2 VMs in a configurable Azure subscription using `DefaultAzureCredential` in direct mode or service-principal secrets in the broker. Crabbox creates a shared resource group, vnet, subnet, and NSG on first use, then per-lease public IPs, NICs, and VMs. Linux uses cloud-init; Windows uses VM Agent Custom Script Extension to install OpenSSH/Git and configure the Crabbox user, with optional post-SSH desktop/VNC or WSL2 bootstrap.
 - **macOS and Windows static hosts.** `provider: ssh` reuses existing machines; it does not create macOS or Windows Crabbox boxes. macOS and Windows WSL2 use the POSIX rsync path; native Windows uses PowerShell plus tar archive sync.
 - **Blacksmith Testbox wrapper.** Set `provider: blacksmith-testbox` to delegate warmup/run/list/status/stop to the Blacksmith CLI while Crabbox keeps local slugs, repo claims, timing summaries, config conventions, and portal visibility for active external runners.
 - **Namespace Devbox SSH leases.** Set `provider: namespace-devbox` to create or reuse Namespace Devboxes through the `devbox` CLI, then let Crabbox sync the dirty checkout and run commands over SSH.
 - **Semaphore CI testbox.** Set `provider: semaphore` to lease a Semaphore CI job as a testbox. Same environment as your real pipelines.
+- **Proxmox VM clones.** Set `provider: proxmox` to clone Linux QEMU templates on a private Proxmox VE cluster, bootstrap them through the QEMU guest agent, and use normal Crabbox SSH sync/run/cleanup.
 - **Sprites SSH leases.** Set `provider: sprites` to create a Sprites microVM, bootstrap OpenSSH inside it, and let Crabbox sync/run through `sprite proxy` with `crabbox ssh` support.
-- **Daytona, Islo, and E2B sandboxes.** Set `provider: daytona` for Daytona SDK/toolbox execution from a snapshot with explicit SSH access when needed, `provider: islo` for delegated Islo sandbox execution through the Islo Go SDK, or `provider: e2b` for delegated E2B sandbox execution through E2B sandbox APIs.
+- **Delegated sandbox providers.** Set `provider: daytona` for Daytona
+  SDK/toolbox execution from a snapshot with explicit SSH access when needed,
+  `provider: islo` for delegated Islo sandbox execution through the Islo Go SDK,
+  `provider: e2b` for delegated E2B sandbox execution through E2B sandbox APIs,
+  `provider: modal` for Modal Sandbox execution through the local Python client,
+  or `provider: tensorlake` for Tensorlake Firecracker sandbox execution through
+  the Tensorlake CLI.
+- **Cloudflare.** Set `provider: cloudflare` for delegated execution through a Worker runner and custom container image.
 - **Trusted AWS images.** Operators can create AMIs from active brokered AWS leases and promote a known-good image as the coordinator default.
 - **Cost guardrails.** Per-lease and monthly spend caps. Live pricing from EC2 Spot history or Hetzner server-type prices, with static fallbacks. `crabbox usage` summarizes spend by user, org, provider, and type.
 - **GitHub Actions hydration.** `crabbox actions hydrate` registers a leased box as an ephemeral Actions runner, so the repo's own workflow installs runtimes, services, and secrets. Crabbox does not parse Actions YAML.
-- **Interactive desktop and browser leases.** `--browser` provisions Chrome or Chromium for headless automation, `--desktop` provisions visible UI with tunnel-only VNC takeover on managed Linux, AWS native Windows, and AWS EC2 Mac targets. `crabbox desktop doctor` checks session, VNC, input tooling, browser, ffmpeg, screen size, screenshot capture, and WebVNC portal state; `desktop click/paste/type/key` provide first-class input helpers so agents do not hand-roll brittle `xdotool` snippets. `desktop proof` launches a terminal smoke and captures metadata, screenshot, diagnostics, MP4, and a contact-sheet PNG in one bundle that can be published to a PR; MP4 capture is Linux/native Windows only for now. QA systems such as Mantis own scenario logic, screenshots, and PR evidence. Azure native Windows is SSH/sync/run only; use AWS for managed Windows desktop/WSL2 or `provider: ssh` for an existing Windows host.
+- **Interactive desktop and browser leases.** `--browser` provisions Chrome or Chromium for headless automation, `--desktop` provisions visible UI with tunnel-only VNC takeover on managed Linux, native Windows on AWS or Azure, and AWS EC2 Mac targets. `crabbox desktop doctor` checks session, VNC, input tooling, browser, ffmpeg, screen size, screenshot capture, and WebVNC portal state; `desktop click/paste/type/key` provide first-class input helpers so agents do not hand-roll brittle `xdotool` snippets. `desktop proof` launches a terminal smoke and captures metadata, screenshot, diagnostics, MP4, and a contact-sheet PNG in one bundle that can be published to a PR; MP4 capture is Linux/native Windows only for now. QA systems such as Mantis own scenario logic, screenshots, and PR evidence. Windows WSL2 is for POSIX sync/run/actions hydration, not a separate VNC desktop; existing Windows hosts belong on `provider: ssh`.
 - **Authenticated web portal.** Browser login opens owner-scoped and explicitly shared lease/run views with searchable, paginated tables, muted external-runner rows, compact provider/OS/access icons, relative sortable times, recent run logs/events, WebVNC, code-server, and Linux lease/run telemetry charts. `crabbox share` can grant a lease to one user or the owning org, and the lease page exposes the same sharing controls for owners/managers. WebVNC is preferred for human demos because it preloads the VNC password; `webvnc status` reports local daemon, tunnel, target reachability, bridge/viewer state, recent events, URL/password, and native VNC fallback, while `webvnc reset` restarts only the selected lease's WebVNC/input stack. Admin sessions can also see non-owned runner leases behind `mine`/`system` filters.
 - **Agent workspace evidence.** History, logs, events, telemetry, JUnit summaries, screenshots, recordings, artifacts, and PR publishing make autonomous work reviewable instead of only ephemeral terminal output.
 - **Hardened coordinator auth.** GitHub browser login, owner-scoped leases, admin-only routes, optional GitHub team allowlists, Cloudflare Access JWT verification, and service-token support keep normal use and operator automation separate.
@@ -128,7 +155,9 @@ For the full mental model, see [How Crabbox Works](docs/how-it-works.md). For th
 
 ## Machine classes
 
-`beast` is the default. Both providers fall back across an ordered list of instance types.
+`beast` is the default for providers that expose class-based managed capacity.
+The providers below fall back across ordered instance-type lists unless `--type`
+pins a specific provider-native size.
 
 ```text
 Hetzner    standard  ccx33, cpx62, cx53
@@ -158,7 +187,8 @@ Azure      standard  Standard_D32ads_v6, Standard_D32ds_v6, Standard_F32s_v2, th
            large     Standard_D96ads_v6, Standard_D96ds_v6, then 64/48-vCPU fallbacks
            beast     Standard_D192ds_v6, Standard_D128ds_v6, then 96/64-vCPU fallbacks
 
-Azure Win  standard  Standard_D2ads_v6, Standard_D2ds_v6, Standard_D2ads_v5, Standard_D2ds_v5, Standard_D2as_v6
+Azure Win/
+WSL2       standard  Standard_D2ads_v6, Standard_D2ds_v6, Standard_D2ads_v5, Standard_D2ds_v5, Standard_D2as_v6
            fast      Standard_D4ads_v6, Standard_D4ds_v6, Standard_D4ads_v5, Standard_D4ds_v5, Standard_D4as_v6
            large     Standard_D8ads_v6, Standard_D8ds_v6, Standard_D8ads_v5, Standard_D8ds_v5, Standard_D8as_v6
            beast     Standard_D16ads_v6, Standard_D16ds_v6, Standard_D16ads_v5, Standard_D16ds_v5, Standard_D8ads_v6
@@ -167,9 +197,18 @@ Namespace  standard  S
            fast      M
            large     L
            beast     XL
+
+Cloudflare standard  standard-4
+           fast      standard-4
+           large     standard-4
+           beast     standard-4
 ```
 
 Override with `--type` or `CRABBOX_SERVER_TYPE` for a specific instance.
+Cloudflare also accepts `lite`, `basic`, `standard-1`, `standard-2`, and
+`standard-3` as smaller explicit `--type` values; `standard-4` is the default.
+Providers without a row either use provider-native capacity settings or reject
+class/type selection.
 
 ## Configuration
 
@@ -261,6 +300,25 @@ e2b:
   workdir: crabbox
 ```
 
+Optional Modal sandbox:
+
+```yaml
+provider: modal
+modal:
+  app: crabbox
+  image: python:3.13-slim
+  workdir: /workspace/crabbox
+```
+
+Optional Tensorlake sandbox:
+
+```yaml
+provider: tensorlake
+tensorlake:
+  image: ubuntu-minimal
+  workdir: /workspace/crabbox
+```
+
 Optional Semaphore CI testbox:
 
 ```yaml
@@ -331,10 +389,27 @@ through an approved tailnet exit node. See [Tailscale](docs/features/tailscale.m
 
 Forwarded environment is intentionally narrow: `NODE_OPTIONS` and `CI`. Do not pass secrets as command-line arguments. Full env-var reference and per-command flags are in [docs/cli.md](docs/cli.md) and [docs/commands/](docs/commands/README.md).
 
+For live-secret smoke tests, use `crabbox run --env-from-profile <file>
+--allow-env NAME` so Crabbox forwards only selected names and prints redacted
+presence/length metadata, including a remote probe after upload. Add
+`--env-helper live` on POSIX SSH leases when follow-up commands should reuse a
+remote `.crabbox/env/live` wrapper. For stale warm boxes, `--full-resync`
+(alias `--fresh-sync`) resets the remote workdir before syncing instead of
+trusting the fingerprint fast path. For larger commands, use `--script <file>`
+or `--script-stdin` so the remote runner executes an uploaded file instead of
+a giant quoted shell string.
+Delegated providers may own their command transport. Blacksmith Testbox cannot
+forward CLI-side env values; Crabbox prints an explicit unsupported warning and
+the workflow should provide required secrets.
+
 For binary or terminal-hostile output, use `crabbox run --capture-stdout <path>`
-so stdout is written directly to a local file and omitted from retained run-log
-previews. If the command writes a remote artifact, add `--download remote=local`
-to copy it back after a successful run.
+or `--capture-stderr <path>` so remote streams are written directly to local
+files and omitted from retained run-log previews. Add `--preflight` for a
+remote capability snapshot, `--keep-on-failure` to SSH into the exact failed
+one-shot lease, or `--download remote=local` to copy a successful-run artifact
+back. Failed SSH-backed and Blacksmith delegated runs save local
+`.crabbox/captures/*.tar.gz` bundles by default. Captured files are not redacted
+by Crabbox.
 
 ## OpenClaw plugin
 
@@ -352,6 +427,7 @@ Durable run inspection is intentionally CLI/skill-led instead of additional plug
 # Go CLI
 go build -o bin/crabbox ./cmd/crabbox
 go test -race ./...
+scripts/test-go-modules.sh
 scripts/check-go-coverage.sh 85.0
 
 # Cloudflare Worker
@@ -367,9 +443,11 @@ npm run docs:check
 CRABBOX_LIVE=1 CRABBOX_LIVE_REPO=/path/to/openclaw scripts/live-smoke.sh
 # Add Blacksmith only for repos with a Testbox workflow.
 CRABBOX_LIVE=1 CRABBOX_LIVE_PROVIDERS=blacksmith-testbox scripts/live-smoke.sh
+# Cloudflare Containers deploy plus live smoke, when Cloudflare credentials are available.
+scripts/deploy-cloudflare-smoke.sh
 ```
 
-CI runs the full gate (gofmt, vet, race tests, coverage threshold, docs link/build check, GoReleaser snapshot, Worker lint/typecheck/tests/build) on every push and PR. Tagged pushes matching `v*` publish Go archives via GoReleaser and bump the Homebrew formula at [openclaw/homebrew-tap](https://github.com/openclaw/homebrew-tap).
+CI runs the full gate (gofmt, vet, race tests, all Go modules, coverage threshold, docs link/build check, GoReleaser snapshot, and Worker lint/typecheck/tests/build) on every push and PR. Tagged pushes matching `v*` publish Go archives via GoReleaser and bump the Homebrew formula at [openclaw/homebrew-tap](https://github.com/openclaw/homebrew-tap).
 
 Worker deployment, required secrets, and DNS routing live in [docs/infrastructure.md](docs/infrastructure.md).
 

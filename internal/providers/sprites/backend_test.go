@@ -144,6 +144,14 @@ func TestSpritesRejectsTailscale(t *testing.T) {
 	}
 }
 
+func TestSpritesRejectsUnsafeWorkRootBeforeBackend(t *testing.T) {
+	cfg := Config{Sprites: SpritesConfig{Token: "test-token", WorkRoot: "/tmp"}}
+	_, err := NewSpritesBackend(Provider{}.Spec(), cfg, Runtime{Stdout: io.Discard, Stderr: io.Discard, Exec: &recordingRunner{}})
+	if err == nil || !strings.Contains(err.Error(), "too broad") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestSpritesClientLifecycleRequests(t *testing.T) {
 	var sawCreate bool
 	var sawDelete bool
@@ -199,6 +207,40 @@ func TestSpritesClientLifecycleRequests(t *testing.T) {
 	}
 	if !sawCreate || !sawDelete {
 		t.Fatalf("sawCreate=%t sawDelete=%t", sawCreate, sawDelete)
+	}
+}
+
+func TestSpritesClientRejectsBadPagination(t *testing.T) {
+	for name, response := range map[string]spritesListResponse{
+		"missing token": {HasMore: true},
+		"repeated token": {
+			HasMore:               true,
+			NextContinuationToken: "same",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/sprites" {
+					t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+				}
+				requests++
+				_ = json.NewEncoder(w).Encode(response)
+			}))
+			defer srv.Close()
+
+			client := newSpritesClient(Config{Sprites: SpritesConfig{Token: "test-token", APIURL: srv.URL}}, Runtime{HTTP: srv.Client()})
+			_, err := client.ListSprites(context.Background(), "crabbox-")
+			if err == nil {
+				t.Fatal("expected pagination error")
+			}
+			if name == "repeated token" && requests != 2 {
+				t.Fatalf("requests=%d want 2", requests)
+			}
+			if name == "missing token" && requests != 1 {
+				t.Fatalf("requests=%d want 1", requests)
+			}
+		})
 	}
 }
 

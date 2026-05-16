@@ -13,81 +13,92 @@ import (
 )
 
 type Config struct {
-	Profile            string
-	Provider           string
-	TargetOS           string
-	WindowsMode        string
-	Desktop            bool
-	Browser            bool
-	Code               bool
-	Network            NetworkMode
-	Class              string
-	ServerType         string
-	ServerTypeExplicit bool
-	Coordinator        string
-	CoordToken         string
-	CoordAdminToken    string
-	Access             AccessConfig
-	Location           string
-	Image              string
-	AWSRegion          string
-	AWSAMI             string
-	AWSSGID            string
-	AWSSubnetID        string
-	AWSProfile         string
-	AWSRootGB          int32
-	AWSSSHCIDRs        []string
-	AWSMacHostID       string
-	AzureSubscription  string
-	AzureTenant        string
-	AzureClientID      string
-	AzureLocation      string
-	AzureResourceGroup string
-	AzureImage         string
-	AzureVNet          string
-	AzureSubnet        string
-	AzureNSG           string
-	AzureSSHCIDRs      []string
-	AzureNetwork       string
-	GCPProject         string
-	gcpProjectExplicit bool
-	GCPZone            string
-	gcpZoneExplicit    bool
-	GCPImage           string
-	gcpImageExplicit   bool
-	GCPNetwork         string
-	gcpNetworkExplicit bool
-	GCPSubnet          string
-	GCPTags            []string
-	gcpTagsExplicit    bool
-	GCPSSHCIDRs        []string
-	GCPRootGB          int64
-	gcpRootGBExplicit  bool
-	GCPServiceAccount  string
-	SSHUser            string
-	SSHKey             string
-	SSHPort            string
-	SSHFallbackPorts   []string
-	ProviderKey        string
-	WorkRoot           string
-	TTL                time.Duration
-	IdleTimeout        time.Duration
-	Sync               SyncConfig
-	EnvAllow           []string
-	Capacity           CapacityConfig
-	Actions            ActionsConfig
-	Blacksmith         BlacksmithConfig
-	Namespace          NamespaceConfig
-	Daytona            DaytonaConfig
-	E2B                E2BConfig
-	Islo               IsloConfig
-	Semaphore          SemaphoreConfig
-	Sprites            SpritesConfig
-	Tailscale          TailscaleConfig
-	Static             StaticConfig
-	Results            ResultsConfig
-	Cache              CacheConfig
-	Jobs               map[string]JobConfig
+	Profile             string
+	Provider            string
+	TargetOS            string
+	WindowsMode         string
+	Desktop             bool
+	Browser             bool
+	Code                bool
+	Network             NetworkMode
+	Class               string
+	ServerType          string
+	ServerTypeExplicit  bool
+	Coordinator         string
+	CoordToken          string
+	CoordAdminToken     string
+	Access              AccessConfig
+	Location            string
+	Image               string
+	AWSRegion           string
+	AWSAMI              string
+	AWSSnapshot         string
+	AWSSGID             string
+	AWSSubnetID         string
+	AWSProfile          string
+	AWSRootGB           int32
+	AWSSSHCIDRs         []string
+	AWSMacHostID        string
+	AzureSubscription   string
+	AzureTenant         string
+	AzureClientID       string
+	AzureLocation       string
+	AzureResourceGroup  string
+	AzureImage          string
+	AzureSnapshot       string
+	AzureOSDisk         string
+	AzureOSDiskExplicit bool
+	AzureVNet           string
+	AzureSubnet         string
+	AzureNSG            string
+	AzureSSHCIDRs       []string
+	AzureNetwork        string
+	GCPProject          string
+	gcpProjectExplicit  bool
+	GCPZone             string
+	gcpZoneExplicit     bool
+	GCPImage            string
+	gcpImageExplicit    bool
+	GCPMachineImage     string
+	GCPSnapshot         string
+	GCPNetwork          string
+	gcpNetworkExplicit  bool
+	GCPSubnet           string
+	GCPTags             []string
+	gcpTagsExplicit     bool
+	GCPSSHCIDRs         []string
+	GCPRootGB           int64
+	gcpRootGBExplicit   bool
+	GCPServiceAccount   string
+	Proxmox             ProxmoxConfig
+	SSHUser             string
+	SSHKey              string
+	SSHPort             string
+	SSHFallbackPorts    []string
+	ProviderKey         string
+	WorkRoot            string
+	TTL                 time.Duration
+	IdleTimeout         time.Duration
+	Sync                SyncConfig
+	Run                 RunConfig
+	EnvAllow            []string
+	Capacity            CapacityConfig
+	Actions             ActionsConfig
+	Blacksmith          BlacksmithConfig
+	Namespace           NamespaceConfig
+	Daytona             DaytonaConfig
+	E2B                 E2BConfig
+	Islo                IsloConfig
+	Tensorlake          TensorlakeConfig
+	Modal               ModalConfig
+	Cloudflare          CloudflareConfig
+	Semaphore           SemaphoreConfig
+	Sprites             SpritesConfig
+	Tailscale           TailscaleConfig
+	Static              StaticConfig
+	Results             ResultsConfig
+	Cache               CacheConfig
+	Jobs                map[string]JobConfig
 }
 
 type SyncConfig struct {
@@ -103,6 +114,10 @@ type SyncConfig struct {
 	FailFiles   int
 	FailBytes   int64
 	AllowLarge  bool
+}
+
+type RunConfig struct {
+	PreflightTools []string
 }
 
 type CapacityConfig struct {
@@ -177,6 +192,51 @@ type IsloConfig struct {
 	VCPUs          int
 	MemoryMB       int
 	DiskGB         int
+}
+
+type TensorlakeConfig struct {
+	APIKey         string
+	APIURL         string
+	CLIPath        string
+	Image          string
+	Snapshot       string
+	OrganizationID string
+	ProjectID      string
+	Namespace      string
+	Workdir        string
+	CPUs           float64
+	MemoryMB       int
+	DiskMB         int
+	TimeoutSecs    int
+	NoInternet     bool
+}
+
+type ModalConfig struct {
+	App     string
+	Image   string
+	Workdir string
+	Python  string
+}
+
+type CloudflareConfig struct {
+	APIURL  string
+	Token   string
+	Workdir string
+}
+
+type ProxmoxConfig struct {
+	APIURL      string
+	TokenID     string
+	TokenSecret string
+	Node        string
+	TemplateID  int
+	Storage     string
+	Pool        string
+	Bridge      string
+	User        string
+	WorkRoot    string
+	FullClone   bool
+	InsecureTLS bool
 }
 
 type SemaphoreConfig struct {
@@ -280,6 +340,7 @@ func loadConfig() (Config, error) {
 	}
 	applyEnv(&cfg)
 	canonicalizeConfigProvider(&cfg)
+	applyProviderConfigDefaults(&cfg)
 	normalizeTargetConfig(&cfg)
 	if err := validateTargetConfig(cfg); err != nil {
 		return Config{}, err
@@ -297,6 +358,18 @@ func canonicalizeConfigProvider(cfg *Config) {
 	provider, err := ProviderFor(cfg.Provider)
 	if err == nil {
 		cfg.Provider = provider.Name()
+	}
+}
+
+func applyProviderConfigDefaults(cfg *Config) {
+	if cfg.Provider != "proxmox" {
+		return
+	}
+	if cfg.Proxmox.User != "" {
+		cfg.SSHUser = cfg.Proxmox.User
+	}
+	if cfg.Proxmox.WorkRoot != "" {
+		cfg.WorkRoot = cfg.Proxmox.WorkRoot
 	}
 }
 
@@ -324,6 +397,7 @@ func baseConfig() Config {
 		AzureLocation:      "eastus",
 		AzureResourceGroup: "crabbox-leases",
 		AzureImage:         defaultAzureLinuxImage,
+		AzureOSDisk:        AzureOSDiskManaged,
 		AzureVNet:          "crabbox-vnet",
 		AzureSubnet:        "crabbox-subnet",
 		AzureNSG:           "crabbox-nsg",
@@ -388,6 +462,28 @@ func baseConfig() Config {
 			MemoryMB: 4096,
 			DiskGB:   20,
 		},
+		Tensorlake: TensorlakeConfig{
+			APIURL:   "https://api.tensorlake.ai",
+			CLIPath:  "tensorlake",
+			Workdir:  "/workspace/crabbox",
+			CPUs:     1.0,
+			MemoryMB: 1024,
+			DiskMB:   10240,
+		},
+		Modal: ModalConfig{
+			App:     "crabbox",
+			Image:   "python:3.13-slim",
+			Workdir: "/workspace/crabbox",
+			Python:  "python3",
+		},
+		Cloudflare: CloudflareConfig{
+			Workdir: "/workspace/crabbox",
+		},
+		Proxmox: ProxmoxConfig{
+			User:      "crabbox",
+			WorkRoot:  defaultPOSIXWorkRoot,
+			FullClone: true,
+		},
 		Sprites: SpritesConfig{
 			APIURL:   "https://api.sprites.dev",
 			WorkRoot: "/home/sprite/crabbox",
@@ -426,8 +522,10 @@ type fileConfig struct {
 	AWS              *fileAWSConfig           `yaml:"aws,omitempty"`
 	Azure            *fileAzureConfig         `yaml:"azure,omitempty"`
 	GCP              *fileGCPConfig           `yaml:"gcp,omitempty"`
+	Proxmox          *fileProxmoxConfig       `yaml:"proxmox,omitempty"`
 	SSH              *fileSSHConfig           `yaml:"ssh,omitempty"`
 	Sync             *fileSyncConfig          `yaml:"sync,omitempty"`
+	Run              *fileRunConfig           `yaml:"run,omitempty"`
 	Env              *fileEnvConfig           `yaml:"env,omitempty"`
 	Capacity         *fileCapacityConfig      `yaml:"capacity,omitempty"`
 	Actions          *fileActionsConfig       `yaml:"actions,omitempty"`
@@ -436,6 +534,9 @@ type fileConfig struct {
 	Daytona          *fileDaytonaConfig       `yaml:"daytona,omitempty"`
 	E2B              *fileE2BConfig           `yaml:"e2b,omitempty"`
 	Islo             *fileIsloConfig          `yaml:"islo,omitempty"`
+	Tensorlake       *fileTensorlakeConfig    `yaml:"tensorlake,omitempty"`
+	Modal            *fileModalConfig         `yaml:"modal,omitempty"`
+	Cloudflare       *fileCloudflareConfig    `yaml:"cloudflare,omitempty"`
 	Semaphore        *fileSemaphoreConfig     `yaml:"semaphore,omitempty"`
 	Sprites          *fileSpritesConfig       `yaml:"sprites,omitempty"`
 	Tailscale        *fileTailscaleConfig     `yaml:"tailscale,omitempty"`
@@ -491,6 +592,7 @@ type fileAzureConfig struct {
 	Location       string   `yaml:"location,omitempty"`
 	ResourceGroup  string   `yaml:"resourceGroup,omitempty"`
 	Image          string   `yaml:"image,omitempty"`
+	OSDisk         string   `yaml:"osDisk,omitempty"`
 	VNet           string   `yaml:"vnet,omitempty"`
 	Subnet         string   `yaml:"subnet,omitempty"`
 	NSG            string   `yaml:"nsg,omitempty"`
@@ -508,6 +610,21 @@ type fileGCPConfig struct {
 	SSHCIDRs       []string `yaml:"sshCIDRs,omitempty"`
 	RootGB         int64    `yaml:"rootGB,omitempty"`
 	ServiceAccount string   `yaml:"serviceAccount,omitempty"`
+}
+
+type fileProxmoxConfig struct {
+	APIURL      string `yaml:"apiUrl,omitempty"`
+	TokenID     string `yaml:"tokenId,omitempty"`
+	TokenSecret string `yaml:"tokenSecret,omitempty"`
+	Node        string `yaml:"node,omitempty"`
+	TemplateID  int    `yaml:"templateId,omitempty"`
+	Storage     string `yaml:"storage,omitempty"`
+	Pool        string `yaml:"pool,omitempty"`
+	Bridge      string `yaml:"bridge,omitempty"`
+	User        string `yaml:"user,omitempty"`
+	WorkRoot    string `yaml:"workRoot,omitempty"`
+	FullClone   *bool  `yaml:"fullClone,omitempty"`
+	InsecureTLS *bool  `yaml:"insecureTLS,omitempty"`
 }
 
 type fileSSHConfig struct {
@@ -535,6 +652,10 @@ type fileSyncConfig struct {
 
 type fileEnvConfig struct {
 	Allow []string `yaml:"allow,omitempty"`
+}
+
+type fileRunConfig struct {
+	PreflightTools []string `yaml:"preflightTools,omitempty"`
 }
 
 type fileCapacityConfig struct {
@@ -604,6 +725,50 @@ type fileIsloConfig struct {
 	VCPUs          int    `yaml:"vcpus,omitempty"`
 	MemoryMB       int    `yaml:"memoryMB,omitempty"`
 	DiskGB         int    `yaml:"diskGB,omitempty"`
+}
+
+type fileTensorlakeConfig struct {
+	APIURL         string  `yaml:"apiUrl,omitempty"`
+	CLIPath        string  `yaml:"cliPath,omitempty"`
+	Image          string  `yaml:"image,omitempty"`
+	Snapshot       string  `yaml:"snapshot,omitempty"`
+	OrganizationID string  `yaml:"organizationId,omitempty"`
+	ProjectID      string  `yaml:"projectId,omitempty"`
+	Namespace      string  `yaml:"namespace,omitempty"`
+	Workdir        string  `yaml:"workdir,omitempty"`
+	CPUs           float64 `yaml:"cpus,omitempty"`
+	MemoryMB       int     `yaml:"memoryMB,omitempty"`
+	DiskMB         int     `yaml:"diskMB,omitempty"`
+	TimeoutSecs    int     `yaml:"timeoutSecs,omitempty"`
+	NoInternet     *bool   `yaml:"noInternet,omitempty"`
+}
+
+type fileModalConfig struct {
+	App     string `yaml:"app,omitempty"`
+	Image   string `yaml:"image,omitempty"`
+	Workdir string `yaml:"workdir,omitempty"`
+	Python  string `yaml:"python,omitempty"`
+}
+
+type fileCloudflareConfig struct {
+	APIURL  string `yaml:"apiUrl,omitempty"`
+	Token   string `yaml:"token,omitempty"`
+	Workdir string `yaml:"workdir,omitempty"`
+}
+
+func applyCloudflareFileConfig(cfg *Config, file *fileCloudflareConfig) {
+	if file == nil {
+		return
+	}
+	if file.APIURL != "" {
+		cfg.Cloudflare.APIURL = file.APIURL
+	}
+	if file.Token != "" {
+		cfg.Cloudflare.Token = file.Token
+	}
+	if file.Workdir != "" {
+		cfg.Cloudflare.Workdir = file.Workdir
+	}
 }
 
 type fileSemaphoreConfig struct {
@@ -918,6 +1083,10 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 		if file.Azure.Image != "" {
 			cfg.AzureImage = file.Azure.Image
 		}
+		if file.Azure.OSDisk != "" {
+			cfg.AzureOSDisk = file.Azure.OSDisk
+			cfg.AzureOSDiskExplicit = true
+		}
 		if file.Azure.VNet != "" {
 			cfg.AzureVNet = file.Azure.VNet
 		}
@@ -967,6 +1136,44 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 		}
 		if file.GCP.ServiceAccount != "" {
 			cfg.GCPServiceAccount = file.GCP.ServiceAccount
+		}
+	}
+	if file.Proxmox != nil {
+		if file.Proxmox.APIURL != "" {
+			cfg.Proxmox.APIURL = file.Proxmox.APIURL
+		}
+		if file.Proxmox.TokenID != "" {
+			cfg.Proxmox.TokenID = file.Proxmox.TokenID
+		}
+		if file.Proxmox.TokenSecret != "" {
+			cfg.Proxmox.TokenSecret = file.Proxmox.TokenSecret
+		}
+		if file.Proxmox.Node != "" {
+			cfg.Proxmox.Node = file.Proxmox.Node
+		}
+		if file.Proxmox.TemplateID > 0 {
+			cfg.Proxmox.TemplateID = file.Proxmox.TemplateID
+		}
+		if file.Proxmox.Storage != "" {
+			cfg.Proxmox.Storage = file.Proxmox.Storage
+		}
+		if file.Proxmox.Pool != "" {
+			cfg.Proxmox.Pool = file.Proxmox.Pool
+		}
+		if file.Proxmox.Bridge != "" {
+			cfg.Proxmox.Bridge = file.Proxmox.Bridge
+		}
+		if file.Proxmox.User != "" {
+			cfg.Proxmox.User = file.Proxmox.User
+		}
+		if file.Proxmox.WorkRoot != "" {
+			cfg.Proxmox.WorkRoot = file.Proxmox.WorkRoot
+		}
+		if file.Proxmox.FullClone != nil {
+			cfg.Proxmox.FullClone = *file.Proxmox.FullClone
+		}
+		if file.Proxmox.InsecureTLS != nil {
+			cfg.Proxmox.InsecureTLS = *file.Proxmox.InsecureTLS
 		}
 	}
 	if file.SSH != nil {
@@ -1030,6 +1237,9 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 		if file.Sync.AllowLarge != nil {
 			cfg.Sync.AllowLarge = *file.Sync.AllowLarge
 		}
+	}
+	if file.Run != nil && len(file.Run.PreflightTools) > 0 {
+		cfg.Run.PreflightTools = normalizePreflightToolNames(file.Run.PreflightTools)
 	}
 	if file.Env != nil && len(file.Env.Allow) > 0 {
 		cfg.EnvAllow = appendUniqueStrings(nil, file.Env.Allow...)
@@ -1188,6 +1398,62 @@ func applyFileConfig(cfg *Config, file fileConfig) {
 			cfg.Islo.DiskGB = file.Islo.DiskGB
 		}
 	}
+	if file.Tensorlake != nil {
+		if file.Tensorlake.APIURL != "" {
+			cfg.Tensorlake.APIURL = file.Tensorlake.APIURL
+		}
+		if file.Tensorlake.CLIPath != "" {
+			cfg.Tensorlake.CLIPath = file.Tensorlake.CLIPath
+		}
+		if file.Tensorlake.Image != "" {
+			cfg.Tensorlake.Image = file.Tensorlake.Image
+		}
+		if file.Tensorlake.Snapshot != "" {
+			cfg.Tensorlake.Snapshot = file.Tensorlake.Snapshot
+		}
+		if file.Tensorlake.OrganizationID != "" {
+			cfg.Tensorlake.OrganizationID = file.Tensorlake.OrganizationID
+		}
+		if file.Tensorlake.ProjectID != "" {
+			cfg.Tensorlake.ProjectID = file.Tensorlake.ProjectID
+		}
+		if file.Tensorlake.Namespace != "" {
+			cfg.Tensorlake.Namespace = file.Tensorlake.Namespace
+		}
+		if file.Tensorlake.Workdir != "" {
+			cfg.Tensorlake.Workdir = file.Tensorlake.Workdir
+		}
+		if file.Tensorlake.CPUs > 0 {
+			cfg.Tensorlake.CPUs = file.Tensorlake.CPUs
+		}
+		if file.Tensorlake.MemoryMB > 0 {
+			cfg.Tensorlake.MemoryMB = file.Tensorlake.MemoryMB
+		}
+		if file.Tensorlake.DiskMB > 0 {
+			cfg.Tensorlake.DiskMB = file.Tensorlake.DiskMB
+		}
+		if file.Tensorlake.TimeoutSecs > 0 {
+			cfg.Tensorlake.TimeoutSecs = file.Tensorlake.TimeoutSecs
+		}
+		if file.Tensorlake.NoInternet != nil {
+			cfg.Tensorlake.NoInternet = *file.Tensorlake.NoInternet
+		}
+	}
+	if file.Modal != nil {
+		if file.Modal.App != "" {
+			cfg.Modal.App = file.Modal.App
+		}
+		if file.Modal.Image != "" {
+			cfg.Modal.Image = file.Modal.Image
+		}
+		if file.Modal.Workdir != "" {
+			cfg.Modal.Workdir = file.Modal.Workdir
+		}
+		if file.Modal.Python != "" {
+			cfg.Modal.Python = file.Modal.Python
+		}
+	}
+	applyCloudflareFileConfig(cfg, file.Cloudflare)
 	if file.Semaphore != nil {
 		if file.Semaphore.Host != "" {
 			cfg.Semaphore.Host = file.Semaphore.Host
@@ -1449,7 +1715,7 @@ func applyEnv(cfg *Config) {
 	cfg.AWSSGID = getenv("CRABBOX_AWS_SECURITY_GROUP_ID", cfg.AWSSGID)
 	cfg.AWSSubnetID = getenv("CRABBOX_AWS_SUBNET_ID", cfg.AWSSubnetID)
 	cfg.AWSProfile = getenv("CRABBOX_AWS_INSTANCE_PROFILE", cfg.AWSProfile)
-	cfg.AWSRootGB = int32(getenvInt("CRABBOX_AWS_ROOT_GB", int(cfg.AWSRootGB)))
+	cfg.AWSRootGB = getenvInt32("CRABBOX_AWS_ROOT_GB", cfg.AWSRootGB)
 	cfg.AWSMacHostID = getenv("CRABBOX_AWS_MAC_HOST_ID", cfg.AWSMacHostID)
 	if cidrs := os.Getenv("CRABBOX_AWS_SSH_CIDRS"); cidrs != "" {
 		cfg.AWSSSHCIDRs = splitCommaList(cidrs)
@@ -1460,6 +1726,10 @@ func applyEnv(cfg *Config) {
 	cfg.AzureLocation = getenv("CRABBOX_AZURE_LOCATION", cfg.AzureLocation)
 	cfg.AzureResourceGroup = getenv("CRABBOX_AZURE_RESOURCE_GROUP", cfg.AzureResourceGroup)
 	cfg.AzureImage = getenv("CRABBOX_AZURE_IMAGE", cfg.AzureImage)
+	if value := os.Getenv("CRABBOX_AZURE_OS_DISK"); value != "" {
+		cfg.AzureOSDisk = value
+		cfg.AzureOSDiskExplicit = true
+	}
 	cfg.AzureVNet = getenv("CRABBOX_AZURE_VNET", cfg.AzureVNet)
 	cfg.AzureSubnet = getenv("CRABBOX_AZURE_SUBNET", cfg.AzureSubnet)
 	cfg.AzureNSG = getenv("CRABBOX_AZURE_NSG", cfg.AzureNSG)
@@ -1503,6 +1773,22 @@ func applyEnv(cfg *Config) {
 	}
 	if cidrs := os.Getenv("CRABBOX_GCP_SSH_CIDRS"); cidrs != "" {
 		cfg.GCPSSHCIDRs = splitCommaList(cidrs)
+	}
+	cfg.Proxmox.APIURL = getenv("CRABBOX_PROXMOX_API_URL", cfg.Proxmox.APIURL)
+	cfg.Proxmox.TokenID = getenv("CRABBOX_PROXMOX_TOKEN_ID", cfg.Proxmox.TokenID)
+	cfg.Proxmox.TokenSecret = getenv("CRABBOX_PROXMOX_TOKEN_SECRET", cfg.Proxmox.TokenSecret)
+	cfg.Proxmox.Node = getenv("CRABBOX_PROXMOX_NODE", cfg.Proxmox.Node)
+	cfg.Proxmox.TemplateID = getenvInt("CRABBOX_PROXMOX_TEMPLATE_ID", cfg.Proxmox.TemplateID)
+	cfg.Proxmox.Storage = getenv("CRABBOX_PROXMOX_STORAGE", cfg.Proxmox.Storage)
+	cfg.Proxmox.Pool = getenv("CRABBOX_PROXMOX_POOL", cfg.Proxmox.Pool)
+	cfg.Proxmox.Bridge = getenv("CRABBOX_PROXMOX_BRIDGE", cfg.Proxmox.Bridge)
+	cfg.Proxmox.User = getenv("CRABBOX_PROXMOX_USER", cfg.Proxmox.User)
+	cfg.Proxmox.WorkRoot = getenv("CRABBOX_PROXMOX_WORK_ROOT", cfg.Proxmox.WorkRoot)
+	if value, ok := getenvBool("CRABBOX_PROXMOX_FULL_CLONE"); ok {
+		cfg.Proxmox.FullClone = value
+	}
+	if value, ok := getenvBool("CRABBOX_PROXMOX_INSECURE_TLS"); ok {
+		cfg.Proxmox.InsecureTLS = value
 	}
 	cfg.SSHUser = getenv("CRABBOX_SSH_USER", cfg.SSHUser)
 	cfg.SSHKey = getenv("CRABBOX_SSH_KEY", cfg.SSHKey)
@@ -1570,6 +1856,29 @@ func applyEnv(cfg *Config) {
 	cfg.Islo.VCPUs = getenvInt("CRABBOX_ISLO_VCPUS", cfg.Islo.VCPUs)
 	cfg.Islo.MemoryMB = getenvInt("CRABBOX_ISLO_MEMORY_MB", cfg.Islo.MemoryMB)
 	cfg.Islo.DiskGB = getenvInt("CRABBOX_ISLO_DISK_GB", cfg.Islo.DiskGB)
+	cfg.Tensorlake.APIKey = getenv("CRABBOX_TENSORLAKE_API_KEY", getenv("TENSORLAKE_API_KEY", cfg.Tensorlake.APIKey))
+	cfg.Tensorlake.APIURL = getenv("CRABBOX_TENSORLAKE_API_URL", getenv("TENSORLAKE_API_URL", cfg.Tensorlake.APIURL))
+	cfg.Tensorlake.CLIPath = getenv("CRABBOX_TENSORLAKE_CLI", cfg.Tensorlake.CLIPath)
+	cfg.Tensorlake.Image = getenv("CRABBOX_TENSORLAKE_IMAGE", cfg.Tensorlake.Image)
+	cfg.Tensorlake.Snapshot = getenv("CRABBOX_TENSORLAKE_SNAPSHOT", cfg.Tensorlake.Snapshot)
+	cfg.Tensorlake.OrganizationID = getenv("CRABBOX_TENSORLAKE_ORGANIZATION_ID", getenv("TENSORLAKE_ORGANIZATION_ID", cfg.Tensorlake.OrganizationID))
+	cfg.Tensorlake.ProjectID = getenv("CRABBOX_TENSORLAKE_PROJECT_ID", getenv("TENSORLAKE_PROJECT_ID", cfg.Tensorlake.ProjectID))
+	cfg.Tensorlake.Namespace = getenv("CRABBOX_TENSORLAKE_NAMESPACE", getenv("INDEXIFY_NAMESPACE", cfg.Tensorlake.Namespace))
+	cfg.Tensorlake.Workdir = getenv("CRABBOX_TENSORLAKE_WORKDIR", cfg.Tensorlake.Workdir)
+	cfg.Tensorlake.CPUs = getenvFloat("CRABBOX_TENSORLAKE_CPUS", cfg.Tensorlake.CPUs)
+	cfg.Tensorlake.MemoryMB = getenvInt("CRABBOX_TENSORLAKE_MEMORY_MB", cfg.Tensorlake.MemoryMB)
+	cfg.Tensorlake.DiskMB = getenvInt("CRABBOX_TENSORLAKE_DISK_MB", cfg.Tensorlake.DiskMB)
+	cfg.Tensorlake.TimeoutSecs = getenvInt("CRABBOX_TENSORLAKE_TIMEOUT_SECS", cfg.Tensorlake.TimeoutSecs)
+	if v, ok := getenvBool("CRABBOX_TENSORLAKE_NO_INTERNET"); ok {
+		cfg.Tensorlake.NoInternet = v
+	}
+	cfg.Modal.App = getenv("CRABBOX_MODAL_APP", cfg.Modal.App)
+	cfg.Modal.Image = getenv("CRABBOX_MODAL_IMAGE", cfg.Modal.Image)
+	cfg.Modal.Workdir = getenv("CRABBOX_MODAL_WORKDIR", cfg.Modal.Workdir)
+	cfg.Modal.Python = getenv("CRABBOX_MODAL_PYTHON", cfg.Modal.Python)
+	cfg.Cloudflare.APIURL = getenv("CRABBOX_CLOUDFLARE_RUNNER_URL", cfg.Cloudflare.APIURL)
+	cfg.Cloudflare.Token = getenv("CRABBOX_CLOUDFLARE_RUNNER_TOKEN", cfg.Cloudflare.Token)
+	cfg.Cloudflare.Workdir = getenv("CRABBOX_CLOUDFLARE_WORKDIR", cfg.Cloudflare.Workdir)
 	cfg.Semaphore.Host = getenv("CRABBOX_SEMAPHORE_HOST", getenv("SEMAPHORE_HOST", cfg.Semaphore.Host))
 	cfg.Semaphore.Token = getenv("CRABBOX_SEMAPHORE_TOKEN", getenv("SEMAPHORE_API_TOKEN", cfg.Semaphore.Token))
 	cfg.Semaphore.Project = getenv("CRABBOX_SEMAPHORE_PROJECT", getenv("SEMAPHORE_PROJECT", cfg.Semaphore.Project))
@@ -1665,6 +1974,9 @@ func applyEnv(cfg *Config) {
 	if envAllow := os.Getenv("CRABBOX_ENV_ALLOW"); envAllow != "" {
 		cfg.EnvAllow = splitCommaList(envAllow)
 	}
+	if tools := os.Getenv("CRABBOX_PREFLIGHT_TOOLS"); tools != "" {
+		cfg.Run.PreflightTools = normalizePreflightToolNames(splitCommaList(tools))
+	}
 }
 
 func expandUserPath(path string) string {
@@ -1700,8 +2012,14 @@ func serverTypeForConfig(cfg Config) string {
 	if cfg.Provider == "e2b" {
 		return blank(cfg.E2B.Template, "base")
 	}
+	if cfg.Provider == "modal" {
+		return blank(cfg.Modal.Image, "python:3.13-slim")
+	}
 	if cfg.Provider == "daytona" {
 		return "snapshot"
+	}
+	if cfg.Provider == "cloudflare" {
+		return cloudflareContainerInstanceTypeForClass(cfg.Class)
 	}
 	if cfg.Provider == "aws" {
 		return awsInstanceTypeCandidatesForConfig(cfg)[0]
@@ -1711,6 +2029,9 @@ func serverTypeForConfig(cfg Config) string {
 	}
 	if cfg.Provider == "gcp" {
 		return gcpMachineTypeCandidatesForClass(cfg.Class)[0]
+	}
+	if cfg.Provider == "proxmox" {
+		return proxmoxServerTypeForConfig(cfg)
 	}
 	return serverTypeForClass(cfg.Class)
 }
@@ -1728,8 +2049,14 @@ func serverTypeForProviderClass(provider, class string) string {
 	if provider == "e2b" {
 		return "base"
 	}
+	if provider == "modal" {
+		return "python:3.13-slim"
+	}
 	if provider == "daytona" {
 		return "snapshot"
+	}
+	if provider == "cloudflare" {
+		return cloudflareContainerInstanceTypeForClass(class)
 	}
 	if provider == "aws" {
 		return awsInstanceTypeCandidatesForClass(class)[0]
@@ -1740,7 +2067,17 @@ func serverTypeForProviderClass(provider, class string) string {
 	if provider == "gcp" {
 		return gcpMachineTypeCandidatesForClass(class)[0]
 	}
+	if provider == "proxmox" {
+		return "template"
+	}
 	return serverTypeForClass(class)
+}
+
+func proxmoxServerTypeForConfig(cfg Config) string {
+	if cfg.Proxmox.TemplateID > 0 {
+		return "template-" + strconv.Itoa(cfg.Proxmox.TemplateID)
+	}
+	return "template"
 }
 
 func namespaceDevboxSizeForConfig(cfg Config) string {
@@ -1769,6 +2106,44 @@ func namespaceDevboxSizeForClass(class string) string {
 		}
 		return strings.ToUpper(strings.TrimSpace(class))
 	}
+}
+
+func cloudflareContainerInstanceTypes() []string {
+	return []string{"lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"}
+}
+
+func CloudflareContainerInstanceTypes() []string {
+	return cloudflareContainerInstanceTypes()
+}
+
+func normalizeCloudflareContainerInstanceType(value string) (string, bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	for _, instanceType := range cloudflareContainerInstanceTypes() {
+		if trimmed == instanceType {
+			return instanceType, true
+		}
+	}
+	return "", false
+}
+
+func NormalizeCloudflareContainerInstanceType(value string) (string, bool) {
+	return normalizeCloudflareContainerInstanceType(value)
+}
+
+func cloudflareContainerInstanceTypeForClass(class string) string {
+	switch strings.ToLower(strings.TrimSpace(class)) {
+	case "", "standard", "fast", "large", "beast":
+		return "standard-4"
+	default:
+		if instanceType, ok := normalizeCloudflareContainerInstanceType(class); ok {
+			return instanceType
+		}
+		return strings.TrimSpace(class)
+	}
+}
+
+func CloudflareContainerInstanceTypeForClass(class string) string {
+	return cloudflareContainerInstanceTypeForClass(class)
 }
 
 func serverTypeCandidatesForClass(class string) []string {
@@ -1858,6 +2233,30 @@ func getenvInt(name string, fallback int) int {
 		return fallback
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getenvInt32(name string, fallback int32) int32 {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(n)
+}
+
+func getenvFloat(name string, fallback float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return fallback
 	}

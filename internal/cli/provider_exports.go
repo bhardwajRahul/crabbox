@@ -12,6 +12,10 @@ func ServerTypeForProviderClass(provider, class string) string {
 	return serverTypeForProviderClass(provider, class)
 }
 
+func ProxmoxServerTypeForConfig(cfg Config) string {
+	return proxmoxServerTypeForConfig(cfg)
+}
+
 func Exit(code int, format string, args ...any) ExitError {
 	return exit(code, format, args...)
 }
@@ -22,6 +26,10 @@ func ClaimLeaseForRepoProvider(leaseID, slug, provider, repoRoot string, idleTim
 
 func ResolveLeaseClaim(identifier string) (LeaseClaim, bool, error) {
 	return resolveLeaseClaim(identifier)
+}
+
+func ResolveLeaseClaimForProvider(identifier, provider string) (LeaseClaim, bool, error) {
+	return resolveLeaseClaimForProvider(identifier, provider)
 }
 
 func RemoveLeaseClaim(leaseID string) {

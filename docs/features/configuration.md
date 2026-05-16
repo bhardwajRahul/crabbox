@@ -155,10 +155,53 @@ aws:
   macHostId: h-0123456789abcdef0
 ```
 
+### Azure
+
+```yaml
+provider: azure
+azure:
+  location: eastus
+  osDisk: managed     # managed | ephemeral | auto
+```
+
+Azure uses managed `StandardSSD_LRS` OS disks by default so leases can support
+native disk-snapshot checkpoints. `ephemeral` opts into local OS disks for
+stateless leases and disables native Azure checkpoint/fork support. `auto` is
+accepted for compatibility and resolves to managed.
+
 ### Hetzner
 
 Hetzner credentials and image come from broker-side config. Repos do not need
 a `hetzner:` block unless they pin a class or location.
+
+### Google Cloud
+
+```yaml
+provider: gcp
+gcp:
+  project: example-project
+  zone: europe-west2-a
+  network: default
+  rootGB: 400
+```
+
+### Proxmox
+
+```yaml
+provider: proxmox
+proxmox:
+  apiUrl: https://pve.example.test:8006
+  tokenId: crabbox@pve!ci
+  node: pve1
+  templateId: 9000
+  storage: local-lvm
+  bridge: vmbr0
+  user: crabbox
+  workRoot: /work/crabbox
+```
+
+Put `tokenSecret` in a private config file or use
+`CRABBOX_PROXMOX_TOKEN_SECRET`; do not pass it as a command-line flag.
 
 ### Static SSH
 
@@ -222,6 +265,40 @@ e2b:
 
 Keep `E2B_API_KEY` or `CRABBOX_E2B_API_KEY` in the shell or credential
 manager. Repo config should select templates and workdirs, not hold API keys.
+
+### Modal
+
+```yaml
+provider: modal
+modal:
+  app: crabbox
+  image: python:3.13-slim
+  workdir: /workspace/crabbox
+  python: python3
+```
+
+Authenticate the local Modal Python client with `python3 -m modal setup` or
+`MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`. Repo config should select app/image and
+workdir only; tokens do not belong in YAML or command-line flags.
+
+### Cloudflare
+
+```yaml
+provider: cloudflare
+cloudflare:
+  apiUrl: https://crabbox-cloudflare-container-runner.example.workers.dev
+  workdir: /workspace/crabbox
+```
+
+Keep `CRABBOX_CLOUDFLARE_RUNNER_TOKEN` in the shell or credential manager.
+`CRABBOX_CLOUDFLARE_RUNNER_URL` can provide the runner URL from the
+environment. Repo config should select the runner URL and workdir, not hold
+bearer tokens.
+`crabbox config show` reports the runner URL, workdir, and token state as
+`cloudflare.auth` without printing the token.
+`--type` can select one of the instance types wired into the deployed runner.
+Update `worker/wrangler.cloudflare.jsonc` and redeploy the runner when changing
+available `instance_type` bindings or `max_instances`.
 
 ### Semaphore
 
@@ -291,6 +368,23 @@ env:
 `env.allow` is name-based and supports trailing wildcards. Crabbox forwards
 matching local env vars to the remote command. Secrets do not belong in
 `env.allow`; pass them through provider-side mechanisms.
+
+### Run Preflight
+
+```yaml
+run:
+  preflightTools:
+    - node
+    - bun
+    - docker
+```
+
+`run.preflightTools` configures which built-in probes `crabbox run --preflight`
+executes before the remote command. The CLI flag
+`--preflight-tools node,bun,docker` overrides this list for one run. Use
+`default` to include Crabbox's default built-ins and `none` to print only the
+workspace summary. Preflight probes only report availability; they do not
+install toolchains or mutate the machine.
 
 ### Actions
 
@@ -452,11 +546,15 @@ provider-native:
 ```text
 HCLOUD_TOKEN / HETZNER_TOKEN
 AWS_PROFILE / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
+AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_SUBSCRIPTION_ID
+GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_CLOUD_PROJECT
+CRABBOX_PROXMOX_TOKEN_ID / CRABBOX_PROXMOX_TOKEN_SECRET
 DAYTONA_API_KEY / DAYTONA_JWT_TOKEN
 BLACKSMITH_*  (read by the Blacksmith CLI)
 ISLO_API_KEY  (read by the Islo SDK)
 SEMAPHORE_API_TOKEN / CRABBOX_SEMAPHORE_TOKEN
 E2B_API_KEY / CRABBOX_E2B_API_KEY
+MODAL_TOKEN_ID / MODAL_TOKEN_SECRET
 ```
 
 ## What Belongs Where

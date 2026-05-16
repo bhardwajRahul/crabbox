@@ -6,18 +6,19 @@ Read when:
 - debugging Azure VM capacity, quotas, images, or SSH readiness;
 - changing `internal/providers/azure` or the direct Azure provisioning code.
 
-Azure is a managed provider for Linux and native Windows SSH leases. Azure
+Azure is a managed provider for Linux, native Windows, and Windows WSL2 leases. Azure
 provisions the VM, public IP, NIC, and OS disk, then Crabbox owns SSH
-readiness, sync, command execution, results, and cleanup.
+readiness, optional desktop/VNC or WSL2 bootstrap, sync, command execution,
+results, and cleanup.
 
 ## When To Use
 
 Use Azure when the team's cloud capacity lives in an Azure subscription, or
 when Microsoft tooling, Entra ID, or Azure-specific networking constraints
 make AWS or Hetzner inappropriate. Use Hetzner for cheaper Linux-only
-capacity and AWS for Windows desktop, Windows WSL2, or macOS targets.
+capacity and AWS for macOS targets.
 
-Azure supports direct mode and brokered Linux/native Windows leases. Direct
+Azure supports direct mode and brokered Linux/native Windows/WSL2 leases. Direct
 mode uses local Azure credentials. Brokered mode uses the operator-owned
 Azure service principal configured on the Worker.
 
@@ -25,8 +26,11 @@ Azure service principal configured on the Worker.
 
 ```sh
 crabbox warmup --provider azure --class beast
+crabbox warmup --provider azure --class beast --azure-os-disk ephemeral
 crabbox run --provider azure --class standard -- pnpm test
 crabbox warmup --provider azure --target windows --class standard
+crabbox warmup --provider azure --target windows --desktop --class standard
+crabbox warmup --provider azure --target windows --windows-mode wsl2 --class standard
 crabbox warmup --provider azure --desktop --browser
 crabbox ssh --provider azure --id blue-lobster
 crabbox stop --provider azure blue-lobster
@@ -34,7 +38,9 @@ crabbox cleanup --provider azure
 ```
 
 `--type` is exact (e.g. `--type Standard_D32ads_v6`). Use `--class` when SKU
-fallback is desired.
+fallback is desired. Azure leases use managed OS disks by default so native
+checkpoint/fork works without extra flags. Use `--azure-os-disk ephemeral` only
+for stateless leases that do not need native checkpoint/fork support.
 
 ## Config
 
@@ -49,6 +55,7 @@ azure:
   location: eastus
   resourceGroup: crabbox-leases
   image: Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest
+  osDisk: managed
   vnet: crabbox-vnet
   subnet: crabbox-subnet
   nsg: crabbox-nsg
@@ -73,6 +80,7 @@ CRABBOX_AZURE_CLIENT_ID
 CRABBOX_AZURE_LOCATION
 CRABBOX_AZURE_RESOURCE_GROUP
 CRABBOX_AZURE_IMAGE
+CRABBOX_AZURE_OS_DISK
 CRABBOX_AZURE_VNET
 CRABBOX_AZURE_SUBNET
 CRABBOX_AZURE_NSG
@@ -84,14 +92,22 @@ CRABBOX_AZURE_NETWORK
 the VM public IP, `private` uses the NIC private IP from the vnet. Use
 `private` when connecting through a VPN to the Azure virtual network.
 
+`azure.osDisk` / `CRABBOX_AZURE_OS_DISK` accepts `managed`, `ephemeral`, or
+`auto`. `managed` is the default and provisions a managed `StandardSSD_LRS` OS
+disk so Azure native disk-snapshot checkpoints work. `ephemeral` requires a SKU
+with ephemeral OS disk support, fails during provisioning when the selected SKU
+cannot support it, and disables native Azure checkpoint/fork support. `auto` is
+accepted for compatibility and resolves to managed.
+
 `AZURE_*` are the standard service principal env vars consumed by
 `DefaultAzureCredential`. Crabbox does not read or print the client secret.
 
 Brokered mode uses the same Azure service-principal secrets on the Worker:
 `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and
 `AZURE_SUBSCRIPTION_ID`. Operators own the resource group, vnet, subnet,
-NSG, and SSH CIDR defaults through `CRABBOX_AZURE_*` env vars. A lease
-request may override only `azureLocation` and `azureImage`.
+NSG, OS disk mode, and SSH CIDR defaults through `CRABBOX_AZURE_*` env vars. A
+lease request may override only `azureLocation`, `azureImage`, and
+`azureOSDisk`.
 
 Run `crabbox doctor --provider azure --target windows` before leasing through
 the broker. The coordinator readiness check reports missing Worker secret names
@@ -153,15 +169,24 @@ See [Authenticate Go apps to Azure services with service principals](https://lea
    `osProfile.linuxConfiguration.ssh.publicKeys` for Linux. Native Windows
    uses a Windows Server small-disk Gen2 image, Windows `osProfile` fields
    (`adminPassword`, `computerName`, and `windowsConfiguration`), and a
-   Custom Script Extension that runs the Crabbox bootstrap saved in
-   `C:\AzureData\CustomData.bin`.
-6. Query Azure Resource SKUs for the VM size. If Azure reports ephemeral OS
-   disk support, use a local ephemeral OS disk. Otherwise use a managed
-   `StandardSSD_LRS` OS disk.
+   non-rebooting Custom Script Extension that runs the initial Crabbox SSH
+   bootstrap saved in `C:\AzureData\CustomData.bin`.
+6. Choose the OS disk mode. `azure.osDisk: managed` is the default and uses a
+   managed `StandardSSD_LRS` OS disk. `azure.osDisk: ephemeral` opts into a
+   local OS disk and fails if the selected SKU cannot support it.
+   `azure.osDisk: auto` is accepted for compatibility and resolves to managed.
 7. Tag the VM, NIC, and public IP with Crabbox lease metadata.
-8. Wait for the public IP to allocate, then for SSH and `crabbox-ready`.
-9. Let core sync and run over SSH.
-10. On release/cleanup, cascade-delete VM → NIC → public IP → OS disk. The
+8. Wait for the public IP to allocate, then for SSH readiness.
+9. When `--desktop` is requested on native Windows, run the shared Windows
+   desktop bootstrap over SSH. That installs TightVNC, configures the
+   generated `crabbox` Windows login, enables auto-logon, reboots once, and
+   waits for SSH/VNC readiness.
+10. When `windows.mode=wsl2` is requested, run the shared Windows WSL2
+   bootstrap over SSH. That enables WSL/VirtualMachinePlatform/HypervisorPlatform,
+   reboots as needed, imports Ubuntu, and waits for the Linux-side
+   `crabbox-ready` check.
+11. Let core sync and run over SSH.
+12. On release/cleanup, cascade-delete VM → NIC → public IP → OS disk. The
    shared infra remains.
 
 ## Classes
@@ -175,7 +200,7 @@ large     Standard_D96ads_v6, Standard_D96ds_v6, Standard_D96ads_v5, Standard_D9
 beast     Standard_D192ds_v6, Standard_D128ds_v6, then D/F 96-vCPU and 64-vCPU fallbacks
 ```
 
-Default native Windows SKUs:
+Default native Windows and WSL2 SKUs:
 
 ```text
 standard  Standard_D2ads_v6, Standard_D2ds_v6, Standard_D2ads_v5, Standard_D2ds_v5, then Standard_D2as_v6
@@ -191,18 +216,21 @@ rejects a SKU for capacity or quota
 `capacity.fallback` starts with `on-demand`. Explicit `--type` is exact.
 The default Linux candidates mirror the AWS Linux class table's vCPU scale.
 The default Windows candidates mirror the AWS native Windows class table's
-vCPU scale. Azure native Windows support covers SSH, sync, and run; Windows
-WSL2 and macOS remain AWS or static-SSH targets.
+vCPU scale. Azure native Windows support covers SSH, sync, run, and optional
+desktop/VNC. Azure WSL2 support covers SSH, sync, run, and actions hydration
+through the POSIX WSL contract.
 
 ## Capabilities
 
 - SSH: yes.
 - Crabbox sync: yes.
-- Native Windows: yes for SSH, sync, and run.
-- Desktop / browser / code: Linux only on Azure.
+- Native Windows: yes for SSH, sync, run, and desktop/VNC.
+- Windows WSL2: yes for SSH, sync, run, and actions hydration.
+- Desktop: Linux and native Windows.
+- Browser / code: Linux only on Azure.
 - Tailscale: Linux managed leases.
-- Actions hydration: yes, Linux SSH leases.
-- Coordinator: yes, brokered Linux/native Windows leases.
+- Actions hydration: yes, Linux and Windows WSL2 leases.
+- Coordinator: yes, brokered Linux/native Windows/WSL2 leases.
 
 ## Gotchas
 
@@ -232,10 +260,10 @@ WSL2 and macOS remain AWS or static-SSH targets.
 - Azure costs are not hardcoded in Crabbox. Set `CRABBOX_COST_RATES_JSON`
   when you need exact Azure cost guardrails.
 - Azure native Windows uses Custom Script Extension because Windows custom
-  data is saved to disk but not executed by Azure provisioning. Do not add
-  rebooting bootstrap work to that extension path.
-- Azure does not provide managed Windows WSL2 or macOS through this provider.
-  Use AWS or `provider: ssh` for those targets.
+  data is saved to disk but not executed by Azure provisioning. Keep that
+  extension path non-rebooting; Windows desktop/VNC setup runs later over SSH.
+- Azure does not provide managed macOS through this provider. Use AWS or
+  `provider: ssh` for macOS targets.
 - Direct-mode cleanup is best effort. Use `crabbox cleanup --provider azure`
   to sweep expired direct leases.
 

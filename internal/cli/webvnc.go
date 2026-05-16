@@ -49,6 +49,7 @@ func (a App) webvnc(ctx context.Context, args []string) error {
 		fmt.Fprintln(fs.Output(), "  --network auto|tailscale|public")
 		fmt.Fprintln(fs.Output(), "  --local-port <port>")
 		fmt.Fprintln(fs.Output(), "  --open")
+		fmt.Fprintln(fs.Output(), "  --take-control")
 		fmt.Fprintln(fs.Output(), "  --reclaim")
 	}
 	provider := fs.String("provider", defaults.Provider, "provider: hetzner, aws, or azure")
@@ -56,6 +57,7 @@ func (a App) webvnc(ctx context.Context, args []string) error {
 	reclaim := fs.Bool("reclaim", false, "claim this lease for the current repo")
 	localPort := fs.String("local-port", "", "local VNC tunnel port")
 	openPortal := fs.Bool("open", false, "open the web portal VNC page")
+	takeControl := fs.Bool("take-control", false, "ask the portal viewer to take keyboard and mouse control after connecting")
 	daemon := fs.Bool("daemon", false, "compatibility alias for daemon start")
 	background := fs.Bool("background", false, "compatibility alias for daemon start")
 	daemonStatus := fs.Bool("status", false, "compatibility alias for daemon status")
@@ -134,7 +136,7 @@ func (a App) webvnc(ctx context.Context, args []string) error {
 		connPort = *localPort
 	}
 
-	portal := webVNCPortalURL(coord.BaseURL, leaseID, username, password)
+	portal := webVNCPortalURL(coord.BaseURL, leaseID, username, password, webVNCPortalOptions{TakeControl: *takeControl})
 	rescueCtx := rescueContext{Cfg: cfg, Target: target, LeaseID: leaseID}
 	opened := false
 	return serveWebVNCBridgePool(ctx, webVNCBridgePoolConfig{
@@ -307,6 +309,7 @@ func (a App) webVNCDaemonStart(ctx context.Context, args []string) error {
 	id := fs.String("id", "", "lease id or slug")
 	localPort := fs.String("local-port", "", "local VNC tunnel port")
 	openPortal := fs.Bool("open", false, "open the web portal VNC page")
+	takeControl := fs.Bool("take-control", false, "ask the portal viewer to take keyboard and mouse control after connecting")
 	reclaim := fs.Bool("reclaim", false, "claim this lease for the current repo")
 	targetFlags := registerTargetFlags(fs, defaults)
 	networkFlags := registerNetworkModeFlag(fs, defaults)
@@ -349,7 +352,7 @@ func (a App) webVNCDaemonStart(ctx context.Context, args []string) error {
 			bridgeID = leaseID
 		}
 	}
-	daemonArgs := webVNCBridgeArgs(cfg, target, bridgeID, *openPortal)
+	daemonArgs := webVNCBridgeArgs(cfg, target, bridgeID, *openPortal, *takeControl)
 	if strings.TrimSpace(*localPort) != "" {
 		daemonArgs = append(daemonArgs, "--local-port", strings.TrimSpace(*localPort))
 	}
@@ -502,6 +505,7 @@ func (a App) webVNCResetCommand(ctx context.Context, args []string) error {
 	provider := fs.String("provider", defaults.Provider, "provider: hetzner, aws, or azure")
 	id := fs.String("id", "", "lease id or slug")
 	openPortal := fs.Bool("open", false, "open the web portal VNC page")
+	takeControl := fs.Bool("take-control", false, "ask the portal viewer to take keyboard and mouse control after connecting")
 	targetFlags := registerTargetFlags(fs, defaults)
 	networkFlags := registerNetworkModeFlag(fs, defaults)
 	if err := parseFlags(fs, args); err != nil {
@@ -552,8 +556,8 @@ func (a App) webVNCResetCommand(ctx context.Context, args []string) error {
 		username = target.User
 	}
 	password, _ = runSSHOutput(ctx, target, vncPasswordCommand(target))
-	portal := webVNCPortalURL(coord.BaseURL, leaseID, username, password)
-	daemonArgs := webVNCBridgeArgs(cfg, target, leaseID, *openPortal)
+	portal := webVNCPortalURL(coord.BaseURL, leaseID, username, password, webVNCPortalOptions{TakeControl: *takeControl})
+	daemonArgs := webVNCBridgeArgs(cfg, target, leaseID, *openPortal, *takeControl)
 	daemonName := *id
 	if strings.TrimSpace(daemonName) == "" {
 		daemonName = leaseID
@@ -867,7 +871,7 @@ func shellBareWord(value string) bool {
 	return true
 }
 
-func webVNCBridgeArgs(cfg Config, target SSHTarget, leaseID string, openPortal bool) []string {
+func webVNCBridgeArgs(cfg Config, target SSHTarget, leaseID string, openPortal, takeControl bool) []string {
 	targetOS := firstNonBlank(target.TargetOS, cfg.TargetOS)
 	args := []string{"--provider", cfg.Provider, "--target", targetOS}
 	if cfg.Network != "" && cfg.Network != NetworkAuto {
@@ -880,6 +884,9 @@ func webVNCBridgeArgs(cfg Config, target SSHTarget, leaseID string, openPortal b
 	args = append(args, "--id", leaseID)
 	if openPortal {
 		args = append(args, "--open")
+	}
+	if takeControl {
+		args = append(args, "--take-control")
 	}
 	return args
 }
@@ -951,13 +958,17 @@ func safeWebVNCDaemonName(value string) string {
 
 func startVNCForegroundTunnel(ctx context.Context, target SSHTarget, localPort, remoteHost, remotePort string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "ssh", vncTunnelArgs(target, localPort, remoteHost, remotePort)...)
+	var output strings.Builder
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	done := make(chan error, 1)
 	go func() {
-		_ = cmd.Wait()
+		done <- cmd.Wait()
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			stopProcess(cmd)
@@ -965,6 +976,14 @@ func startVNCForegroundTunnel(ctx context.Context, target SSHTarget, localPort, 
 		}
 		if tcpReachable(ctx, "127.0.0.1", localPort, 200*time.Millisecond) {
 			return cmd, nil
+		}
+		select {
+		case err := <-done:
+			if text := strings.TrimSpace(output.String()); text != "" {
+				return nil, fmt.Errorf("%w: %s", err, text)
+			}
+			return nil, err
+		default:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -1166,7 +1185,11 @@ func webVNCAgentURLWithTicket(base, leaseID, ticket string) string {
 	return u.String()
 }
 
-func webVNCPortalURL(base, leaseID, username, password string) string {
+type webVNCPortalOptions struct {
+	TakeControl bool
+}
+
+func webVNCPortalURL(base, leaseID, username, password string, opts ...webVNCPortalOptions) string {
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
@@ -1175,13 +1198,20 @@ func webVNCPortalURL(base, leaseID, username, password string) string {
 	u.RawQuery = ""
 	u.Fragment = ""
 	u.RawFragment = ""
-	if strings.TrimSpace(username) != "" || strings.TrimSpace(password) != "" {
+	takeControl := false
+	for _, opt := range opts {
+		takeControl = takeControl || opt.TakeControl
+	}
+	if strings.TrimSpace(username) != "" || strings.TrimSpace(password) != "" || takeControl {
 		values := url.Values{}
 		if strings.TrimSpace(username) != "" {
 			values.Set("username", strings.TrimSpace(username))
 		}
 		if strings.TrimSpace(password) != "" {
 			values.Set("password", strings.TrimSpace(password))
+		}
+		if takeControl {
+			values.Set("control", "take")
 		}
 		u.RawFragment = values.Encode()
 		if fragment, err := url.PathUnescape(u.RawFragment); err == nil {

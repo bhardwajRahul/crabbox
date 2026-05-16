@@ -93,7 +93,8 @@ Delegated backends return normalized `StatusView` values. Rendering remains
 core-owned, so provider packages should not print their own `status` or `list`
 tables unless a compatibility interface explicitly asks for native output.
 
-A delegated backend must reject sync-only options that Crabbox cannot honor:
+A delegated backend must reject run/sync options that Crabbox cannot honor
+without a Crabbox-managed SSH target:
 
 ```go
 if err := cli.RejectDelegatedSyncOptions(providerName, req); err != nil {
@@ -101,9 +102,11 @@ if err := cli.RejectDelegatedSyncOptions(providerName, req); err != nil {
 }
 ```
 
-Do not pretend a delegated provider is SSH-like unless the provider has a stable
-SSH contract. If Crabbox cannot run rsync and remote commands itself, use
-`DelegatedRunBackend`.
+That helper rejects sync-only options, checksum sync, forced large sync,
+local stdout/stderr captures, failure bundles, downloads, uploaded scripts, and
+fresh PR checkouts. Do not pretend a delegated provider is SSH-like unless the
+provider has a stable SSH contract. If Crabbox cannot run rsync and remote
+commands itself, use `DelegatedRunBackend`.
 
 ### Optional Interfaces
 
@@ -144,12 +147,19 @@ Built-in providers live under `internal/providers/<name>`:
 internal/providers/all
 internal/providers/hetzner
 internal/providers/aws
+internal/providers/azure
+internal/providers/gcp
+internal/providers/proxmox
 internal/providers/ssh
 internal/providers/blacksmith
 internal/providers/namespace
 internal/providers/sprites
 internal/providers/daytona
 internal/providers/islo
+internal/providers/e2b
+internal/providers/modal
+internal/providers/semaphore
+internal/providers/tensorlake
 ```
 
 Each provider package owns registration, provider name, aliases, spec,
@@ -173,13 +183,20 @@ internal/cli/provider_coordinator.go      # brokered coordinator lease wrapper
 internal/cli/provider_labels.go           # shared direct-provider label helpers
 internal/providers/shared                 # shared direct SSH retry/touch/cleanup helpers
 internal/providers/aws                    # AWS SSH lease backend
+internal/providers/azure                  # Azure SSH lease backend
+internal/providers/gcp                    # Google Cloud SSH lease backend
 internal/providers/hetzner                # Hetzner SSH lease backend
+internal/providers/proxmox                # Proxmox VE SSH lease backend
 internal/providers/ssh                    # static SSH backend
 internal/providers/blacksmith             # Blacksmith delegated backend
 internal/providers/namespace              # Namespace Devbox SSH backend
 internal/providers/sprites                # Sprites SSH backend
 internal/providers/daytona                # Daytona SSH + delegated SDK backend
 internal/providers/islo                   # Islo delegated backend
+internal/providers/e2b                    # E2B delegated backend
+internal/providers/modal                 # Modal delegated Python-client backend
+internal/providers/semaphore              # Semaphore SSH lease backend
+internal/providers/tensorlake             # Tensorlake delegated CLI backend
 ```
 
 Provider packages may use small exported core helpers for claims, labels,
@@ -301,6 +318,10 @@ cli.FeatureDesktop
 cli.FeatureBrowser
 cli.FeatureCode
 cli.FeatureTailscale
+cli.FeatureCheckpoint
+cli.FeatureFork
+cli.FeatureRestore
+cli.FeatureSnapshot
 ```
 
 Actions runner hydration is intentionally not a provider feature. It is a core
@@ -312,6 +333,18 @@ SSH-over-Linux workflow. It requires:
 
 Only set `CoordinatorSupported` when the Crabbox coordinator can provision that
 provider. A direct-only SSH provider should use `CoordinatorNever`.
+
+Checkpoint-related features are reserved for versioned workspaces:
+
+- `FeatureCheckpoint`: provider can create a provider-aware checkpoint.
+- `FeatureFork`: provider can create a new workspace from a checkpoint.
+- `FeatureRestore`: provider can restore an existing workspace to a checkpoint.
+- `FeatureSnapshot`: provider can expose a native snapshot id for Crabbox
+  metadata.
+
+Do not set these flags for plain SSH access alone. Generic Git/archive/log
+checkpoints are core-owned and should work even when the provider advertises no
+native checkpoint features.
 
 ## Flags And Config
 

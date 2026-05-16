@@ -5,6 +5,7 @@
 ```sh
 crabbox warmup --class beast
 crabbox warmup --provider aws --class beast --market on-demand
+crabbox warmup --provider azure --class beast
 crabbox warmup --browser
 crabbox warmup --tailscale
 crabbox warmup --desktop --browser
@@ -63,10 +64,9 @@ the updated PATH.
 
 With `--provider hetzner`, managed provisioning supports Linux only. Hetzner can
 run Windows through ISO/snapshot installation flows, but Crabbox does not manage
-that path today. Use `--provider aws --target windows` for managed Windows
-desktop or WSL2, `--provider azure --target windows` for native Windows
-SSH/sync/run, or `--provider ssh --target windows` for an existing Hetzner
-Windows host.
+that path today. Use `--provider aws --target windows` or
+`--provider azure --target windows` for managed Windows desktop or WSL2, or
+`--provider ssh --target windows` for an existing Hetzner Windows host.
 
 With `--provider aws --target windows --windows-mode normal --desktop`, Crabbox
 creates a real AWS Windows Server lease. EC2Launch user data installs OpenSSH
@@ -84,7 +84,11 @@ families for this mode. Commands and sync then use the POSIX WSL contract.
 With `--provider azure --target windows`, Crabbox creates a native Windows
 Server lease, uses the Azure VM Agent Custom Script Extension to install
 OpenSSH Server and Git for Windows, and configures the `crabbox` user for
-SSH/sync/run. Azure Windows does not provision VNC/browser/WSL2.
+SSH/sync/run. Add `--desktop` to run the shared Windows desktop bootstrap over
+SSH, install TightVNC, configure auto-logon, and expose VNC through the normal
+SSH tunnel. With `--windows-mode wsl2`, Crabbox enables WSL2 over SSH and then
+uses the POSIX WSL sync/run/actions contract. Azure Windows does not provision
+browser/code.
 
 With `--provider aws --target macos --desktop`, Crabbox launches an EC2 Mac
 instance on an already allocated Dedicated Host. Set `CRABBOX_AWS_MAC_HOST_ID`
@@ -98,7 +102,7 @@ On success, `warmup` prints a concise total duration line. Add `--timing-json` t
 Flags:
 
 ```text
---provider hetzner|aws|azure|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
+--provider hetzner|aws|azure|gcp|proxmox|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
 --target linux|macos|windows
 --windows-mode normal|wsl2
 --static-host <host>
@@ -108,6 +112,7 @@ Flags:
 --profile <name>
 --class <name>
 --type <provider-type>
+--azure-os-disk managed|ephemeral|auto
 --market spot|on-demand
 --ttl <duration>
 --idle-timeout <duration>
@@ -179,6 +184,12 @@ For AWS, `--market` overrides `capacity.market` for this lease. Use
 approved only for the standard On-Demand quota. Explicit `--type` still means
 exact type: Crabbox reports quota/capacity/policy failures instead of silently
 changing capacity.
+
+Azure leases use managed `StandardSSD_LRS` OS disks by default so native
+disk-snapshot checkpoints can be created and forked. Use
+`--azure-os-disk ephemeral` only for stateless leases where native Azure
+checkpoint/fork support is not needed. `--azure-os-disk auto` is accepted for
+compatibility and resolves to managed.
 
 `--actions-runner` immediately registers the warm box as an ephemeral self-hosted GitHub Actions runner for the current repository. Most projects should prefer `crabbox actions hydrate --id <lease-id-or-slug>` after warmup because it also dispatches the workflow and waits for the ready marker.
 

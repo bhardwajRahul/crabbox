@@ -75,6 +75,28 @@ func clearConfigEnv(t *testing.T) {
 		"CRABBOX_ISLO_VCPUS",
 		"CRABBOX_ISLO_MEMORY_MB",
 		"CRABBOX_ISLO_DISK_GB",
+		"CRABBOX_TENSORLAKE_API_KEY",
+		"TENSORLAKE_API_KEY",
+		"CRABBOX_TENSORLAKE_API_URL",
+		"TENSORLAKE_API_URL",
+		"CRABBOX_TENSORLAKE_CLI",
+		"CRABBOX_TENSORLAKE_IMAGE",
+		"CRABBOX_TENSORLAKE_SNAPSHOT",
+		"CRABBOX_TENSORLAKE_ORGANIZATION_ID",
+		"TENSORLAKE_ORGANIZATION_ID",
+		"CRABBOX_TENSORLAKE_PROJECT_ID",
+		"TENSORLAKE_PROJECT_ID",
+		"CRABBOX_TENSORLAKE_NAMESPACE",
+		"INDEXIFY_NAMESPACE",
+		"CRABBOX_TENSORLAKE_WORKDIR",
+		"CRABBOX_TENSORLAKE_CPUS",
+		"CRABBOX_TENSORLAKE_MEMORY_MB",
+		"CRABBOX_TENSORLAKE_DISK_MB",
+		"CRABBOX_TENSORLAKE_TIMEOUT_SECS",
+		"CRABBOX_TENSORLAKE_NO_INTERNET",
+		"CRABBOX_CLOUDFLARE_RUNNER_URL",
+		"CRABBOX_CLOUDFLARE_RUNNER_TOKEN",
+		"CRABBOX_CLOUDFLARE_WORKDIR",
 		"CRABBOX_SEMAPHORE_HOST",
 		"SEMAPHORE_HOST",
 		"CRABBOX_SEMAPHORE_TOKEN",
@@ -101,6 +123,41 @@ func clearConfigEnv(t *testing.T) {
 		"CRABBOX_NAMESPACE_DELETE_ON_RELEASE",
 	} {
 		t.Setenv(key, "")
+	}
+}
+
+func TestRepoConfigBareEnvWildcardDoesNotForwardEveryLocalVariable(t *testing.T) {
+	clearConfigEnv(t)
+	home := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("CRABBOX_CONFIG", "")
+	t.Setenv("CRABBOX_PROVIDER", "")
+	t.Setenv("CRABBOX_DEFAULT_CLASS", "")
+	t.Setenv("CRABBOX_PROOF_API_TOKEN", "critical-secret-value")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".crabbox.yaml", []byte("env:\n  allow:\n    - '*'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := allowedEnv(cfg.EnvAllow); got["CRABBOX_PROOF_API_TOKEN"] != "" {
+		t.Fatalf("bare wildcard forwarded proof secret: %q", got["CRABBOX_PROOF_API_TOKEN"])
 	}
 }
 
@@ -214,6 +271,37 @@ islo:
   vcpus: 4
   memoryMB: 8192
   diskGB: 40
+tensorlake:
+  apiUrl: https://api.tensorlake.example.test
+  cliPath: /usr/local/bin/tl
+  image: ubuntu-22.04
+  snapshot: snap-tl
+  organizationId: org-tl
+  projectId: proj-tl
+  namespace: ns-tl
+  workdir: /workspace/crabbox-test
+  cpus: 4
+  memoryMB: 8192
+  diskMB: 30000
+  timeoutSecs: 1800
+  noInternet: true
+cloudflare:
+  apiUrl: https://cloudflare.example.test
+  token: cloudflare-token
+  workdir: /workspace/cf-test
+proxmox:
+  apiUrl: https://pve.example.test:8006
+  tokenId: crabbox@pve!test
+  tokenSecret: proxmox-secret
+  node: pve1
+  templateId: 9000
+  storage: local-lvm
+  pool: crabbox
+  bridge: vmbr1
+  user: runner
+  workRoot: /work/proxmox
+  fullClone: false
+  insecureTLS: true
 semaphore:
   host: semaphore.example.test
   token: semaphore-token
@@ -234,6 +322,10 @@ static:
 results:
   junit:
     - junit.xml
+run:
+  preflightTools:
+    - node
+    - bun
 cache:
   pnpm: true
   npm: false
@@ -326,6 +418,15 @@ ssh:
 	if cfg.Islo.BaseURL != "https://islo.example.test" || cfg.Islo.Image != "docker.io/library/ubuntu:24.04" || cfg.Islo.Workdir != "crabbox" || cfg.Islo.GatewayProfile != "default" || cfg.Islo.SnapshotName != "snap-ready" || cfg.Islo.VCPUs != 4 || cfg.Islo.MemoryMB != 8192 || cfg.Islo.DiskGB != 40 {
 		t.Fatalf("islo config not loaded: %#v", cfg.Islo)
 	}
+	if cfg.Tensorlake.APIURL != "https://api.tensorlake.example.test" || cfg.Tensorlake.CLIPath != "/usr/local/bin/tl" || cfg.Tensorlake.Image != "ubuntu-22.04" || cfg.Tensorlake.Snapshot != "snap-tl" || cfg.Tensorlake.OrganizationID != "org-tl" || cfg.Tensorlake.ProjectID != "proj-tl" || cfg.Tensorlake.Namespace != "ns-tl" || cfg.Tensorlake.Workdir != "/workspace/crabbox-test" || cfg.Tensorlake.CPUs != 4 || cfg.Tensorlake.MemoryMB != 8192 || cfg.Tensorlake.DiskMB != 30000 || cfg.Tensorlake.TimeoutSecs != 1800 || !cfg.Tensorlake.NoInternet {
+		t.Fatalf("tensorlake config not loaded: %#v", cfg.Tensorlake)
+	}
+	if cfg.Cloudflare.APIURL != "https://cloudflare.example.test" || cfg.Cloudflare.Token != "cloudflare-token" || cfg.Cloudflare.Workdir != "/workspace/cf-test" {
+		t.Fatalf("cloudflare config not loaded: %#v", cfg.Cloudflare)
+	}
+	if cfg.Proxmox.APIURL != "https://pve.example.test:8006" || cfg.Proxmox.TokenID != "crabbox@pve!test" || cfg.Proxmox.TokenSecret != "proxmox-secret" || cfg.Proxmox.Node != "pve1" || cfg.Proxmox.TemplateID != 9000 || cfg.Proxmox.Storage != "local-lvm" || cfg.Proxmox.Pool != "crabbox" || cfg.Proxmox.Bridge != "vmbr1" || cfg.Proxmox.User != "runner" || cfg.Proxmox.WorkRoot != "/work/proxmox" || cfg.Proxmox.FullClone || !cfg.Proxmox.InsecureTLS {
+		t.Fatalf("proxmox config not loaded: %#v", cfg.Proxmox)
+	}
 	if cfg.Semaphore.Host != "semaphore.example.test" || cfg.Semaphore.Token != "semaphore-token" || cfg.Semaphore.Project != "crabbox" || cfg.Semaphore.Machine != "f1-standard-4" || cfg.Semaphore.OSImage != "ubuntu2404" || cfg.Semaphore.IdleTimeout != "15m" {
 		t.Fatalf("semaphore config not loaded: %#v", cfg.Semaphore)
 	}
@@ -337,6 +438,9 @@ ssh:
 	}
 	if len(cfg.Results.JUnit) != 1 || cfg.Results.JUnit[0] != "junit.xml" {
 		t.Fatalf("results config not loaded: %#v", cfg.Results)
+	}
+	if len(cfg.Run.PreflightTools) != 2 || cfg.Run.PreflightTools[0] != "node" || cfg.Run.PreflightTools[1] != "bun" {
+		t.Fatalf("run config not loaded: %#v", cfg.Run)
 	}
 	if !cfg.Cache.Pnpm || cfg.Cache.Npm || !cfg.Cache.Docker || !cfg.Cache.Git || cfg.Cache.MaxGB != 120 || !cfg.Cache.PurgeOnRelease {
 		t.Fatalf("cache config not loaded: %#v", cfg.Cache)
@@ -396,6 +500,7 @@ func TestEnvOverridesConfig(t *testing.T) {
 	t.Setenv("CRABBOX_TTL", "3h")
 	t.Setenv("CRABBOX_IDLE_TIMEOUT", "20m")
 	t.Setenv("CRABBOX_AWS_SSH_CIDRS", "198.51.100.7/32,203.0.113.8/32")
+	t.Setenv("CRABBOX_AZURE_OS_DISK", "managed")
 	t.Setenv("CRABBOX_AZURE_SSH_CIDRS", "198.51.100.9/32,203.0.113.10/32")
 	t.Setenv("CRABBOX_GCP_PROJECT", "crabbox-project")
 	t.Setenv("CRABBOX_GCP_ZONE", "europe-west2-b")
@@ -454,6 +559,40 @@ func TestEnvOverridesConfig(t *testing.T) {
 	t.Setenv("CRABBOX_ISLO_VCPUS", "8")
 	t.Setenv("CRABBOX_ISLO_MEMORY_MB", "16384")
 	t.Setenv("CRABBOX_ISLO_DISK_GB", "80")
+	t.Setenv("TENSORLAKE_API_KEY", "tl-api-file")
+	t.Setenv("CRABBOX_TENSORLAKE_API_KEY", "tl-api-env")
+	t.Setenv("TENSORLAKE_API_URL", "https://api.tl-file.example")
+	t.Setenv("CRABBOX_TENSORLAKE_API_URL", "https://api.tl-env.example")
+	t.Setenv("CRABBOX_TENSORLAKE_CLI", "/opt/tl/bin/tensorlake")
+	t.Setenv("CRABBOX_TENSORLAKE_IMAGE", "ubuntu:tl-env")
+	t.Setenv("CRABBOX_TENSORLAKE_SNAPSHOT", "snap-tl-env")
+	t.Setenv("TENSORLAKE_ORGANIZATION_ID", "org-tl-file")
+	t.Setenv("CRABBOX_TENSORLAKE_ORGANIZATION_ID", "org-tl-env")
+	t.Setenv("TENSORLAKE_PROJECT_ID", "proj-tl-file")
+	t.Setenv("CRABBOX_TENSORLAKE_PROJECT_ID", "proj-tl-env")
+	t.Setenv("INDEXIFY_NAMESPACE", "ns-tl-file")
+	t.Setenv("CRABBOX_TENSORLAKE_NAMESPACE", "ns-tl-env")
+	t.Setenv("CRABBOX_TENSORLAKE_WORKDIR", "/workspace/tl-env")
+	t.Setenv("CRABBOX_TENSORLAKE_CPUS", "2.5")
+	t.Setenv("CRABBOX_TENSORLAKE_MEMORY_MB", "4096")
+	t.Setenv("CRABBOX_TENSORLAKE_DISK_MB", "20480")
+	t.Setenv("CRABBOX_TENSORLAKE_TIMEOUT_SECS", "900")
+	t.Setenv("CRABBOX_TENSORLAKE_NO_INTERNET", "true")
+	t.Setenv("CRABBOX_CLOUDFLARE_RUNNER_URL", "https://cloudflare-env.example")
+	t.Setenv("CRABBOX_CLOUDFLARE_RUNNER_TOKEN", "cloudflare-env-token")
+	t.Setenv("CRABBOX_CLOUDFLARE_WORKDIR", "/workspace/cloudflare-env")
+	t.Setenv("CRABBOX_PROXMOX_API_URL", "https://pve-env.example:8006")
+	t.Setenv("CRABBOX_PROXMOX_TOKEN_ID", "runner@pve!env")
+	t.Setenv("CRABBOX_PROXMOX_TOKEN_SECRET", "proxmox-env-secret")
+	t.Setenv("CRABBOX_PROXMOX_NODE", "pve-env")
+	t.Setenv("CRABBOX_PROXMOX_TEMPLATE_ID", "9100")
+	t.Setenv("CRABBOX_PROXMOX_STORAGE", "ceph-env")
+	t.Setenv("CRABBOX_PROXMOX_POOL", "pool-env")
+	t.Setenv("CRABBOX_PROXMOX_BRIDGE", "vmbr2")
+	t.Setenv("CRABBOX_PROXMOX_USER", "runner-env")
+	t.Setenv("CRABBOX_PROXMOX_WORK_ROOT", "/work/proxmox-env")
+	t.Setenv("CRABBOX_PROXMOX_FULL_CLONE", "false")
+	t.Setenv("CRABBOX_PROXMOX_INSECURE_TLS", "true")
 	t.Setenv("SEMAPHORE_HOST", "semaphore-file.example.test")
 	t.Setenv("CRABBOX_SEMAPHORE_HOST", "semaphore-env.example.test")
 	t.Setenv("SEMAPHORE_API_TOKEN", "semaphore-token-file")
@@ -495,6 +634,7 @@ func TestEnvOverridesConfig(t *testing.T) {
 	t.Setenv("CRABBOX_SYNC_TIMEOUT", "45m")
 	t.Setenv("CRABBOX_SYNC_ALLOW_LARGE", "true")
 	t.Setenv("CRABBOX_ENV_ALLOW", "CI,NODE_OPTIONS,CUSTOM_*")
+	t.Setenv("CRABBOX_PREFLIGHT_TOOLS", "node,bun,docker")
 	path := userConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -518,6 +658,12 @@ func TestEnvOverridesConfig(t *testing.T) {
 	}
 	if len(cfg.AzureSSHCIDRs) != 2 || cfg.AzureSSHCIDRs[0] != "198.51.100.9/32" || cfg.AzureSSHCIDRs[1] != "203.0.113.10/32" {
 		t.Fatalf("AzureSSHCIDRs=%v", cfg.AzureSSHCIDRs)
+	}
+	if cfg.AzureOSDisk != "managed" {
+		t.Fatalf("AzureOSDisk=%q", cfg.AzureOSDisk)
+	}
+	if !cfg.AzureOSDiskExplicit {
+		t.Fatal("AzureOSDiskExplicit=false, want true")
 	}
 	if cfg.GCPProject != "crabbox-project" || cfg.GCPZone != "europe-west2-b" || cfg.GCPNetwork != "crabbox-net" || cfg.GCPSubnet != "crabbox-subnet" || cfg.GCPRootGB != 900 || cfg.GCPServiceAccount != "runner@crabbox-project.iam.gserviceaccount.com" {
 		t.Fatalf("unexpected gcp env: project=%s zone=%s network=%s subnet=%s root=%d service=%s", cfg.GCPProject, cfg.GCPZone, cfg.GCPNetwork, cfg.GCPSubnet, cfg.GCPRootGB, cfg.GCPServiceAccount)
@@ -555,6 +701,15 @@ func TestEnvOverridesConfig(t *testing.T) {
 	if cfg.Islo.APIKey != "islo-api-env" || cfg.Islo.BaseURL != "https://islo-env.example" || cfg.Islo.Image != "ubuntu:env" || cfg.Islo.Workdir != "env-workdir" || cfg.Islo.GatewayProfile != "env-gateway" || cfg.Islo.SnapshotName != "env-snapshot" || cfg.Islo.VCPUs != 8 || cfg.Islo.MemoryMB != 16384 || cfg.Islo.DiskGB != 80 {
 		t.Fatalf("unexpected islo env: %#v", cfg.Islo)
 	}
+	if cfg.Tensorlake.APIKey != "tl-api-env" || cfg.Tensorlake.APIURL != "https://api.tl-env.example" || cfg.Tensorlake.CLIPath != "/opt/tl/bin/tensorlake" || cfg.Tensorlake.Image != "ubuntu:tl-env" || cfg.Tensorlake.Snapshot != "snap-tl-env" || cfg.Tensorlake.OrganizationID != "org-tl-env" || cfg.Tensorlake.ProjectID != "proj-tl-env" || cfg.Tensorlake.Namespace != "ns-tl-env" || cfg.Tensorlake.Workdir != "/workspace/tl-env" || cfg.Tensorlake.CPUs != 2.5 || cfg.Tensorlake.MemoryMB != 4096 || cfg.Tensorlake.DiskMB != 20480 || cfg.Tensorlake.TimeoutSecs != 900 || !cfg.Tensorlake.NoInternet {
+		t.Fatalf("unexpected tensorlake env: %#v", cfg.Tensorlake)
+	}
+	if cfg.Cloudflare.APIURL != "https://cloudflare-env.example" || cfg.Cloudflare.Token != "cloudflare-env-token" || cfg.Cloudflare.Workdir != "/workspace/cloudflare-env" {
+		t.Fatalf("unexpected cloudflare env: %#v", cfg.Cloudflare)
+	}
+	if cfg.Proxmox.APIURL != "https://pve-env.example:8006" || cfg.Proxmox.TokenID != "runner@pve!env" || cfg.Proxmox.TokenSecret != "proxmox-env-secret" || cfg.Proxmox.Node != "pve-env" || cfg.Proxmox.TemplateID != 9100 || cfg.Proxmox.Storage != "ceph-env" || cfg.Proxmox.Pool != "pool-env" || cfg.Proxmox.Bridge != "vmbr2" || cfg.Proxmox.User != "runner-env" || cfg.Proxmox.WorkRoot != "/work/proxmox-env" || cfg.Proxmox.FullClone || !cfg.Proxmox.InsecureTLS {
+		t.Fatalf("unexpected proxmox env: %#v", cfg.Proxmox)
+	}
 	if cfg.Semaphore.Host != "semaphore-env.example.test" || cfg.Semaphore.Token != "semaphore-token-env" || cfg.Semaphore.Project != "semaphore-project-env" || cfg.Semaphore.Machine != "f1-standard-env" || cfg.Semaphore.OSImage != "ubuntu-env" || cfg.Semaphore.IdleTimeout != "22m" {
 		t.Fatalf("unexpected semaphore env: %#v", cfg.Semaphore)
 	}
@@ -581,6 +736,9 @@ func TestEnvOverridesConfig(t *testing.T) {
 	}
 	if len(cfg.EnvAllow) != 3 || cfg.EnvAllow[2] != "CUSTOM_*" {
 		t.Fatalf("unexpected env allow: %#v", cfg.EnvAllow)
+	}
+	if len(cfg.Run.PreflightTools) != 3 || cfg.Run.PreflightTools[1] != "bun" {
+		t.Fatalf("unexpected preflight tools: %#v", cfg.Run.PreflightTools)
 	}
 }
 
@@ -854,6 +1012,14 @@ func TestEnvHelperBranches(t *testing.T) {
 	}
 	if got := getenvInt("CRABBOX_MISSING_INT", 7); got != 7 {
 		t.Fatalf("missing int fallback=%d", got)
+	}
+	t.Setenv("CRABBOX_INT32", "2147483647")
+	t.Setenv("CRABBOX_INT32_OVERFLOW", "2147483648")
+	if got := getenvInt32("CRABBOX_INT32", 7); got != 2147483647 {
+		t.Fatalf("int32=%d", got)
+	}
+	if got := getenvInt32("CRABBOX_INT32_OVERFLOW", 7); got != 7 {
+		t.Fatalf("overflow int32 fallback=%d", got)
 	}
 
 	for _, tc := range []struct {

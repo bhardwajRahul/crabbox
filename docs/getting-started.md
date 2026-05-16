@@ -48,6 +48,36 @@ crabbox whoami
 
 Confirms the resolved owner, org, broker URL, and selected provider.
 
+### Hosted Broker Access
+
+The hosted broker at `https://crabbox.openclaw.ai` is for users who pass that
+broker's configured GitHub org/team allowlist. A completed GitHub OAuth flow can
+still be rejected when your account is outside that allowlist.
+
+For a personal or third-party installation, choose one path:
+
+- Use direct-provider mode with your own local cloud credentials when you want a
+  quick private test lane and can accept local cleanup/state instead of broker
+  usage history and shared spend caps.
+- Self-host the Worker broker when you want broker-owned provider credentials,
+  active-lease limits, monthly spend caps, `crabbox usage`, cleanup alarms, and
+  a shared team endpoint.
+- Request access only if the hosted broker operator has a defined onboarding
+  path for your org; the public default is not an open community broker.
+
+Direct-provider examples:
+
+```sh
+crabbox doctor --provider hetzner
+crabbox run --provider hetzner -- pnpm test
+```
+
+Self-hosting starts with the Worker/Durable Object deployment, provider secrets,
+auth config, and budget limits in
+[Infrastructure](infrastructure.md#self-hosted-broker-minimum). GitHub OAuth is
+optional only for shared-token automation; browser login needs a GitHub OAuth
+app and at least one allowed org/team setting.
+
 If you are running Crabbox in a CI environment that cannot open a browser,
 use shared-token auth:
 

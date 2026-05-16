@@ -8,10 +8,10 @@ Read when:
 - adjusting SSH port fallbacks for restrictive operator networks.
 
 A Crabbox lease can be reachable through more than one network plane.
-Brokered Linux leases can join a Tailscale tailnet, brokered AWS Windows and
-EC2 Mac leases stay public, and static SSH targets can be on either depending
-on how the operator configured them. The CLI picks one plane per command and
-prints which it picked.
+Brokered Linux leases can join a Tailscale tailnet, brokered AWS/Azure Windows
+and EC2 Mac leases stay public, and static SSH targets can be on either
+depending on how the operator configured them. The CLI picks one plane per
+command and prints which it picked.
 
 ## Modes
 
@@ -59,7 +59,8 @@ the address is already on the tailnet.
 ## Public Reachability
 
 Brokered AWS Linux, AWS Windows, AWS Mac, Azure Linux, Azure native Windows,
-Hetzner Linux, Daytona, and Islo leases all expose at least one public address.
+Google Cloud, Hetzner Linux, Proxmox, Daytona, and Islo leases all expose at
+least one dialable address.
 Crabbox stores the public address on the server record and uses it whenever
 the network mode resolves to `public`.
 
@@ -69,6 +70,8 @@ limited to the configured CIDRs or the request source IP. Hetzner managed
 leases use the cloud firewall attached to the project; the broker keeps it
 limited to the operator's IPs. Azure managed leases use the configured network
 security group and `azure.sshCIDRs`.
+Proxmox uses the first non-loopback IPv4 address reported by the QEMU guest
+agent, so the address can be private if the selected bridge is private.
 
 If your client IP changes during a long warmup, the existing security group
 rule may not include the new IP. Re-running `crabbox status` adds the

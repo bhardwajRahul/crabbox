@@ -35,9 +35,10 @@ Read when:
 - [Provider backends](../provider-backends.md): contract reference for backend interfaces and registration.
 - [Authoring a provider](provider-authoring.md): step-by-step guide to writing a new provider.
 - [AWS](aws.md): EC2 Linux, Windows, WSL2, EC2 Mac, capacity, AMIs, and security groups.
-- [Azure](azure.md): Azure Linux/native Windows, shared infra, capacity, and cleanup.
+- [Azure](azure.md): Azure Linux, Windows, WSL2, shared infra, capacity, and cleanup.
 - [Google Cloud](../providers/gcp.md): GCP Compute Engine Linux SSH leases.
 - [Hetzner](hetzner.md): Linux-only managed Hetzner behavior, classes, and cleanup.
+- [Proxmox](../providers/proxmox.md): direct Proxmox VE Linux QEMU VM clones.
 - [Blacksmith Testbox](blacksmith-testbox.md): delegated Testbox backend behavior.
 - [Namespace Devbox](namespace-devbox.md): Namespace Devbox SSH leases with Crabbox sync/run.
 - [Namespace Devbox setup](namespace-devbox-setup.md): CLI install, auth token profile, and live checks.
@@ -46,6 +47,8 @@ Read when:
 - [Daytona](daytona.md): Daytona SDK/toolbox sandbox leases with optional short-lived SSH access.
 - [Islo](islo.md): delegated Islo sandbox runs using the Islo Go SDK.
 - [E2B](e2b.md): delegated E2B sandbox runs using E2B sandbox APIs.
+- [Modal](../providers/modal.md): delegated Modal Sandbox runs using the local Modal Python client.
+- [Tensorlake](../providers/tensorlake.md): delegated Tensorlake Firecracker sandbox runs using the Tensorlake CLI.
 
 ## Runners and reachability
 
@@ -62,6 +65,7 @@ Read when:
 - [Jobs](jobs.md): named repo-local warmup, hydrate, run, and cleanup workflows.
 - [Actions hydration](actions-hydration.md): let GitHub Actions prepare a runner, then sync local work into that workspace.
 - [Capsules](capsules.md): local-first replay manifests for GitHub Actions failures.
+- [Checkpoints](checkpoints.md): save, restore, and fork reusable remote workspaces.
 - [Interactive desktop and VNC](interactive-desktop-vnc.md): VNC hub, support matrix, tunnel model, and QA boundaries.
 - [Artifacts](artifacts.md): screenshots, video, trimmed GIFs, logs, metadata, templates, and PR publishing.
 - [Linux VNC](vnc-linux.md), [Windows VNC](vnc-windows.md), [macOS VNC](vnc-macos.md): OS-specific desktop setup and troubleshooting.
@@ -94,6 +98,7 @@ Read when:
 - [stop](../commands/stop.md)
 - [actions](../commands/actions.md)
 - [capsule](../commands/capsule.md)
+- [checkpoint](../commands/checkpoint.md)
 - [cleanup](../commands/cleanup.md)
 - [config](../commands/config.md)
 - [login](../commands/login.md)

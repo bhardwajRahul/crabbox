@@ -6,11 +6,17 @@
 crabbox run --id blue-lobster -- pnpm test:changed:max
 crabbox run --class beast -- pnpm check
 crabbox run --provider aws --class beast --market on-demand -- pnpm check
+crabbox run --provider azure --class beast -- pnpm check
 crabbox run --tailscale -- pnpm check
 crabbox run --id blue-lobster --network tailscale -- pnpm test
 crabbox run --browser -- google-chrome --headless --version
 crabbox run --desktop --browser --shell 'echo "$DISPLAY"; "$BROWSER" --version'
 crabbox run --id blue-lobster --shell 'pnpm install --frozen-lockfile && pnpm test'
+crabbox run --id blue-lobster --script ./scripts/live-smoke.sh
+crabbox run --env-from-profile ~/.project-live.profile --allow-env API_TOKEN --script ./scripts/live-smoke.sh
+crabbox run --id blue-lobster --full-resync -- pnpm check:changed
+crabbox run --id blue-lobster --env-from-profile ~/.project-live.profile --allow-env OPENAI_API_KEY --env-helper live -- ./.crabbox/env/live pnpm test:live
+crabbox run --fresh-pr acme/app#123 --script ./scripts/e2e-smoke.sh
 crabbox run --id cbx_abcdef123456 --junit junit.xml -- go test ./...
 crabbox run --provider blacksmith-testbox --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-job test -- pnpm test
 crabbox run --provider namespace-devbox --namespace-image builtin:base -- pnpm test
@@ -22,6 +28,7 @@ crabbox run --provider e2b --e2b-template base -- pnpm test
 crabbox run --provider ssh --target macos --static-host mac-studio.local -- xcodebuild test
 crabbox run --provider ssh --target windows --windows-mode normal --static-host win-dev.local -- dotnet test
 crabbox run --provider ssh --target windows --windows-mode normal --static-host win-dev.local --shell 'Write-Output ("BROWSER=" + $env:BROWSER)'
+crabbox run --provider ssh --target windows --windows-mode normal --static-host win-dev.local --script ./scripts/windows-smoke.ps1 -- -Mode smoke
 crabbox run --provider ssh --target windows --windows-mode wsl2 --static-host win-dev.local -- pnpm test
 ```
 
@@ -82,7 +89,41 @@ metadata exists and SSH is reachable, `tailscale` fails if the tailnet path is
 not available, and `public` forces the provider host. See
 [Tailscale](../features/tailscale.md).
 
-Sync uses `git ls-files --cached --others --exclude-standard` to build a file manifest, then feeds that manifest to rsync over SSH. That means tracked files plus nonignored untracked files sync, while `.git`, ignored local build output, dependency folders, `.crabboxignore` patterns, `sync.exclude` patterns, and common caches stay out of the transfer. Crabbox records a local/remote sync fingerprint and skips rsync when the tracked commit plus manifest and dirty metadata have not changed. Use `--checksum` when you need a paranoid checksum scan, and `--debug` to print sync timing, progress, and itemized rsync output.
+Sync uses `git ls-files --cached --others --exclude-standard` to build a file manifest, then feeds that manifest to rsync over SSH. That means tracked files plus nonignored untracked files sync, while `.git`, ignored local build output, dependency folders, `.crabboxignore` patterns, `sync.exclude` patterns, and common caches stay out of the transfer. Default excludes also cover common generated churn such as `.ignored`, `.vite`, `playwright-report`, `test-results`, and local `.crabbox` log/capture directories. Crabbox records a local/remote sync fingerprint and skips rsync when the tracked commit plus manifest and dirty metadata have not changed. Use `--full-resync` (alias `--fresh-sync`) when a warm lease smells stale: Crabbox deletes the remote workdir, skips the fingerprint fast path, reseeds Git when possible, and uploads the checkout from scratch. Use `--checksum` when you need a paranoid checksum scan, and `--debug` to print sync timing, progress, and itemized rsync output.
+
+Use `--script <file>` or `--script-stdin` for multi-line remote commands.
+Crabbox uploads the script into `.crabbox/scripts/` under the remote workdir,
+runs it as a file, and includes that script directory in failure bundles. A
+shebang is honored on POSIX targets; scripts without a shebang run through
+`bash`. Native Windows targets run uploaded scripts through Windows PowerShell,
+and `--script-stdin` is treated as a PowerShell script. When a native Windows
+script path does not already end in `.ps1`, Crabbox adds that extension before
+uploading so `powershell.exe -File` can execute it normally.
+Trailing command arguments after `--` are passed to the script. This is a
+direct SSH-run feature; delegated providers reject it before reading stdin.
+
+Use `--env-from-profile <file>` with `--allow-env <name>` for live secrets.
+Crabbox parses simple profile lines without executing the profile, forwards
+only allowed names, and prints redacted presence/length metadata instead of
+values. `--allow-env` is repeatable and also accepts comma-separated names.
+Native Windows env-profile handoff files are uploaded as UTF-8 and imported
+with PowerShell UTF-8 decoding, so non-ASCII profile values are preserved.
+POSIX SSH targets also probe the uploaded profile from inside the remote
+workdir and print redacted remote presence metadata before the command runs.
+Add `--env-helper <name>` to persist a reusable helper at
+`.crabbox/env/<name>` for that lease; the helper sources the matching profile
+and then execs the command you pass to it. Persist helpers only on boxes you
+control, because the profile remains on the remote workdir until you delete it
+or reset the lease.
+
+Use `--fresh-pr <owner/repo#number>` to skip local dirty sync and create a
+fresh remote GitHub PR checkout. `--fresh-pr <number>` uses the current
+repository's GitHub origin, including common SSH and credentialed HTTPS origin
+forms. GitHub PR URLs are accepted only for `github.com`; GitHub Enterprise or
+other hosts are rejected so Crabbox does not clone the wrong public repository.
+Add `--apply-local-patch` only when the local `git diff --binary HEAD` should
+be applied on top of the PR checkout. `--fresh-pr` needs the SSH-run sync path;
+delegated providers and native Windows targets reject it.
 
 For `provider=ssh`, `target=macos` and `target=windows windows.mode=wsl2`
 use the same POSIX rsync flow. Native Windows mode uses PowerShell over OpenSSH
@@ -91,9 +132,26 @@ GitHub Actions runner registration remain Linux-only.
 
 On native Windows, plain argv is best for one executable such as `dotnet test`.
 Use `--shell` for multi-statement PowerShell snippets, env inspection, or
-commands that need PowerShell expression syntax.
+commands that need PowerShell expression syntax. Use `--script <file.ps1>` for
+longer PowerShell runs that should be uploaded and recorded with the run.
+Crabbox writes uploaded Windows scripts as UTF-8 with a byte-order mark when the
+input has no BOM, which keeps Windows PowerShell 5.1 from treating non-ASCII
+source as the system ANSI code page.
 
-Before rsync starts, Crabbox prints the candidate file count and byte estimate. Large syncs warn or fail according to `sync.warnFiles`, `sync.warnBytes`, `sync.failFiles`, and `sync.failBytes`; use `--force-sync-large` or `sync.allowLarge: true` only when the transfer size is intentional. Quiet rsync runs print a heartbeat, and `sync.timeout` kills stalled syncs.
+Before rsync starts, Crabbox prints the candidate file count and byte estimate. Large syncs warn or fail according to `sync.warnFiles`, `sync.warnBytes`, `sync.failFiles`, and `sync.failBytes`; use `--force-sync-large` or `sync.allowLarge: true` only when the transfer size is intentional. Quiet rsync runs print a heartbeat; after several minutes without visible progress the heartbeat includes a concrete retry hint. `sync.timeout` kills stalled syncs and suggests `--full-resync` or a fresh lease.
+Large sync warnings also print the top source directories by file count plus a hint to update `.crabboxignore` or `sync.exclude`.
+
+Before sync, `run` prints a compact context block with run ID, portal/log URLs,
+lease ID, slug, provider, SSH target, remote workdir, and whether the workspace
+is raw or Actions-hydrated. Add `--preflight` to print a remote capability
+snapshot before the command runs. POSIX targets report the remote user, current
+directory, sudo/apt availability, Node, pnpm, Docker, and bubblewrap. Native
+Windows targets report the user, current directory, Windows PowerShell version,
+execution policy, git, tar, Node, pnpm, global `core.longpaths`, temp directory,
+and whether `pwsh` is available. The probe runs from the command workdir and
+sources the Actions handoff env file when present. Raw workspaces with Actions
+hydration configured also print the exact `crabbox actions hydrate ...`
+suggestion and whether the selected provider/target supports it.
 
 At the end of every command, `run` prints a one-line summary with sync duration, command duration, total duration, whether sync was skipped by fingerprint, and the remote exit code.
 
@@ -101,13 +159,40 @@ Use `--capture-stdout <path>` when stdout is binary or terminal-hostile. Crabbox
 writes the remote stdout bytes directly to the local file, leaves stderr on the
 terminal, and skips stdout run-log/event capture. This is useful for Windows
 native probes that emit images, Sixel frames, ZIPs, or other byte streams.
+Delegated providers reject local capture flags because they own command
+transport.
+
+Use `--capture-stderr <path>` the same way for remote stderr. Crabbox diagnostics
+still print to the terminal; only the remote command's stderr stream is mirrored
+to the local file and omitted from retained run-log/event capture.
+
+When the remote command exits non-zero, Crabbox writes a local-only
+`.crabbox/captures/*.tar.gz` failure bundle by default. SSH-backed bundles
+include the uploaded script directory, redacted env/config summaries, timing
+JSON, command stdout/stderr, common debug paths such as `test-results`,
+`playwright-report`, `coverage`, JUnit XML files, nearby `*.log` files, and a
+generic gateway log tail when a known gateway log path exists. Blacksmith
+delegated bundles include stdout/stderr plus timing and redacted env/config
+metadata. Implicit stdout/stderr entries are capped to keep automatic bundles
+bounded; explicit `--capture-stdout` / `--capture-stderr` files are included as
+caller-created local files. `--capture-on-fail` remains accepted as a
+compatibility alias. Crabbox does not redact captured files; the caller owns
+redaction before sharing them.
+
+Use `--keep-on-failure` for interactive debugging of a newly acquired lease. On
+non-zero exit, Crabbox skips the normal one-shot release, prints inspect/SSH/stop
+commands for the exact failed box, and leaves it alive until explicit stop or
+the configured idle/TTL expiry. Existing `--id` leases already remain alive, but
+the flag still makes the intent visible in the command line.
 
 Use repeatable `--download remote=local` when the command writes proof files on
 the box. Downloads run only after a successful remote command, paths are
 resolved relative to the remote workdir unless absolute, and Windows paths use
 `=` instead of `:` so drive letters remain unambiguous.
+Crabbox rejects local output path collisions between stdout capture, stderr
+capture, and downloads before command execution.
 
-Use `--timing-json` to emit a final JSON timing record with provider, lease ID, sync phases, command duration, total duration, exit code, and Actions run URL when available. In `blacksmith-testbox` mode, sync is reported as delegated in the same schema.
+Use `--timing-json` to emit a final JSON timing record with provider, lease ID, sync phases, command phases, command duration, total duration, exit code, and Actions run URL when available. Commands can emit phase markers on stdout or stderr as `CRABBOX_PHASE:<name>`; Crabbox records those as `commandPhases` without removing the marker line from output. In `blacksmith-testbox` mode, sync is reported as delegated in the same schema.
 
 Before the first rsync into a Git checkout, Crabbox tries to seed the remote worktree from the local `origin` remote so the first sync is a dirty-tree overlay instead of a full source upload. Project-specific excludes can live in `.crabboxignore` or `sync.exclude` in `crabbox.yaml` / `.crabbox.yaml`; env forwarding and base ref belong in config.
 
@@ -119,11 +204,49 @@ Add `--junit <path>` or configure `results.junit` to attach JUnit XML summaries 
 
 Use `crabbox sync-plan` to inspect the same local manifest without leasing a box when a sync estimate looks unexpectedly large.
 
+## Preflight
+
+`--preflight` prints a target-specific capability snapshot after sync and
+before the remote command. It is diagnostic only: Crabbox does not install
+tools, change the machine, or fail the run just because a tool is missing.
+Install logic belongs in Actions hydration, a prebaked image, a devcontainer,
+Nix/mise/asdf, or the command/script you run.
+
+By default, Crabbox checks common language and infrastructure tools plus
+OS-specific basics. Default generic probes are `git`, `tar`, `node`, `npm`,
+`corepack`, `pnpm`, `yarn`, `bun`, and `docker`; `uv` is available as an
+additional built-in. Linux/WSL-style POSIX probes also include `sudo`, `apt`,
+and `bubblewrap`; native Windows probes include `powershell`,
+`execution_policy`, `longpaths`, `temp`, and `pwsh`.
+
+Use `--preflight-tools` to replace the default tool list for one run:
+
+```sh
+crabbox run --preflight --preflight-tools node,bun,docker -- bun test
+crabbox run --preflight --preflight-tools default,uv -- node --test
+crabbox run --preflight --preflight-tools none -- ./smoke.sh
+```
+
+`default` expands to Crabbox's default built-ins; `none` keeps only the
+workspace summary. Unknown tool names fail before leasing so typos do not hide
+missing diagnostics. Unsupported OS-specific probes are skipped for the current
+target.
+
+Configure the default per repo:
+
+```yaml
+run:
+  preflightTools:
+    - node
+    - bun
+    - docker
+```
+
 Flags:
 
 ```text
 --id <lease-id-or-slug>
---provider hetzner|aws|azure|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
+--provider hetzner|aws|azure|gcp|proxmox|ssh|blacksmith-testbox|namespace-devbox|semaphore|sprites|daytona|islo|e2b
 --target linux|macos|windows
 --windows-mode normal|wsl2
 --static-host <host>
@@ -133,6 +256,7 @@ Flags:
 --profile <name>
 --class <name>
 --type <provider-type>
+--azure-os-disk managed|ephemeral|auto
 --market spot|on-demand
 --ttl <duration>
 --idle-timeout <duration>
@@ -147,14 +271,25 @@ Flags:
 --tailscale-exit-node-allow-lan-access
 --network auto|tailscale|public
 --keep
+--keep-on-failure
 --no-sync
 --sync-only
 --force-sync-large
 --shell
+--script <file>
+--script-stdin
+--fresh-pr <owner/repo#number|url|number>
+--apply-local-patch
+--allow-env <name>
+--env-from-profile <file>
 --checksum
 --debug
 --junit <comma-separated remote XML paths>
+--preflight
+--preflight-tools <comma-separated tool names>
 --capture-stdout <local path>
+--capture-stderr <local path>
+--capture-on-fail
 --download <remote=local>
 --reclaim
 --timing-json
@@ -195,4 +330,14 @@ For AWS one-shot leases, `--market` overrides `capacity.market` for this run.
 Explicit `--type` keeps exact-type semantics; Crabbox reports why that type
 failed rather than falling back to a different size.
 
-Blacksmith Testbox mode does not support `--sync-only`; Blacksmith owns its own sync behavior.
+Azure one-shot leases use managed `StandardSSD_LRS` OS disks by default so they
+can become native checkpoint sources. Use `--azure-os-disk ephemeral` only for
+stateless leases where native Azure checkpoint/fork support is not needed.
+`--azure-os-disk auto` is accepted for compatibility and resolves to managed.
+
+Delegated providers such as Blacksmith Testbox, Daytona `run`, Islo, and E2B
+own command transport. They reject SSH-run-only features including
+`--capture-stdout`, `--capture-stderr`, `--capture-on-fail`, `--download`,
+`--script`, `--script-stdin`, and `--fresh-pr`. Provider-specific docs note any
+extra sync limitations. `--keep-on-failure` is supported for one-shot delegated
+runs that Crabbox would otherwise stop after a failed command.

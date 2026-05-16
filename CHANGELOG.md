@@ -1,22 +1,128 @@
 # Changelog
 
-## 0.11.1 - Unreleased
+## 0.14.1 - Unreleased
 
 ### Added
 
-- Added `crabbox azure login` so direct Azure users can persist the active `az login` subscription, tenant, and location without manually exporting service-principal environment variables. Thanks @galiniliev.
-- Added `azure.network` / `CRABBOX_AZURE_NETWORK` so Azure direct leases can SSH through private VNet addresses when using VPN/private-network access. Thanks @galiniliev.
+- Added `crabbox capsule` for local GitHub Actions failure replay manifests, including capture, inspect, replay, promotion, and documentation for how capsules compose with actions hydration and checkpoints. Thanks @zozo123.
+- Added an AWS orphan-audit script for trusted operators to find Crabbox-tagged EC2 instances left behind in old provider accounts after credential or account rotation.
+- Added a broker-side AWS orphan sweep that periodically scans configured AWS capacity regions from the Durable Object alarm and can terminate confirmed Crabbox-tagged EC2 orphans.
+- Added `--take-control` for WebVNC portal handoffs so opened browser viewers can automatically become the keyboard and mouse controller after connecting.
 
 ### Changed
 
-- Documented Islo's `islo ssh --setup` host-alias flow for ad-hoc SSH access to Islo sandboxes. Thanks @zozo123.
+- Clarified AWS security guardrail docs so IAM Access Analyzer external-access analyzers are created in every configured capacity region, while S3 Block Public Access and IAM password policy remain account-level controls.
+
+### Fixed
+
+- Fixed brokered Azure leases so the CLI only sends `azureOSDisk` when the user explicitly configures it, preserving the coordinator default while keeping new Azure leases checkpointable by default. Thanks @jwmoss.
+- Fixed managed Windows bootstraps so native Windows leases skip desktop/VNC setup unless `--desktop` is requested, while WSL2 leases keep their Windows core and Linux setup paths separate. Thanks @jwmoss.
+- Fixed WebVNC `--take-control` handoff links so the portal keeps retrying the automatic control claim until the opened viewer is registered as an observer.
+- Fixed WebVNC portal click forwarding so controller clicks reach the remote desktop while preserving focus and browser context-menu suppression.
+
+## 0.14.0 - 2026-05-15
+
+### Added
+
+- Added `crabbox admin lease-audit` so operators can compare expired brokered AWS lease records against live cloud instance state and fail automation when a record still maps to a live instance.
+- Added `crabbox checkpoint` native disk-snapshot checkpoints for brokered AWS, Azure, and GCP Linux leases, optional provider image checkpoints via `--strategy image`, local workspace archives for generic POSIX SSH leases, inspect/list/delete flows, archive restore, and checkpoint forks into fresh leases.
+- Added checkpoint audit and cleanup management with `crabbox checkpoint list --verify`, `inspect --verify`, and `prune --older-than`.
+- Added `provider: cloudflare` delegated runs for Cloudflare Containers through a Worker runner, including archive sync, warm containers, local claim cleanup, and deployment docs. Thanks @altaywtf.
+- Added Cloudflare runner deploy-smoke tooling, CI coverage for the container runner Go module, and redacted `crabbox config show` output for Cloudflare runner auth.
+- Added `crabbox list --refresh` so local Cloudflare claims can be checked against live runner state on demand.
+- Added brokered provider snapshot/image deletion for AWS EBS snapshots and AMIs, Azure managed disk snapshots and managed images, and GCP disk snapshots and machine images.
+- Added Modal and Tensorlake to the top-level provider docs and delegated sandbox configuration examples. Thanks @stainlu.
+- Added provider feature flags for workspace checkpoint, fork, restore, and native snapshot capabilities. Thanks @stainlu.
+
+### Changed
+
+- Improved checkpoint documentation with clearer native vs archive distinction, workflow mechanics, security warnings, and command reference examples.
+
+### Fixed
+
+- Fixed delegated Blacksmith Testbox warmup/run flows so successful allocations refresh the coordinator runner portal instead of waiting for a later manual list.
+- Fixed Code bridge upstream URL handling so browser-controlled paths cannot select a non-loopback upstream target, and clamped `CRABBOX_AWS_ROOT_GB` parsing to valid `int32` values.
+- Fixed `crabbox admin lease-audit --fail-on-live` so recently terminated AWS instances returned by `DescribeInstances` do not fail cleanup automation as live resources.
+- Fixed checkpoint archive restores so large archives stream over SSH without buffering the full tarball in memory and unpack through a per-restore remote temp file. Thanks @stainlu.
+- Fixed Daytona toolbox archive sync so failed remote extracts still remove the uploaded `/tmp/crabbox-*.tgz` archive. Thanks @stainlu.
+- Fixed Islo exec-upload fallback cleanup so failed archive decodes or extracts still remove temporary upload files. Thanks @stainlu.
+- Fixed Cloudflare runner URL validation so configured runner URLs cannot include query or fragment components that corrupt API request paths. Thanks @stainlu.
+- Fixed Cloudflare stop so missing runner containers prune their stale local claims instead of leaving users to run cleanup manually. Thanks @stainlu.
+- Fixed the Crabbox plugin provider schema so current providers and aliases such as `modal`, `tensorlake`, and `cf` can be selected. Thanks @stainlu.
+- Fixed coordinator TTL cleanup so provider deletion failures keep leases active with retry metadata instead of silently expiring while cloud instances continue running.
+- Fixed direct AWS security-group maintenance so stale Crabbox-owned SSH ingress rules are pruned before adding the current source CIDRs.
+- Fixed E2B sync cleanup so remote upload archives are removed even when extraction fails. Thanks @stainlu.
+- Fixed Hetzner Cloud server-list parsing so `private_net` arrays from the API no longer break list, doctor, warmup, or reused-run flows. Thanks @muqsitnawaz.
+- Fixed installed tagged builds so `crabbox --version` and proof metadata report the Go module build version instead of the development fallback. Thanks @stainlu.
+- Fixed Modal sync cleanup so remote upload archives are removed even when extraction fails. Thanks @stainlu.
+- Fixed native provider checkpoint creation so AWS, Azure, and GCP snapshot/image checkpoints flush source filesystem writes before calling the provider API.
+- Fixed `crabbox actions hydrate --id tbx_...` so Blacksmith Testbox IDs skip owned-cloud runner registration instead of failing on GitHub self-hosted-runner permissions.
+- Fixed Tensorlake timing JSON so delegated runs include the lease slug and reused sandboxes preserve the stored claim slug. Thanks @stainlu.
+- Fixed Tensorlake workdir validation so broad sandbox paths are rejected before sync or command execution. Thanks @stainlu.
+
+## 0.13.0 - 2026-05-13
+
+### Added
+
+- Added `provider: modal` delegated runs for Modal Sandboxes through the local Modal Python client, including archive sync, env allowlist forwarding, docs, and no-live-credential tests.
+- Added `crabbox run --full-resync` / `--fresh-sync` to reset stale remote workdirs before syncing, plus `--env-helper` for reusable profile-backed env wrappers on POSIX SSH leases.
+- Added native Windows support for `crabbox run --script` / `--script-stdin` and a real native Windows `--preflight` probe.
+- Added configurable `crabbox run --preflight` tool probes via `--preflight-tools`, `CRABBOX_PREFLIGHT_TOOLS`, and `run.preflightTools`.
+
+### Changed
+
+- Improved sync and SSH watchdog output so long quiet syncs and dead SSH waits include concrete retry/replace hints.
+- Clarified hosted broker access for non-allowlisted users and documented the minimum self-hosted broker setup. Thanks @alan-mathison-enigma.
+
+### Fixed
+
+- Fixed AWS broker security-group maintenance so stale Crabbox-owned SSH ingress rules are pruned before adding the current source CIDRs. Thanks @obviyus.
+- Fixed Proxmox VM bootstrap to wait for the guest IP and bootstrap over SSH after clone/start, avoiding fragile guest-agent exec behavior. Thanks @mine-13-zoom.
+- Fixed AWS Windows WSL2 exact `--type` requests so instance families without nested virtualization fail before leasing with a targeted repair hint.
+- Fixed coordinator-backed AWS acquisition so readiness failures delete the just-created instance before retrying, while CLI retries still require an explicit cleanup signal.
+- Fixed coordinator-backed acquisition so repeated confirmed stale AWS instance cleanups get a larger retry budget instead of failing after the second stale instance.
+- Fixed `crabbox code` on leases that fall back from SSH port 2222 to 22, and improved foreground tunnel startup errors to include SSH failure details.
+- Fixed `crabbox run --preflight --preflight-tools none` so it prints only the workspace summary without running remote probes.
+- Fixed native Windows `crabbox run --preflight` so user and cwd diagnostics are always printed alongside configurable tool probes.
+- Fixed native Windows `--script` and `--env-from-profile` uploads so non-ASCII PowerShell source and profile values stay UTF-8 under Windows PowerShell.
+- Fixed native Windows `--env-from-profile` uploads so allowed profile values are written relative to the synced workdir and failures include the remote PowerShell error.
+
+## 0.12.0 - 2026-05-12
+
+### Added
+
+- Added Azure native Windows desktop/VNC and Windows WSL2 lease support, matching the AWS Windows capability boundary. Thanks @jwmoss.
+- Added `provider: proxmox` for direct Proxmox VE Linux QEMU VM leases, including template clone, cloud-init SSH key injection, guest-agent bootstrap, docs, and cleanup support.
+- Added `provider: tensorlake` delegated runs for Tensorlake Firecracker sandboxes through the `tensorlake` CLI, including archive sync, env allowlist forwarding, docs, and live-provider coverage. Thanks @zozo123.
+- Added `crabbox run --preflight`, `--capture-stderr`, automatic failure bundles, env-forwarding summaries, and `CRABBOX_PHASE:<name>` timing markers for easier live/provider run debugging.
+- Added `crabbox run --keep-on-failure` so failed one-shot runs can leave the exact lease available for SSH inspection until idle/TTL expiry.
+- Added `crabbox run --script <file>` and `--script-stdin` so larger remote commands can be uploaded and executed as files instead of quoted shell strings.
+- Added `crabbox run --env-from-profile <file>` and repeatable `--allow-env <name>` for redacted, first-class live-secret forwarding from local profile files.
+- Added `crabbox run --fresh-pr <owner/repo#number>` for fresh remote GitHub PR checkouts, with optional `--apply-local-patch`.
+- Added `crabbox azure login` so direct Azure users can persist the active `az login` subscription, tenant, and location without manually exporting service-principal environment variables. Thanks @galiniliev.
+- Added `azure.network` / `CRABBOX_AZURE_NETWORK` so Azure direct leases can SSH through private VNet addresses when using VPN/private-network access. Thanks @galiniliev.
+- Added `scripts/proxmox-build-template.sh` to build a Crabbox-ready Ubuntu 24.04 Proxmox template from a public cloud image. Thanks @VACInc.
+
+### Changed
+
+- Changed sync guardrails to count the dirty delta when local changes are present while still printing the full candidate size, making dirty-worktree iteration less noisy.
+- Expanded default sync excludes for common generated churn such as `.ignored`, `.vite`, `playwright-report`, `test-results`, and local `.crabbox` log/capture directories, and added top-directory hints for large sync candidates.
+- Changed automatic failure-bundle stdout/stderr capture to cap implicit temp logs while still allowing explicit `--capture-stdout` / `--capture-stderr` files for full local streams.
+- Documented `--fresh-pr ... --apply-local-patch` as the preferred fast path for PR iteration from noisy local checkouts.
 - Documented Azure CLI login setup, private-network SSH selection, and regional constraints for reused Azure VNet/subnet/NSG resources. Thanks @galiniliev.
+- Clarified that Blacksmith delegated runs cannot forward CLI-side `--env-from-profile` values and should use workflow-side secrets.
+- Documented Islo's `islo ssh --setup` host-alias flow for ad-hoc SSH access to Islo sandboxes. Thanks @zozo123.
 
 ### Fixed
 
 - Fixed shared-token coordinator auth so caller-supplied `X-Crabbox-Owner` and `X-Crabbox-Org` headers cannot select the authenticated owner/org. Thanks @Hinotoi-agent.
 - Fixed Code, WebVNC, and Egress bridge ticket creation so `use`-shared lease users cannot mint lease-side bridge-agent tickets without manage access. Thanks @Hinotoi-agent.
+- Fixed repo-local `env.allow: ["*"]` so it no longer forwards every local environment variable to remote commands. Thanks @Hinotoi-agent.
 - Fixed Windows SSH sync by disabling unsupported OpenSSH ControlMaster multiplexing and preferring WSL rsync/path conversion when available. Thanks @galiniliev.
+- Fixed Tensorlake slug resolution so stale claims from other providers cannot shadow an active Tensorlake sandbox slug.
+- Fixed Sprites and Namespace Devbox work-root validation so broad roots are rejected before create/prepare flows. Thanks @stainlu.
+- Fixed Sprites list pagination so missing or repeated continuation tokens fail instead of spinning or accepting malformed pages. Thanks @stainlu.
+- Fixed Namespace Devbox prepare error reporting so prepare failures are not hidden behind earlier SSH config fallback errors. Thanks @stainlu.
 
 ## 0.11.0 - 2026-05-11
 

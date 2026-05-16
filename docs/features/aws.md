@@ -16,7 +16,7 @@ debugging.
 | Target | Managed | Notes |
 | --- | --- | --- |
 | Linux | Yes | Spot by default; On-Demand optional; cloud-init bootstrap. |
-| Windows native | Yes | EC2Launch, OpenSSH, Git for Windows, TightVNC, archive sync, first-network flyout suppression. |
+| Windows native | Yes | EC2Launch, OpenSSH, Git for Windows, archive sync; optional TightVNC/autologon with `--desktop`. |
 | Windows WSL2 | Yes | Nested virtualization on C8i/M8i/R8i families; POSIX sync through WSL. |
 | macOS | Yes | EC2 Mac Dedicated Host id required; On-Demand only. |
 
@@ -90,6 +90,10 @@ AWS macOS
 all       mac2.metal unless `--type` is set
 ```
 
+Exact AWS Windows WSL2 `--type` values must come from nested-virtualization
+families. Crabbox rejects unsupported families such as M7 or T3 before it asks
+AWS/coordinator for a lease; omit `--type` to let class fallback choose.
+
 ## Broker Secrets And Env
 
 Worker secrets:
@@ -116,6 +120,10 @@ CRABBOX_AWS_INSTANCE_PROFILE
 CRABBOX_AWS_ROOT_GB
 CRABBOX_AWS_SSH_CIDRS
 CRABBOX_AWS_MAC_HOST_ID
+CRABBOX_AWS_ORPHAN_SWEEP_ENABLED
+CRABBOX_AWS_ORPHAN_SWEEP_DELETE
+CRABBOX_AWS_ORPHAN_SWEEP_INTERVAL_SECONDS
+CRABBOX_AWS_ORPHAN_SWEEP_GRACE_SECONDS
 CRABBOX_CAPACITY_REGIONS
 CRABBOX_CAPACITY_AVAILABILITY_ZONES
 CRABBOX_CAPACITY_HINTS
@@ -129,6 +137,40 @@ Crabbox imports or reuses an EC2 key pair, creates or reuses the
 only SSH ports to configured CIDRs or the detected request source. VNC stays
 behind the SSH tunnel. Supplying `CRABBOX_AWS_SECURITY_GROUP_ID` makes ingress
 policy your responsibility.
+
+Account-level AWS guardrails should match the regions Crabbox can allocate in:
+
+- S3 account-level Block Public Access is an account-wide control. Enable all
+  four settings once per AWS account; AWS propagates the setting across regions.
+- The IAM account password policy is global IAM account state. Set it once per
+  AWS account when IAM users are present.
+- IAM Access Analyzer external-access analyzers are regional. Create one in
+  every region where Crabbox can launch or use supported AWS resources, not only
+  the primary `CRABBOX_AWS_REGION`.
+
+For the public coordinator's default capacity pool, that means:
+
+```sh
+for region in eu-west-1 eu-west-2 eu-central-1 us-east-1 us-west-2; do
+  if ! aws accessanalyzer get-analyzer \
+    --region "$region" \
+    --analyzer-name crabbox-external-access >/dev/null 2>&1; then
+    aws accessanalyzer create-analyzer \
+      --region "$region" \
+      --analyzer-name crabbox-external-access \
+      --type ACCOUNT
+  fi
+done
+```
+
+The brokered coordinator can also sweep AWS orphans itself. When
+`CRABBOX_AWS_ORPHAN_SWEEP_ENABLED` is not disabled and AWS broker credentials are
+present, the Durable Object alarm periodically scans `CRABBOX_AWS_REGION` plus
+`CRABBOX_CAPACITY_REGIONS` for Crabbox-tagged EC2 instances. The Worker cron
+handler bootstraps the alarm for idle fleets after deploy or config changes. It
+only terminates confirmed orphan candidates when
+`CRABBOX_AWS_ORPHAN_SWEEP_DELETE=1`; otherwise it stores the latest report for
+admin inspection.
 
 ## Images
 

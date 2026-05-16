@@ -40,6 +40,12 @@ func (b *coordinatorLeaseBackend) acquireOnce(ctx context.Context, keep bool) (L
 	fmt.Fprintf(b.rt.Stderr, "coordinator lease class=%s preferred_type=%s keep=%v slug=%s idle_timeout=%s ttl=%s\n", cfg.Class, cfg.ServerType, keep, slug, cfg.IdleTimeout, cfg.TTL)
 	lease, err := b.coord.CreateLease(ctx, cfg, publicKey, keep, leaseID, slug)
 	if err != nil {
+		if isCoordinatorStaleInstanceCleanedSignal(err) {
+			return LeaseTarget{}, coordinatorStaleInstanceCleanedError{err: err}
+		}
+		if isCoordinatorStaleInstanceError(err) && b.releaseStaleCoordinatorLeaseForRetry(leaseID) {
+			return LeaseTarget{}, coordinatorStaleInstanceCleanedError{err: err}
+		}
 		return LeaseTarget{}, err
 	}
 	if lease.ID != "" && lease.ID != leaseID {
@@ -68,7 +74,7 @@ func (b *coordinatorLeaseBackend) acquireOnce(ctx context.Context, keep bool) (L
 	stopLeaseWatch := startCoordinatorLeaseWatch(waitCtx, b.coord, leaseID, cancelWait, b.rt.Stderr)
 	defer stopLeaseWatch()
 	bootstrapTarget := bootstrapNetworkTarget(cfg, server, target)
-	if err := bootstrapAWSWindowsDesktop(waitCtx, cfg, &bootstrapTarget, publicKey, b.rt.Stderr); err != nil {
+	if err := bootstrapManagedWindowsDesktop(waitCtx, cfg, &bootstrapTarget, publicKey, b.rt.Stderr); err != nil {
 		if releaseErr := releaseCoordinatorLease(context.Background(), b.coord, leaseID); releaseErr != nil {
 			fmt.Fprintf(b.rt.Stderr, "warning: release failed after bootstrap error for %s: %v\n", leaseID, releaseErr)
 		}
@@ -78,9 +84,53 @@ func (b *coordinatorLeaseBackend) acquireOnce(ctx context.Context, keep bool) (L
 	return LeaseTarget{Server: server, SSH: target, LeaseID: leaseID, Coordinator: b.coord}, nil
 }
 
+func (b *coordinatorLeaseBackend) releaseStaleCoordinatorLeaseForRetry(leaseID string) bool {
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := b.coord.ReleaseLease(releaseCtx, leaseID, true); err != nil {
+		// A missing coordinator record means there is nothing left to discard.
+		// Treat it as cleaned so acquire can retry with a new lease id.
+		if isCoordinatorNotFoundError(err) {
+			fmt.Fprintf(b.rt.Stderr, "stale coordinator lease %s was already gone; retrying with fresh lease\n", leaseID)
+			return true
+		}
+		fmt.Fprintf(b.rt.Stderr, "warning: release failed after stale coordinator instance for %s; not retrying: %v\n", leaseID, err)
+		return false
+	}
+	fmt.Fprintf(b.rt.Stderr, "discarded stale coordinator lease %s\n", leaseID)
+	return true
+}
+
+func isCoordinatorStaleInstanceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "InvalidInstanceID.NotFound")
+}
+
+func isCoordinatorStaleInstanceCleanedSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "crabbox_aws_stale_instance_cleaned") && isCoordinatorStaleInstanceError(err)
+}
+
 func (b *coordinatorLeaseBackend) Resolve(ctx context.Context, req ResolveRequest) (LeaseTarget, error) {
 	lease, err := b.coord.GetLease(ctx, req.ID)
 	if err != nil {
+		if b.cfg.CoordAdminToken != "" && (isCoordinatorNotFoundError(err) || isCoordinatorUnauthorized(err)) {
+			adminCoord, adminErr := b.adminCoordinatorClient()
+			if adminErr != nil {
+				return LeaseTarget{}, err
+			}
+			lease, adminErr = adminCoord.GetLease(ctx, req.ID)
+			if adminErr == nil {
+				server, target, leaseID := leaseToServerTarget(lease, b.cfg)
+				return LeaseTarget{Server: server, SSH: target, LeaseID: leaseID, Coordinator: adminCoord}, nil
+			}
+		}
 		return LeaseTarget{}, err
 	}
 	server, target, leaseID := leaseToServerTarget(lease, b.cfg)
@@ -222,10 +272,27 @@ func (b *coordinatorLeaseBackend) ReleaseLease(ctx context.Context, req ReleaseL
 		return exit(2, "missing coordinator lease id")
 	}
 	if err := releaseCoordinatorLease(ctx, b.coord, req.Lease.LeaseID); err != nil {
+		if b.cfg.CoordAdminToken != "" && (isCoordinatorNotFoundError(err) || isCoordinatorUnauthorized(err)) {
+			adminCoord, adminErr := b.adminCoordinatorClient()
+			if adminErr != nil {
+				return err
+			}
+			if _, adminErr = adminCoord.AdminReleaseLease(ctx, req.Lease.LeaseID, true); adminErr == nil {
+				removeLeaseClaim(req.Lease.LeaseID)
+				return nil
+			}
+		}
 		return err
 	}
 	removeLeaseClaim(req.Lease.LeaseID)
 	return nil
+}
+
+func (b *coordinatorLeaseBackend) adminCoordinatorClient() (*CoordinatorClient, error) {
+	cfg := b.cfg
+	cfg.CoordToken = cfg.CoordAdminToken
+	coord, _, err := newCoordinatorClient(cfg)
+	return coord, err
 }
 
 func (b *coordinatorLeaseBackend) Touch(ctx context.Context, req TouchRequest) (Server, error) {

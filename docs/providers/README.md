@@ -12,9 +12,10 @@ static SSH provider for existing machines.
 | Provider | Backend kind | Targets | Best for |
 | --- | --- | --- | --- |
 | [AWS](aws.md) | SSH lease | Linux, Windows, macOS | broad managed capacity, Windows, EC2 Mac |
-| [Azure](azure.md) | SSH lease | Linux, Windows | Azure-backed Linux and native Windows capacity |
+| [Azure](azure.md) | SSH lease | Linux, Windows | Azure-backed Linux and Windows capacity |
 | [Google Cloud](gcp.md) | SSH lease | Linux | GCP-backed Linux Compute Engine capacity |
 | [Hetzner](hetzner.md) | SSH lease | Linux | fast Linux capacity at low cost |
+| [Proxmox](proxmox.md) | SSH lease | Linux | private Proxmox VE QEMU VM templates |
 | [Static SSH](ssh.md) | SSH lease | Linux, macOS, Windows | reusing an existing host |
 | [Blacksmith Testbox](blacksmith-testbox.md) | delegated run | Linux | existing Blacksmith Testbox workflows |
 | [Namespace Devbox](namespace-devbox.md) | SSH lease | Linux | Namespace-managed dev environments with Crabbox sync |
@@ -23,6 +24,9 @@ static SSH provider for existing machines.
 | [Daytona](daytona.md) | hybrid delegated run + SSH | Linux | Daytona snapshot sandboxes |
 | [Islo](islo.md) | delegated run | Linux | Islo-owned sandbox execution |
 | [E2B](e2b.md) | delegated run | Linux | E2B-owned sandbox execution |
+| [Modal](modal.md) | delegated run | Linux | Modal Sandbox execution through the local Python client |
+| [Tensorlake](tensorlake.md) | delegated run | Linux | Tensorlake Firecracker sandbox execution via the `tensorlake` CLI |
+| [Cloudflare](cloudflare.md) | delegated run | Linux | Cloudflare execution through a Worker and container runner |
 
 ## Shared Rules
 
@@ -53,13 +57,18 @@ credentials, cost state, cleanup alarms, and lease accounting.
 Direct mode is for local operator debugging or non-brokered setups. It uses local
 provider credentials and best-effort cleanup through provider labels.
 
-Delegated providers do not use the Crabbox coordinator:
+Proxmox and delegated providers do not use the Crabbox coordinator:
 
+- Proxmox clones private QEMU VM templates through the Proxmox VE REST API.
 - Blacksmith uses the authenticated Blacksmith CLI.
 - Daytona uses Daytona API and SDK/toolbox APIs.
 - Islo uses the Islo API and SDK auth.
 - E2B uses E2B's sandbox REST and envd APIs.
+- Modal uses the local Modal Python client and Modal Sandbox APIs.
 - Sprites uses the authenticated `sprite` CLI plus Sprites API.
+- Tensorlake uses the `tensorlake` CLI (`tensorlake sbx ...`) for sandbox lifecycle and command exec.
+- Cloudflare uses a deployed Worker runner backed by a Cloudflare
+  Containers image.
 
 Namespace Devbox and Semaphore are SSH lease providers that do not use the
 Crabbox coordinator. Namespace provisions through the authenticated `devbox`
@@ -71,9 +80,10 @@ through the Sprites API and reaches SSH through `sprite proxy`.
 | Provider | `run` | `warmup` | `ssh` | VNC/code | Crabbox sync | Provider sync |
 | --- | --- | --- | --- | --- | --- | --- |
 | AWS | yes | yes | yes | yes | yes | no |
-| Azure | yes | yes | yes | Linux VNC/code | yes | no |
+| Azure | yes | yes | yes | Linux/Windows VNC; Linux code | yes | no |
 | Google Cloud | yes | yes | yes | no | yes | no |
 | Hetzner | yes | yes | yes | Linux VNC/code | yes | no |
+| Proxmox | yes | yes | yes | no | yes | no |
 | Static SSH | yes | resolves host | yes | host-dependent | yes | no |
 | Blacksmith Testbox | yes | yes | no | no | no | yes |
 | Namespace Devbox | yes | yes | yes | no | yes | no |
@@ -82,10 +92,13 @@ through the Sprites API and reaches SSH through `sprite proxy`.
 | Daytona | yes | yes | yes | no | archive via Daytona toolbox | no |
 | Islo | yes | yes | no | no | no | yes |
 | E2B | yes | yes | no | no | archive via E2B envd | no |
+| Modal | yes | yes | no | no | archive via Modal Sandbox exec | no |
+| Tensorlake | yes | yes | no | no | archive via `tensorlake sbx cp` | no |
+| Cloudflare | yes | yes | no | no | archive via Worker runner | no |
 
 Actions runner hydration requires a normal SSH lease on Linux and is core-over-SSH.
-Use AWS, Google Cloud, Hetzner, Static SSH, Namespace Devbox, Semaphore, or Sprites for that
-path.
+Use AWS, Google Cloud, Hetzner, Proxmox, Static SSH, Namespace Devbox,
+Semaphore, or Sprites for that path.
 
 ## Implementation
 

@@ -120,6 +120,13 @@ func validateProviderTarget(cfg Config) error {
 	if !providerSpecSupportsTarget(provider.Spec(), cfg.TargetOS, cfg.WindowsMode) {
 		return exit(2, "%s", unsupportedManagedTargetMessageForConfig(provider.Name(), cfg))
 	}
+	if provider.Name() == "aws" &&
+		cfg.TargetOS == targetWindows &&
+		cfg.WindowsMode == windowsModeWSL2 &&
+		cfg.ServerTypeExplicit &&
+		!awsInstanceTypeSupportsNestedVirtualization(cfg.ServerType) {
+		return exit(2, "provider=aws target=windows windows.mode=wsl2 requires an instance type with AWS nested virtualization; %s is not supported. Use --type m8i.4xlarge or omit --type and choose class=standard|fast|large|beast", cfg.ServerType)
+	}
 	if cfg.Provider == "aws" && cfg.TargetOS == targetMacOS {
 		if cfg.AWSMacHostID == "" && cfg.Coordinator == "" {
 			return exit(2, "provider=aws target=macos requires CRABBOX_AWS_MAC_HOST_ID or aws.macHostId for an allocated EC2 Mac Dedicated Host")
@@ -151,14 +158,11 @@ func unsupportedManagedTargetMessage(provider, target string) string {
 
 func unsupportedManagedTargetMessageForConfig(provider string, cfg Config) string {
 	target := cfg.TargetOS
-	if provider == "azure" && target == targetWindows && cfg.WindowsMode == windowsModeWSL2 {
-		return "provider=azure supports native Windows only; use provider=aws for managed Windows WSL2 or provider=ssh for existing Windows WSL2 hosts"
-	}
 	if provider == "azure" {
 		if target == targetMacOS {
-			return "provider=azure managed provisioning supports target=linux and native Windows only; use provider=aws with an EC2 Mac Dedicated Host or provider=ssh for existing macOS hosts"
+			return "provider=azure managed provisioning supports target=linux and Windows only; use provider=aws with an EC2 Mac Dedicated Host or provider=ssh for existing macOS hosts"
 		}
-		return "provider=azure managed provisioning supports target=linux and native Windows only"
+		return "provider=azure managed provisioning supports target=linux and Windows only"
 	}
 	switch target {
 	case targetWindows:

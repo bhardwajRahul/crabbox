@@ -36,6 +36,8 @@ This page maps user-facing behavior back to implementation files. Keep docs desc
 - Direct Hetzner provider: `internal/providers/hetzner`, with API client helpers in `internal/cli/hcloud.go`
 - Direct AWS provider: `internal/providers/aws`, with API client helpers in `internal/cli/aws.go`
 - Direct Azure provider: `internal/providers/azure`, with API client helpers in `internal/cli/azure.go`
+- Direct Google Cloud provider: `internal/providers/gcp`, with API client helpers in `internal/cli/gcp.go`
+- Direct Proxmox provider: `internal/providers/proxmox`, with API client helpers in `internal/cli/proxmox.go`
 - Static SSH macOS/Windows provider: `internal/providers/ssh`, with target mapping helpers in `internal/cli/static.go`
 - Blacksmith Testbox backend and argument/parsing helpers: `internal/providers/blacksmith`
 - Namespace Devbox SSH lease backend and CLI wrapper: `internal/providers/namespace`
@@ -43,27 +45,33 @@ This page maps user-facing behavior back to implementation files. Keep docs desc
 - Daytona provider backend and SDK/toolbox wrapper: `internal/providers/daytona`
 - Islo delegated backend and SDK wrapper: `internal/providers/islo`
 - E2B delegated backend and REST/envd wrapper: `internal/providers/e2b`
+- Modal delegated backend and Python client wrapper: `internal/providers/modal`
+- Tensorlake delegated backend and `tensorlake` CLI wrapper: `internal/providers/tensorlake`
+- Cloudflare delegated backend and Worker runner API client:
+  `internal/providers/cloudflare`
 - Provider backend interfaces, registry, and request/result types:
   `internal/cli/provider_backend.go`
 - Built-in provider registration packages:
   `internal/providers/hetzner`, `internal/providers/aws`,
-  `internal/providers/azure`,
-  `internal/providers/ssh`, `internal/providers/blacksmith`,
+  `internal/providers/azure`, `internal/providers/proxmox`,
+  `internal/providers/gcp`, `internal/providers/ssh`, `internal/providers/blacksmith`,
   `internal/providers/namespace`, `internal/providers/daytona`, `internal/providers/islo`,
   `internal/providers/semaphore`, `internal/providers/sprites`, `internal/providers/e2b`,
-  `internal/providers/all`
+  `internal/providers/modal`, `internal/providers/tensorlake`,
+  `internal/providers/cloudflare`, `internal/providers/all`
 - Built-in provider backend implementations:
-  `internal/providers/aws`, `internal/providers/azure`,
-  `internal/providers/hetzner`,
+  `internal/providers/aws`, `internal/providers/azure`, `internal/providers/gcp`,
+  `internal/providers/hetzner`, `internal/providers/proxmox`,
   `internal/providers/ssh`, `internal/providers/blacksmith`,
   `internal/providers/namespace`, `internal/providers/daytona`, `internal/providers/islo`,
   `internal/providers/semaphore`, `internal/providers/sprites`, `internal/providers/e2b`,
-  plus shared helpers in `internal/providers/shared`
+  `internal/providers/modal`, `internal/providers/tensorlake`,
+  `internal/providers/cloudflare`, plus shared helpers in `internal/providers/shared`
 - Worker Hetzner provider: `worker/src/hetzner.ts`
 - Worker AWS EC2 provider: `worker/src/aws.ts`
-- Worker AWS AMI create/read/promote routes: `worker/src/fleet.ts`, `worker/src/aws.ts`
+- Worker provider image create/read/delete/promote routes: `worker/src/fleet.ts`, `worker/src/aws.ts`, `worker/src/azure.ts`, `worker/src/gcp.ts`
 - Provider feature docs: `docs/features/aws.md`, `docs/features/azure.md`, `docs/features/hetzner.md`, `docs/features/blacksmith-testbox.md`, `docs/features/namespace-devbox.md`, `docs/features/namespace-devbox-setup.md`, `docs/features/semaphore.md`, `docs/features/sprites.md`, `docs/features/daytona.md`, `docs/features/islo.md`, `docs/features/e2b.md`
-- Provider reference docs: `docs/providers/README.md`, `docs/providers/aws.md`, `docs/providers/azure.md`, `docs/providers/hetzner.md`, `docs/providers/ssh.md`, `docs/providers/blacksmith-testbox.md`, `docs/providers/namespace-devbox.md`, `docs/providers/daytona.md`, `docs/providers/islo.md`, `docs/providers/semaphore.md`, `docs/providers/sprites.md`, `docs/providers/e2b.md`
+- Provider reference docs: `docs/providers/README.md`, `docs/providers/aws.md`, `docs/providers/azure.md`, `docs/providers/gcp.md`, `docs/providers/hetzner.md`, `docs/providers/proxmox.md`, `docs/providers/ssh.md`, `docs/providers/blacksmith-testbox.md`, `docs/providers/namespace-devbox.md`, `docs/providers/daytona.md`, `docs/providers/islo.md`, `docs/providers/semaphore.md`, `docs/providers/sprites.md`, `docs/providers/e2b.md`, `docs/providers/modal.md`, `docs/providers/tensorlake.md`, `docs/providers/cloudflare.md`
 - Provider/backend authoring guide: `docs/provider-backends.md`
 - CLI cloud-init bootstrap: `internal/cli/bootstrap.go`
 - Worker cloud-init bootstrap: `worker/src/bootstrap.ts`
@@ -96,6 +104,7 @@ repository-owned setup, usually through Actions hydration or repo scripts.
 - Per-lease SSH known_hosts and ControlMaster config: `internal/cli/ssh.go`
 - GitHub Actions hydrate/register/dispatch bridge: `internal/cli/actions.go`
 - Actions-first failure capsules: `internal/cli/capsule.go`
+- Workspace checkpoints: `internal/cli/checkpoint.go`
 - Cache stats/purge/warm commands: `internal/cli/cache.go`
 - Run history/event/attach/log commands and retained run logs: `internal/cli/history.go`, `internal/cli/run_recorder.go`, `internal/cli/run_output_events.go`, `internal/cli/runlog.go`
 - JUnit result parsing and remote markers: `internal/cli/results.go`, `internal/cli/results_parse.go`, `internal/cli/results_remote.go`

@@ -86,11 +86,16 @@ type Feature string
 const (
 	FeatureSSH         Feature = "ssh"
 	FeatureCrabboxSync Feature = "crabbox-sync"
+	FeatureArchiveSync Feature = "archive-sync"
 	FeatureCleanup     Feature = "cleanup"
 	FeatureDesktop     Feature = "desktop"
 	FeatureBrowser     Feature = "browser"
 	FeatureCode        Feature = "code"
 	FeatureTailscale   Feature = "tailscale"
+	FeatureCheckpoint  Feature = "workspace-checkpoint"
+	FeatureFork        Feature = "workspace-fork"
+	FeatureRestore     Feature = "workspace-restore"
+	FeatureSnapshot    Feature = "provider-snapshot"
 )
 
 type FeatureSet []Feature
@@ -206,24 +211,37 @@ type TouchRequest struct {
 type ListRequest struct {
 	Options LeaseOptions
 	All     bool
+	Refresh bool
 }
 
 type RunRequest struct {
-	Repo           Repo
-	ID             string
-	Options        LeaseOptions
-	Keep           bool
-	Reclaim        bool
-	NoSync         bool
-	SyncOnly       bool
-	DebugSync      bool
-	ShellMode      bool
-	ChecksumSync   bool
-	ForceSyncLarge bool
-	CaptureStdout  string
-	Downloads      []string
-	Command        []string
-	TimingJSON     bool
+	Repo            Repo
+	ID              string
+	Options         LeaseOptions
+	Keep            bool
+	Reclaim         bool
+	NoSync          bool
+	SyncOnly        bool
+	DebugSync       bool
+	ShellMode       bool
+	ChecksumSync    bool
+	ForceSyncLarge  bool
+	FullResync      bool
+	EnvHelper       string
+	CaptureStdout   string
+	CaptureStderr   string
+	CaptureOnFail   bool
+	KeepOnFailure   bool
+	Preflight       bool
+	Downloads       []string
+	Env             map[string]string
+	EnvSummary      bool
+	ScriptRequested bool
+	Script          *RunScriptSpec
+	FreshPR         FreshPRSpec
+	ApplyLocalPatch bool
+	Command         []string
+	TimingJSON      bool
 }
 
 type WarmupRequest struct {
@@ -314,11 +332,11 @@ func normalizeProviderName(name string) string {
 }
 
 func providerHelpAll() string {
-	return "provider: hetzner, aws, azure, gcp, ssh, blacksmith-testbox, namespace-devbox, semaphore, daytona, islo, e2b, or sprites"
+	return "provider: hetzner, aws, azure, gcp, proxmox, ssh, blacksmith-testbox, namespace-devbox, semaphore, daytona, islo, e2b, modal, sprites, or cloudflare"
 }
 
 func providerHelpSSH() string {
-	return "provider: hetzner, aws, azure, gcp, ssh, namespace-devbox, semaphore, daytona, or sprites"
+	return "provider: hetzner, aws, azure, gcp, proxmox, ssh, namespace-devbox, semaphore, daytona, or sprites"
 }
 
 func isBlacksmithProvider(provider string) bool {
@@ -432,27 +450,55 @@ func featureSetHas(features FeatureSet, feature Feature) bool {
 	return false
 }
 
-func rejectDelegatedSyncOptions(provider string, req RunRequest) error {
-	if req.SyncOnly {
+func rejectDelegatedSyncOptionsForSpec(spec ProviderSpec, req RunRequest) error {
+	provider := spec.Name
+	archiveSync := featureSetHas(spec.Features, FeatureArchiveSync)
+	if req.SyncOnly && !archiveSync {
 		return exit(2, "%s delegates sync; --sync-only is not supported", provider)
 	}
 	if req.ChecksumSync {
 		return exit(2, "%s delegates sync; --checksum is not supported", provider)
 	}
-	if req.ForceSyncLarge {
+	if req.ForceSyncLarge && !archiveSync {
 		return exit(2, "%s delegates sync; --force-sync-large is not supported", provider)
+	}
+	if req.FullResync {
+		return exit(2, "%s delegates sync; --full-resync is not supported", provider)
+	}
+	if req.EnvHelper != "" {
+		return exit(2, "%s delegates run execution; --env-helper is not supported", provider)
 	}
 	if req.CaptureStdout != "" {
 		return exit(2, "%s delegates run execution; --capture-stdout is not supported", provider)
 	}
+	if req.CaptureStderr != "" {
+		return exit(2, "%s delegates run execution; --capture-stderr is not supported", provider)
+	}
+	if req.CaptureOnFail {
+		return exit(2, "%s delegates run execution; --capture-on-fail is not supported", provider)
+	}
 	if len(req.Downloads) > 0 {
 		return exit(2, "%s delegates run execution; --download is not supported", provider)
+	}
+	if req.Script != nil || req.ScriptRequested {
+		return exit(2, "%s delegates run execution; --script is not supported", provider)
+	}
+	if !req.FreshPR.Empty() {
+		return exit(2, "%s delegates sync; --fresh-pr is not supported", provider)
 	}
 	return nil
 }
 
+func rejectDelegatedSyncOptions(provider string, req RunRequest) error {
+	return rejectDelegatedSyncOptionsForSpec(ProviderSpec{Name: provider}, req)
+}
+
 func RejectDelegatedSyncOptions(provider string, req RunRequest) error {
 	return rejectDelegatedSyncOptions(provider, req)
+}
+
+func RejectDelegatedSyncOptionsForSpec(spec ProviderSpec, req RunRequest) error {
+	return rejectDelegatedSyncOptionsForSpec(spec, req)
 }
 
 func renderServerList(stdout io.Writer, servers []Server) {

@@ -105,8 +105,8 @@ func TestAzureVMSizeCandidatesForTargetModeClass(t *testing.T) {
 		t.Fatalf("windows target got %v want %v", windows, want)
 	}
 	wsl2 := azureVMSizeCandidatesForTargetModeClass(targetWindows, windowsModeWSL2, "standard")
-	if !reflect.DeepEqual(wsl2, []string{"standard"}) {
-		t.Fatalf("wsl2 target got %v want explicit fallback", wsl2)
+	if want := azureWindowsVMSizeCandidatesForClass("standard"); !reflect.DeepEqual(wsl2, want) {
+		t.Fatalf("wsl2 target got %v want %v", wsl2, want)
 	}
 }
 
@@ -146,6 +146,81 @@ func TestAzureSupportsEphemeralOS(t *testing.T) {
 		if got := azureSupportsEphemeralOS(size); got != want {
 			t.Fatalf("size=%q got %v want %v", size, got, want)
 		}
+	}
+}
+
+func TestNormalizeAzureOSDiskMode(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"":          AzureOSDiskManaged,
+		"auto":      AzureOSDiskManaged,
+		"MANAGED":   AzureOSDiskManaged,
+		"ephemeral": AzureOSDiskEphemeral,
+		" managed ": AzureOSDiskManaged,
+	}
+	for input, want := range cases {
+		got, err := NormalizeAzureOSDiskMode(input)
+		if err != nil {
+			t.Fatalf("NormalizeAzureOSDiskMode(%q) err=%v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeAzureOSDiskMode(%q)=%q want %q", input, got, want)
+		}
+	}
+	if _, err := NormalizeAzureOSDiskMode("premium"); err == nil {
+		t.Fatal("expected invalid Azure OS disk mode to fail")
+	}
+}
+
+func TestAzureUseEphemeralOSDiskModes(t *testing.T) {
+	t.Parallel()
+	client := &AzureClient{}
+	ctx := t.Context()
+	cases := []struct {
+		name    string
+		cfg     Config
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "auto uses managed disk",
+			cfg:  Config{AzureOSDisk: AzureOSDiskAuto, ServerType: "Standard_D2ads_v6"},
+			want: false,
+		},
+		{
+			name: "managed forces managed disk",
+			cfg:  Config{AzureOSDisk: AzureOSDiskManaged, ServerType: "Standard_D2ads_v6"},
+			want: false,
+		},
+		{
+			name: "ephemeral allows supported sku",
+			cfg:  Config{AzureOSDisk: AzureOSDiskEphemeral, ServerType: "Standard_D2ads_v6"},
+			want: true,
+		},
+		{
+			name:    "ephemeral rejects unsupported sku",
+			cfg:     Config{AzureOSDisk: AzureOSDiskEphemeral, ServerType: "Standard_D2as_v6"},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := client.useEphemeralOSDisk(ctx, tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("useEphemeralOSDisk err=%v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("useEphemeralOSDisk=%t want %t", got, tc.want)
+			}
+		})
 	}
 }
 

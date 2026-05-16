@@ -2,40 +2,101 @@
 
 Read when:
 
-- creating the first replayable failure bundle from a GitHub Actions run;
-- reviewing the `repo-build-replay` capsule contract;
-- deciding whether a replay feature belongs in Crabbox or in a future registry.
+- turning a failed GitHub Actions run into a repeatable Crabbox debug case;
+- deciding whether data belongs in a capsule, checkpoint, image, or cache;
+- reviewing the `repo-build-replay` capsule contract.
 
-Capsules are local-first replay manifests for failed engineering environments.
+Capsules are local-first **failure replay manifests**. A capsule records what
+failed, how to run the replay, what outcome counts as a reproduction, and the
+bounded evidence needed to inspect the original failure.
+
+Capsules do not preserve a machine. Environment state belongs to the existing
+Crabbox primitives:
+
+- `crabbox image`: trusted base runner image for future leases.
+- `crabbox checkpoint`: explicit prepared machine or workspace state that can be
+  forked later.
+- `crabbox cache`: package/build cache state on a lease.
+- `crabbox actions hydrate`: repository-owned CI setup on a live lease.
+- `crabbox capsule`: failure recipe, source evidence, replay oracle, replay
+  history.
+
 The first delivery is intentionally narrow: GitHub Actions failures become small
-`repo-build-replay` bundles that Crabbox can rerun on a lease. There is no
-coordinator registry, RL loop, emulator class, or worker-side storage in this
-version.
+`repo-build-replay` bundles that Crabbox reruns through `crabbox run`. There is
+no coordinator registry, remote storage, automatic workflow parser, emulator
+class, or training loop in this version.
 
-## Actions-First Flow
+## Basic Flow
+
+Capture a failed run:
 
 ```sh
-crabbox capsule from-actions https://github.com/openclaw/crabbox/actions/runs/123 \
+crabbox capsule from-actions https://github.com/example-org/my-app/actions/runs/123 \
   --replay 'go test ./...'
-
-crabbox capsule replay capsules/openclaw-crabbox-actions-123/capsule.yaml --keep
-crabbox ssh --id <printed-lease-or-slug>
-crabbox capsule promote capsules/openclaw-crabbox-actions-123/capsule.yaml --regression
 ```
 
-`from-actions` records the essentials:
+Replay it on a normal lease:
+
+```sh
+crabbox capsule replay capsules/example-org-my-app-actions-123/capsule.yaml --keep
+crabbox ssh --id <printed-lease-or-slug>
+```
+
+Mark the local manifest as a regression replay after the failure is useful:
+
+```sh
+crabbox capsule promote capsules/example-org-my-app-actions-123/capsule.yaml --regression
+```
+
+`from-actions` records:
 
 - repository, run URL, run id, attempt, workflow name/path, commit SHA, branch,
   event, status, and conclusion;
 - failed job and failed step when GitHub exposes them;
-- an explicit replay command supplied by the user;
+- the explicit replay command supplied with `--replay`;
 - bounded failed-step logs when `gh run view --log-failed` can fetch them;
-- artifact download references from the GitHub Actions API.
+- GitHub artifact download references.
 
-The explicit `--replay` command is the v1 escape hatch. Crabbox does not try to
-perfectly parse arbitrary workflow YAML or infer shell snippets from logs.
+The explicit `--replay` command is the v1 contract. Crabbox does not try to
+reconstruct arbitrary workflow YAML or infer shell snippets from logs.
 
-## Contract
+## With Actions Hydration
+
+Use hydration when the failing CI job depends on repository-owned setup such as
+service containers, dependency installation, or toolchain bootstrap:
+
+```sh
+crabbox warmup
+crabbox actions hydrate --id blue-lobster
+crabbox capsule replay capsules/example-org-my-app-actions-123/capsule.yaml \
+  --id blue-lobster \
+  --keep
+```
+
+The hydrate workflow owns CI setup. The capsule owns the replay command and
+oracle. `crabbox run` syncs local edits into the hydrated workspace before
+running the replay.
+
+## With Checkpoints
+
+Use a checkpoint when setup is expensive and should be reused across many
+replays:
+
+```sh
+crabbox warmup --provider aws --class beast
+crabbox actions hydrate --id blue-lobster
+crabbox checkpoint create --id blue-lobster --name ci-go-ready
+
+crabbox checkpoint fork chk_123 --class beast
+crabbox capsule replay capsules/example-org-my-app-actions-123/capsule.yaml \
+  --id purple-whale
+```
+
+The checkpoint preserves the prepared environment. The capsule remains portable:
+it can be replayed against the original lease, a forked checkpoint, or a fresh
+lease if the command has enough setup built in.
+
+## Manifest Contract
 
 The manifest keeps the durable parts small and versioned:
 
@@ -63,10 +124,8 @@ extensions:
     replay_mode: explicit_command
 ```
 
-The schema includes `extensions` from day one so emulator, browser, hardware, or
-agent-debug classes can add their own fields later without widening the core
-contract. Those classes are deliberately not implemented in the Actions-first
-slice.
+The core contract is deliberately small. Future replay classes can add their
+own data under `extensions` without changing the base manifest.
 
 ## Replay Semantics
 
@@ -74,7 +133,7 @@ slice.
 If the replay command exits non-zero and the manifest has no
 `oracle.failure_signature`, Crabbox records `outcome: fail_reproduced`. When a
 signature is present, the bounded replay output must contain that signature to
-count as `fail_reproduced`. A non-zero replay with a different signature records
+count as `fail_reproduced`. A nonzero replay with a different signature records
 `outcome: fail_new` and returns nonzero because it is a new failure, not an
 honest reproduction. If the command exits zero, Crabbox records `outcome: pass`
 and returns nonzero because the original failure was not reproduced.
@@ -85,10 +144,19 @@ or slug printed by the underlying run.
 
 Each replay appends a local record with `outcome`, `replay_quality`,
 `exit_code`, `duration_ms`, and whether the lease was kept. That is the simple
-measurement surface for the first gates: replay success, time to attach, bounded
-cost intent from the manifest, and human repro time saved from the operator's
-notes. A richer registry can consume these records later, but the first slice
-does not need one.
+measurement surface for the first gate: did the same failure reproduce?
+
+## Secret And Evidence Boundary
+
+Capsules store local YAML, bounded logs, and GitHub artifact references. They do
+not store secrets intentionally, but CI logs and artifacts can still contain
+sensitive data if the source workflow wrote it. Treat capsule directories as
+debug artifacts:
+
+- keep `--max-log-bytes` bounded;
+- use `--no-logs` for sensitive runs;
+- do not commit capsule directories unless the logs were reviewed;
+- delete local capsules when they stop being useful.
 
 ## Non-Goals
 
@@ -96,9 +164,10 @@ does not need one.
 - No emulator or hardware-in-loop implementation.
 - No coordinator registry or worker storage.
 - No automatic workflow command extraction.
-- No secret capture. Capsules store bounded logs and references, not raw
-  production state.
+- No machine snapshotting. Use checkpoints or images for environment state.
+- No secret capture. Capsules store bounded logs and references, not raw runtime
+  state.
 
 The strategic point is to make real CI failures replayable first. That creates a
-useful debug product immediately and leaves a clean path toward eval and
-trajectory datasets once the replay catalogue is trustworthy.
+useful debug product immediately and leaves a clean path toward richer replay
+catalogues once the failure catalogue is trustworthy.

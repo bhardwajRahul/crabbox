@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -13,9 +14,18 @@ func syncWindowsNative(ctx context.Context, target SSHTarget, repo Repo, cfg Con
 	if err := runSSHQuiet(ctx, target, windowsPrepareWorkdir(workdir, cfg.Sync.Delete)); err != nil {
 		return exit(7, "prepare remote workdir: %v", err)
 	}
-	if cfg.Sync.GitSeed && remoteGitSeedCandidate(repo) {
+	gitSeed := cfg.Sync.GitSeed && remoteGitSeedCandidate(repo)
+	if gitSeed {
 		if err := runSSHQuiet(ctx, target, windowsGitSeed(workdir, repo.RemoteURL, repo.Head)); err != nil {
 			fmt.Fprintf(stderr, "warning: remote git seed failed: %v\n", err)
+		}
+	}
+	if opts.FullResync && gitSeed {
+		// Git seed restores HEAD; full resync must remove paths absent locally before overlay.
+		manifestData := manifest.NUL()
+		manifestInput := fmt.Sprintf("%d\n", len(manifestData)) + string(manifestData) + string(manifest.DeletedNUL())
+		if err := runSSHInputQuiet(ctx, target, windowsPruneSeededSyncManifest(workdir), manifestInput); err != nil {
+			return exit(6, "prune seeded Windows sync paths: %v", err)
 		}
 	}
 	var input bytes.Buffer
@@ -102,9 +112,69 @@ if (-not (Test-Path -LiteralPath (Join-Path $workdir ".git"))) {
 `)
 }
 
+func windowsPruneSeededSyncManifest(workdir string) string {
+	return powershellCommand(`$ErrorActionPreference = "Stop"
+$workdir = ` + psQuote(workdir) + `
+if (-not (Test-Path -LiteralPath (Join-Path $workdir ".git"))) { exit 0 }
+Set-Location -LiteralPath $workdir
+$stdin = [Console]::OpenStandardInput()
+$buffer = [System.IO.MemoryStream]::new()
+$stdin.CopyTo($buffer)
+$bytes = $buffer.ToArray()
+$newline = [Array]::IndexOf($bytes, [byte]10)
+if ($newline -lt 0) { throw "missing manifest header" }
+$manifestLen = [int]([System.Text.Encoding]::ASCII.GetString($bytes, 0, $newline))
+$manifestBytes = [byte[]]::new($manifestLen)
+[Array]::Copy($bytes, $newline + 1, $manifestBytes, 0, $manifestLen)
+$deletedLen = $bytes.Length - ($newline + 1 + $manifestLen)
+$deletedBytes = [byte[]]::new($deletedLen)
+if ($deletedLen -gt 0) {
+  [Array]::Copy($bytes, $newline + 1 + $manifestLen, $deletedBytes, 0, $deletedLen)
+}
+function Read-NulList([byte[]]$data) {
+  $set = @{}
+  foreach ($rel in ([System.Text.Encoding]::UTF8.GetString($data) -split "` + "`0" + `")) {
+    $rel = $rel.Replace("\", "/")
+    if ($rel.Length -gt 0) { $set[$rel] = $true }
+  }
+  return $set
+}
+$wanted = Read-NulList $manifestBytes
+$deleted = Read-NulList $deletedBytes
+$root = [System.IO.Path]::GetFullPath($workdir).TrimEnd([char[]]@('\', '/'))
+$sep = [string][System.IO.Path]::DirectorySeparatorChar
+function Remove-SafeRepoPath([string]$rel) {
+  $rel = $rel.Replace("\", "/")
+  if ($rel.Length -eq 0 -or [System.IO.Path]::IsPathRooted($rel) -or $rel -eq ".." -or $rel.StartsWith("../") -or $rel.Contains("/../")) { return }
+  $full = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($root, $rel.Replace("/", $sep)))
+  if (-not $full.StartsWith($root + $sep, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+  Remove-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+  $dir = Split-Path -Parent $full
+  while ($dir -and $dir.StartsWith($root + $sep, [System.StringComparison]::OrdinalIgnoreCase)) {
+    try {
+      Remove-Item -LiteralPath $dir -Force -ErrorAction Stop
+    } catch {
+      break
+    }
+    $dir = Split-Path -Parent $dir
+  }
+}
+foreach ($rel in (& git -c core.quotePath=false ls-files)) {
+  $rel = $rel.Replace("\", "/")
+  if (-not $wanted.ContainsKey($rel) -or $deleted.ContainsKey($rel)) {
+    Remove-SafeRepoPath $rel
+  }
+}
+`)
+}
+
 func windowsRemoteCommandWithEnvFile(workdir string, env map[string]string, envFile string, command []string) string {
+	return windowsRemoteCommandWithEnvFiles(workdir, env, singleEnvFile(envFile), command)
+}
+
+func windowsRemoteCommandWithEnvFiles(workdir string, env map[string]string, envFiles []string, command []string) string {
 	var b bytes.Buffer
-	writeWindowsRemotePrefix(&b, workdir, env, envFile)
+	writeWindowsRemotePrefix(&b, workdir, env, envFiles)
 	if len(command) == 0 {
 		b.WriteString("exit 0\n")
 	} else {
@@ -119,19 +189,27 @@ func windowsRemoteCommandWithEnvFile(workdir string, env map[string]string, envF
 }
 
 func windowsRemoteShellCommandWithEnvFile(workdir string, env map[string]string, envFile, script string) string {
+	return windowsRemoteShellCommandWithEnvFiles(workdir, env, singleEnvFile(envFile), script)
+}
+
+func windowsRemoteShellCommandWithEnvFiles(workdir string, env map[string]string, envFiles []string, script string) string {
 	var b bytes.Buffer
-	writeWindowsRemotePrefix(&b, workdir, env, envFile)
+	writeWindowsRemotePrefix(&b, workdir, env, envFiles)
 	b.WriteString(script)
 	b.WriteString("\nif (-not $?) { exit 1 }\n")
 	b.WriteString("if ($null -ne $global:LASTEXITCODE) { exit $global:LASTEXITCODE }\n")
 	return powershellCommand(b.String())
 }
 
-func writeWindowsRemotePrefix(b *bytes.Buffer, workdir string, env map[string]string, envFile string) {
+func writeWindowsRemotePrefix(b *bytes.Buffer, workdir string, env map[string]string, envFiles []string) {
 	b.WriteString(`$ErrorActionPreference = "Stop"` + "\n")
 	b.WriteString(`Set-Location -LiteralPath ` + psQuote(workdir) + "\n")
-	if envFile != "" {
-		b.WriteString(`if (Test-Path -LiteralPath ` + psQuote(envFile) + `) { Get-Content -LiteralPath ` + psQuote(envFile) + ` | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') } } }` + "\n")
+	for _, envFile := range envFiles {
+		envFile = strings.TrimSpace(envFile)
+		if envFile == "" {
+			continue
+		}
+		b.WriteString(`if (Test-Path -LiteralPath ` + psQuote(envFile) + `) { Get-Content -Encoding UTF8 -LiteralPath ` + psQuote(envFile) + ` | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') } } }` + "\n")
 	}
 	for key, value := range env {
 		b.WriteString(`$env:` + key + ` = ` + psQuote(value) + "\n")
@@ -140,6 +218,16 @@ func writeWindowsRemotePrefix(b *bytes.Buffer, workdir string, env map[string]st
 
 func windowsRemoteMkdir(workdir string) string {
 	return powershellCommand(`New-Item -ItemType Directory -Force -Path ` + psQuote(workdir) + ` | Out-Null`)
+}
+
+func windowsRemoteResetWorkdir(workdir string) string {
+	return powershellCommand(`$ErrorActionPreference = "Stop"
+$workdir = ` + psQuote(workdir) + `
+if (Test-Path -LiteralPath $workdir) {
+  Remove-Item -LiteralPath $workdir -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $workdir | Out-Null
+`)
 }
 
 func windowsRemoteReadResultFiles(workdir string, paths []string) string {

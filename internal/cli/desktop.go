@@ -23,6 +23,7 @@ func (a App) desktopLaunchWithCommand(ctx context.Context, args []string, comman
 	url := fs.String("url", "", "URL to pass to the launched browser")
 	webvnc := fs.Bool("webvnc", false, "bridge the launched desktop into the authenticated WebVNC portal")
 	openPortal := fs.Bool("open", false, "open the WebVNC portal when --webvnc is set")
+	takeControl := fs.Bool("take-control", false, "ask the opened WebVNC portal viewer to take keyboard and mouse control")
 	fullscreen := fs.Bool("fullscreen", false, "leave launched browser fullscreen for capture/video workflows")
 	egress := fs.String("egress", "", "egress profile; passes the active lease-local proxy to the browser")
 	egressProxy := fs.String("egress-proxy", defaultEgressListen, "lease-local egress proxy for --egress")
@@ -34,6 +35,9 @@ func (a App) desktopLaunchWithCommand(ctx context.Context, args []string, comman
 	}
 	if *openPortal && !*webvnc {
 		return exit(2, "desktop launch --open requires --webvnc")
+	}
+	if *takeControl && !*webvnc {
+		return exit(2, "desktop launch --take-control requires --webvnc")
 	}
 	if strings.TrimSpace(*egress) != "" && !*browser {
 		return exit(2, "desktop launch --egress currently requires --browser")
@@ -140,7 +144,7 @@ func (a App) desktopLaunchWithCommand(ctx context.Context, args []string, comman
 	}
 	fmt.Fprintf(a.Stdout, "launched: %s\n", strings.Join(command, " "))
 	if *webvnc {
-		return a.webvnc(ctx, desktopLaunchWebVNCArgs(cfg, target, leaseID, *openPortal))
+		return a.webvnc(ctx, desktopLaunchWebVNCArgs(cfg, target, leaseID, *openPortal, *takeControl))
 	}
 	return nil
 }
@@ -297,7 +301,7 @@ func (a App) desktopTerminal(ctx context.Context, args []string) error {
 		} else if ok {
 			if err := writeProofMetadata(filepath.Join(opts.Directory, "metadata.json"), desktopProofMetadata{
 				CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-				Version:        version,
+				Version:        currentVersion(),
 				LeaseID:        leaseID,
 				Slug:           serverSlug(server),
 				Provider:       cfg.Provider,
@@ -456,7 +460,7 @@ func (a App) desktopProof(ctx context.Context, args []string) error {
 	metadataPath := filepath.Join(dir, "metadata.json")
 	if err := writeProofMetadata(metadataPath, desktopProofMetadata{
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-		Version:        version,
+		Version:        currentVersion(),
 		LeaseID:        leaseID,
 		Slug:           serverSlug(server),
 		Provider:       cfg.Provider,
@@ -601,7 +605,7 @@ func shellJoin(args []string) string {
 	return b.String()
 }
 
-func desktopLaunchWebVNCArgs(cfg Config, target SSHTarget, leaseID string, openPortal bool) []string {
+func desktopLaunchWebVNCArgs(cfg Config, target SSHTarget, leaseID string, openPortal, takeControl bool) []string {
 	targetOS := firstNonBlank(target.TargetOS, cfg.TargetOS)
 	args := []string{"--provider", cfg.Provider, "--target", targetOS, "--id", leaseID}
 	if cfg.Network != "" && cfg.Network != NetworkAuto {
@@ -613,6 +617,9 @@ func desktopLaunchWebVNCArgs(cfg Config, target SSHTarget, leaseID string, openP
 	}
 	if openPortal {
 		args = append(args, "--open")
+	}
+	if takeControl {
+		args = append(args, "--take-control")
 	}
 	return args
 }

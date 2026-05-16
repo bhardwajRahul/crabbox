@@ -12,10 +12,11 @@ import (
 type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	Stdin  io.Reader
 }
 
 func Run(ctx context.Context, args []string) error {
-	app := App{Stdout: os.Stdout, Stderr: os.Stderr}
+	app := App{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}
 	return app.Run(ctx, args)
 }
 
@@ -99,6 +100,8 @@ func (a App) directCommandHelp(ctx context.Context, args []string) (error, bool)
 		return nil, false
 	case "capsule":
 		return nil, false
+	case "checkpoint":
+		return nil, false
 	case "inspect":
 		return a.inspect(ctx, helpArgs), true
 	case "stop", "release":
@@ -158,11 +161,12 @@ Commands:
   list        List Crabbox machines
   share       Share a lease with users or the owning org
   unshare     Remove lease sharing
-  image       Create or promote brokered AWS runner images
+  image       Create provider images and promote brokered AWS runner images
   usage       Show cost and usage estimates by user, org, or fleet
   admin       Lease admin controls for trusted operators
   actions     Register GitHub Actions runners or dispatch workflows
   capsule     Capture and replay lightweight failure capsules
+  checkpoint  Create, restore, and fork workspace checkpoints
   ssh         Print the SSH command for a lease
   vnc         Print or open VNC connection details for a desktop lease
   webvnc      Bridge a desktop lease into the authenticated web portal
@@ -203,11 +207,14 @@ Common Flows:
   crabbox cache stats --id blue-lobster
   crabbox usage --scope org
   crabbox admin leases --state active
+  crabbox admin lease-audit --state expired --provider aws
   crabbox warmup --actions-runner
   crabbox actions hydrate --id blue-lobster
   crabbox actions dispatch -f testbox_id=cbx_abcdef123456
   crabbox capsule from-actions https://github.com/openclaw/crabbox/actions/runs/123 --replay 'go test ./...'
   crabbox capsule replay capsules/openclaw-crabbox-actions-123/capsule.yaml --keep
+  crabbox checkpoint create --id blue-lobster --name after-install --mode native
+  crabbox checkpoint fork chk_abcdef1234567890 --class beast
   crabbox run --provider ssh --target macos --static-host mac.local -- echo ok
   crabbox run --provider ssh --target windows --windows-mode normal --static-host win.local -- pwsh -NoProfile -Command '$PSVersionTable'
   crabbox stop blue-lobster
@@ -232,7 +239,7 @@ Environment:
   CRABBOX_ACCESS_CLIENT_ID     Cloudflare Access service token client ID
   CRABBOX_ACCESS_CLIENT_SECRET Cloudflare Access service token client secret
   CRABBOX_ACCESS_TOKEN         Cloudflare Access JWT for protected routes
-  CRABBOX_PROVIDER             hetzner, aws, azure, ssh, blacksmith-testbox, namespace-devbox, semaphore, daytona, islo, e2b, or sprites
+  CRABBOX_PROVIDER             hetzner, aws, azure, gcp, proxmox, ssh, blacksmith-testbox, namespace-devbox, semaphore, daytona, islo, e2b, modal, sprites, or cloudflare
   CRABBOX_TARGET               linux, macos, or windows
   CRABBOX_WINDOWS_MODE         normal or wsl2
   CRABBOX_DESKTOP              Provision or require desktop/VNC capability
@@ -250,6 +257,7 @@ Environment:
   CRABBOX_CAPACITY_MARKET      spot or on-demand
   CRABBOX_CAPACITY_REGIONS     Comma-separated AWS region fallback candidates
   HCLOUD_TOKEN/HETZNER_TOKEN   Direct Hetzner mode
+  CRABBOX_PROXMOX_API_URL      Proxmox VE API URL, e.g. https://pve.local:8006
 
 Aliases:
   crabbox release <id-or-slug> Alias for stop

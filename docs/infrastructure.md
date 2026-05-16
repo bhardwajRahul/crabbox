@@ -225,16 +225,25 @@ CRABBOX_AWS_INSTANCE_PROFILE     optional IAM instance profile name
 CRABBOX_AWS_ROOT_GB              default 400
 CRABBOX_AWS_SSH_CIDRS            optional comma-separated SSH source CIDRs
 CRABBOX_AWS_MAC_HOST_ID          EC2 Mac Dedicated Host id for target=macos
+CRABBOX_AWS_ORPHAN_SWEEP_ENABLED defaults on when AWS broker credentials exist
+CRABBOX_AWS_ORPHAN_SWEEP_DELETE  set 1 to terminate confirmed orphan EC2 instances
+CRABBOX_AWS_ORPHAN_SWEEP_INTERVAL_SECONDS default 3600
+CRABBOX_AWS_ORPHAN_SWEEP_GRACE_SECONDS default 900
 CRABBOX_SSH_FALLBACK_PORTS       optional comma-separated SSH fallback ports, or none
 ```
+
+The deployed Worker includes a cron trigger that wakes the fleet Durable Object
+every 15 minutes to bootstrap scheduled cleanup even when no leases are active.
 
 The AWS provider imports the local SSH public key as an EC2 key pair when needed, creates or reuses a `crabbox-runners` security group when no security group is supplied, launches one-time EC2 instances, tags instances and volumes with Crabbox lease metadata, and terminates non-kept instances after the command.
 
 Grant the Worker AWS principal EC2 launch/list/tag/terminate permissions plus
-`servicequotas:GetServiceQuota`. Service Quotas access is best-effort: when it
-is available, Crabbox can skip known quota-impossible instance types before
-calling `RunInstances`; when it is missing, EC2 launch errors are still
-classified after the failed call.
+`CreateImage`, `DeregisterImage`, `DeleteSnapshot`, and
+`servicequotas:GetServiceQuota`. The image permissions are required for
+`crabbox image` and native AWS checkpoints. Service Quotas access is
+best-effort: when it is available, Crabbox can skip known quota-impossible
+instance types before calling `RunInstances`; when it is missing, EC2 launch
+errors are still classified after the failed call.
 
 SSH ingress for AWS security groups is source-scoped. If `CRABBOX_AWS_SSH_CIDRS` is set, Crabbox adds those CIDRs. Otherwise, the CLI sends its detected outbound IPv4 `/32` to the broker; when that is unavailable, the Worker falls back to `CF-Connecting-IP` as `/32` or `/128`. Direct and brokered AWS open the primary SSH port plus configured fallback ports. Crabbox also revokes the old managed `0.0.0.0/0` SSH ingress rule when the broker touches the managed security group. Supplying `CRABBOX_AWS_SECURITY_GROUP_ID` makes network policy your responsibility.
 
@@ -292,6 +301,53 @@ all       mac2.metal unless `--type` is set
 ```
 
 Profiles choose a default class, and commands can override with `--class`.
+
+## Self-Hosted Broker Minimum
+
+Use this path when your users are not allowed onto the hosted
+`https://crabbox.openclaw.ai` broker but you still want broker-owned provider
+credentials, coordinator cleanup, active-lease limits, monthly spend caps, and
+`crabbox usage`.
+
+Minimum Cloudflare setup:
+
+- a Cloudflare account with Workers and Durable Objects enabled;
+- a Worker route or workers.dev URL for the coordinator;
+- the Durable Object binding from `worker/wrangler.jsonc`;
+- Worker secrets for at least one brokered provider, for example Hetzner or AWS;
+- budget limits sized for the installation before inviting users.
+
+Recommended small-installation limits:
+
+```text
+CRABBOX_MAX_ACTIVE_LEASES=2
+CRABBOX_MAX_ACTIVE_LEASES_PER_OWNER=1
+CRABBOX_MAX_MONTHLY_USD=25
+CRABBOX_MAX_MONTHLY_USD_PER_OWNER=10
+```
+
+Required auth choice:
+
+- Browser login: create a GitHub OAuth app for your coordinator callback URL and
+  set `CRABBOX_GITHUB_CLIENT_ID`, `CRABBOX_GITHUB_CLIENT_SECRET`,
+  `CRABBOX_SESSION_SECRET`, and `CRABBOX_GITHUB_ALLOWED_ORG` or
+  `CRABBOX_GITHUB_ALLOWED_ORGS`.
+- Shared-token automation: set `CRABBOX_SHARED_TOKEN` and
+  `CRABBOX_SHARED_OWNER`; GitHub OAuth is not required if every caller uses
+  `crabbox login --url <your-url> --token-stdin`.
+
+Provider secrets stay in the Worker, not in repo config. For AWS, start with
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and conservative AWS IAM
+permissions for the regions/classes you intend to use. For Hetzner, set
+`HETZNER_TOKEN` for the project that owns the disposable runners.
+
+After deployment, users point the CLI at the broker:
+
+```sh
+crabbox login --url https://<your-coordinator-host> --provider aws
+crabbox doctor
+crabbox usage
+```
 
 ## Deployment
 
