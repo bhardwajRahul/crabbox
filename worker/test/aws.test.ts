@@ -678,8 +678,10 @@ describe("aws provider", () => {
       "Filter.1.Value.1": "mac2.metal",
       "Filter.2.Name": "state",
       "Filter.2.Value.1": "available",
-      "Filter.3.Name": "availability-zone",
-      "Filter.3.Value.1": "eu-west-1b",
+      "Filter.3.Name": "tag:crabbox",
+      "Filter.3.Value.1": "true",
+      "Filter.4.Name": "availability-zone",
+      "Filter.4.Value.1": "eu-west-1b",
     });
     expect(runParams[0]).toMatchObject({
       "NetworkInterface.1.SubnetId": "subnet-123",

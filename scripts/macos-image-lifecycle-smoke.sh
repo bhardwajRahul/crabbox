@@ -723,7 +723,7 @@ warmup_macos() {
   : >"$log"
   printf 'warming macOS lease: %s\n' "$label" >&2
   (
-    "$CRABBOX_BIN" warmup \
+    CRABBOX_AWS_REGION="$region" AWS_REGION="$region" "$CRABBOX_BIN" warmup \
       --provider aws \
       --target macos \
       --type "$instance_type" \

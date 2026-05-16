@@ -107,6 +107,7 @@ fi
 
 case "$1" in
   warmup)
+    printf 'env CRABBOX_AWS_REGION=%s\\n' "\${CRABBOX_AWS_REGION:-}" >>"$log"
     count=0
     if [[ -f "$state_dir/warmup-count" ]]; then
       count="$(cat "$state_dir/warmup-count")"
@@ -575,6 +576,33 @@ test("macOS lifecycle smoke preserves full mock lifecycle evidence", async () =>
   assert.match(fakeLog, /^checkpoint delete chk_macos$/m);
   assert.match(fakeLog, /^admin hosts quota --provider aws --target macos --region eu-west-1 --type mac2\.metal --json$/m);
   assert.match(fakeLog, /^admin hosts release h-mock --provider aws --target macos --region eu-west-1 --force$/m);
+});
+
+test("macOS lifecycle smoke forwards the selected region into warmup", async () => {
+  const run = await setupRun();
+  const result = await runLifecycle({
+    CRABBOX_BIN: run.fake,
+    CRABBOX_FAKE_LOG: run.fakeLog,
+    CRABBOX_FAKE_STATE: run.fakeState,
+    CRABBOX_FAKE_NO_HOST: "1",
+    CRABBOX_MACOS_ALLOCATE: "1",
+    CRABBOX_MACOS_CREATE_IMAGE: "0",
+    CRABBOX_MACOS_REGION: "us-west-2",
+    CRABBOX_MACOS_RELEASE_HOST: "1",
+    CRABBOX_MACOS_ARTIFACT_DIR: run.artifacts,
+    CRABBOX_MACOS_IMAGE_NAME: "region-forward",
+    CRABBOX_MACOS_WEBVNC_START_GRACE: "0s",
+  });
+
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const summary = await readJSON(path.join(run.artifacts, "summary.json"));
+  assert.equal(summary.result, "passed");
+  assert.equal(summary.phase, "source");
+  assert.equal(summary.region, "us-west-2");
+
+  const fakeLog = await readFile(run.fakeLog, "utf8");
+  assert.match(fakeLog, /^env CRABBOX_AWS_REGION=us-west-2$/m);
+  assert.match(fakeLog, /^admin hosts release h-mock --provider aws --target macos --region us-west-2 --force$/m);
 });
 
 test("macOS lifecycle smoke releases script-allocated hosts after failures", async () => {
