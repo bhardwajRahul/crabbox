@@ -45,6 +45,7 @@
 - Fixed remote macOS screenshots so `crabbox screenshot` captures the Screen Sharing/VNC framebuffer instead of relying on `screencapture` from non-interactive SSH sessions.
 - Fixed brokered AWS macOS launches so stale host ids, missing Mac hosts, regional AMI gaps, and unavailable `mac2.metal` capacity can fall back to usable host, region, image, or `mac1.metal` candidates.
 - Fixed AWS image deletion so scoped promoted macOS images cannot be deleted until another image is promoted.
+- Fixed WebVNC portal click forwarding so controller clicks reach the remote desktop while preserving focus and browser context-menu suppression.
 
 ## 0.14.0 - 2026-05-15
 
