@@ -104,7 +104,9 @@ aws iam put-user-policy \
 
 Use the role command for IAM role ARNs and the user command for IAM user ARNs.
 For assumed-role identities, attach the policy to the underlying role name, not
-the session name.
+the session name. JSON output includes `policyTarget.type` and
+`policyTarget.name` when the coordinator ARN is an IAM user, IAM role, or STS
+assumed-role ARN.
 
 Flags:
 

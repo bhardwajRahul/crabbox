@@ -217,10 +217,17 @@ type CoordinatorMacHostQuota struct {
 }
 
 type CoordinatorAWSIdentity struct {
-	Account string `json:"account"`
-	ARN     string `json:"arn"`
-	UserID  string `json:"userId"`
-	Region  string `json:"region"`
+	Account      string                      `json:"account"`
+	ARN          string                      `json:"arn"`
+	UserID       string                      `json:"userId"`
+	Region       string                      `json:"region"`
+	PolicyTarget *CoordinatorAWSPolicyTarget `json:"policyTarget,omitempty"`
+}
+
+type CoordinatorAWSPolicyTarget struct {
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
 }
 
 type CoordinatorImageRef struct {

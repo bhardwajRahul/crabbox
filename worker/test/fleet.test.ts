@@ -2484,6 +2484,54 @@ describe("fleet lease identity and idle", () => {
         arn: "arn:aws:iam::123456789012:user/crabbox",
         userId: "AIDAEXAMPLE",
         region: "eu-west-1",
+        policyTarget: {
+          type: "user",
+          name: "crabbox",
+          source: "iam-user",
+        },
+      },
+    });
+  });
+
+  it("reports the policy target for an assumed AWS role identity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ec2XMLResponse(`<?xml version="1.0" encoding="UTF-8"?>
+        <GetCallerIdentityResponse>
+          <GetCallerIdentityResult>
+            <Arn>arn:aws:sts::123456789012:assumed-role/crabbox-worker/session-name</Arn>
+            <UserId>AROAEXAMPLE:session-name</UserId>
+            <Account>123456789012</Account>
+          </GetCallerIdentityResult>
+        </GetCallerIdentityResponse>`),
+      ),
+    );
+    const fleet = testFleet(
+      new MemoryStorage(),
+      {},
+      {
+        AWS_ACCESS_KEY_ID: "test",
+        AWS_SECRET_ACCESS_KEY: "test",
+        CRABBOX_AWS_REGION: "eu-west-1",
+      },
+    );
+
+    const response = await fleet.fetch(
+      request("GET", "/v1/admin/aws-identity?region=eu-west-1", {
+        headers: { "x-crabbox-admin": "true" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      identity: {
+        arn: "arn:aws:sts::123456789012:assumed-role/crabbox-worker/session-name",
+        policyTarget: {
+          type: "role",
+          name: "crabbox-worker",
+          source: "assumed-role",
+        },
       },
     });
   });

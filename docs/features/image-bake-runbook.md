@@ -220,7 +220,9 @@ aws iam put-user-policy \
 ```
 
 For assumed-role identities, attach the policy to the underlying role name from
-the ARN rather than to the session name.
+the ARN rather than to the session name. `admin aws-identity --json` includes
+`policyTarget.type` and `policyTarget.name` when Crabbox can derive the IAM
+attachment target from the ARN.
 
 If dry-run succeeds, run `crabbox admin mac-hosts quota --region eu-west-1
 --type mac2.metal` before real allocation. It prints the selected EC2 Mac

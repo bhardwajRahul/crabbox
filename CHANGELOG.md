@@ -15,6 +15,7 @@
 - Fixed the macOS image lifecycle summary so evidence paths and artifact directories are only populated after the matching files are captured.
 - Fixed the macOS image lifecycle smoke so blocked preflight summaries classify completed stderr captures instead of racing streamed output.
 - Documented the concrete IAM remediation commands for attaching the combined macOS image lifecycle policy to the coordinator AWS role or user.
+- Added parsed IAM policy target details to `crabbox admin aws-identity --json` so operators know which role or user needs the macOS image lifecycle policy.
 - Fixed the macOS image lifecycle smoke so Mac host quota preflight failures are preserved as evidence even when EC2 Mac host dry-run is also blocked.
 - Fixed the macOS image lifecycle smoke so combined quota and EC2 Mac host dry-run IAM blockers include rerun commands for both preflights.
 - Added a no-spend macOS host region preflight helper for checking reusable EC2 Mac Dedicated Hosts, dry-run allocation readiness, and Dedicated Mac host quota across configured regions.

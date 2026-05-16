@@ -380,7 +380,7 @@ func TestCoordinatorAdminAWSIdentity(t *testing.T) {
 		if got := r.URL.Query().Get("region"); got != "eu-west-1" {
 			t.Fatalf("region query=%q", got)
 		}
-		_, _ = w.Write([]byte(`{"identity":{"account":"123456789012","arn":"arn:aws:iam::123456789012:user/crabbox","userId":"AIDAEXAMPLE","region":"eu-west-1"}}`))
+		_, _ = w.Write([]byte(`{"identity":{"account":"123456789012","arn":"arn:aws:iam::123456789012:user/crabbox","userId":"AIDAEXAMPLE","region":"eu-west-1","policyTarget":{"type":"user","name":"crabbox","source":"iam-user"}}}`))
 	}))
 	defer server.Close()
 	client := &CoordinatorClient{BaseURL: server.URL, Token: "admin-token", Client: server.Client()}
@@ -391,6 +391,9 @@ func TestCoordinatorAdminAWSIdentity(t *testing.T) {
 	}
 	if identity.Account != "123456789012" || identity.UserID != "AIDAEXAMPLE" || identity.Region != "eu-west-1" {
 		t.Fatalf("identity=%#v", identity)
+	}
+	if identity.PolicyTarget == nil || identity.PolicyTarget.Type != "user" || identity.PolicyTarget.Name != "crabbox" {
+		t.Fatalf("policyTarget=%#v", identity.PolicyTarget)
 	}
 	if seen != "GET /v1/admin/aws-identity?region=eu-west-1" {
 		t.Fatalf("seen=%q", seen)

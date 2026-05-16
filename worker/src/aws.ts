@@ -60,6 +60,35 @@ export interface AWSIdentity {
   arn: string;
   userId: string;
   region: string;
+  policyTarget?: AWSPolicyTarget;
+}
+
+export interface AWSPolicyTarget {
+  type: "role" | "user";
+  name: string;
+  source: "iam-role" | "iam-user" | "assumed-role";
+}
+
+export function awsPolicyTargetFromArn(arn: string): AWSPolicyTarget | undefined {
+  const parts = arn.split(":");
+  if (parts.length < 6 || parts[0] !== "arn" || !parts[1]) {
+    return undefined;
+  }
+  const service = parts[2];
+  const resource = parts.slice(5).join(":");
+  const segments = resource.split("/").filter(Boolean);
+  const leafName = segments[segments.length - 1];
+  if (service === "iam" && segments[0] === "user" && leafName) {
+    return { type: "user", name: leafName, source: "iam-user" };
+  }
+  if (service === "iam" && segments[0] === "role" && leafName) {
+    return { type: "role", name: leafName, source: "iam-role" };
+  }
+  const assumedRoleName = segments[1];
+  if (service === "sts" && segments[0] === "assumed-role" && assumedRoleName) {
+    return { type: "role", name: assumedRoleName, source: "assumed-role" };
+  }
+  return undefined;
 }
 
 export function createSecurityGroupParams(name: string, vpcID: string): Record<string, string> {
@@ -140,12 +169,18 @@ export class EC2SpotClient {
   async identity(): Promise<AWSIdentity> {
     const root = await this.sts("GetCallerIdentity", {});
     const result = record(root["GetCallerIdentityResult"] ?? root);
-    return {
+    const arn = asString(result["Arn"]);
+    const identity: AWSIdentity = {
       account: asString(result["Account"]),
-      arn: asString(result["Arn"]),
+      arn,
       userId: asString(result["UserId"]),
       region: this.region,
     };
+    const policyTarget = awsPolicyTargetFromArn(arn);
+    if (policyTarget) {
+      identity.policyTarget = policyTarget;
+    }
+    return identity;
   }
 
   async listCrabboxServers(): Promise<ProviderMachine[]> {

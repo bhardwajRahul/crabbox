@@ -103,8 +103,12 @@ func (a App) adminAWSIdentity(ctx context.Context, args []string) error {
 	if *jsonOut {
 		return json.NewEncoder(a.Stdout).Encode(identity)
 	}
-	fmt.Fprintf(a.Stdout, "aws identity account=%s arn=%s user_id=%s region=%s\n",
-		blank(identity.Account, "-"), blank(identity.ARN, "-"), blank(identity.UserID, "-"), blank(identity.Region, "-"))
+	policyTarget := "-"
+	if identity.PolicyTarget != nil {
+		policyTarget = fmt.Sprintf("%s/%s", blank(identity.PolicyTarget.Type, "-"), blank(identity.PolicyTarget.Name, "-"))
+	}
+	fmt.Fprintf(a.Stdout, "aws identity account=%s arn=%s user_id=%s region=%s policy_target=%s\n",
+		blank(identity.Account, "-"), blank(identity.ARN, "-"), blank(identity.UserID, "-"), blank(identity.Region, "-"), policyTarget)
 	return nil
 }
 
