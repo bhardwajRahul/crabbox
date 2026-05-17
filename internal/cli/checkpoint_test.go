@@ -440,6 +440,26 @@ func TestDirectAWSCheckpointConfigRequiresNoCoordinator(t *testing.T) {
 	}
 }
 
+func TestCreateDirectAWSAMICheckpointValidatesConfigBeforePreparingSource(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Provider = "aws"
+	cfg.Coordinator = ""
+	cfg.AWSRegion = ""
+	target := SSHTarget{User: "nobody", Host: "127.0.0.1", Port: "1", TargetOS: targetMacOS}
+	app := App{Stderr: io.Discard}
+
+	_, err := app.createDirectAWSAMICheckpoint(context.Background(), cfg, Server{Provider: "aws", CloudID: "i-123"}, target, "cbx_test", "", "repo", false, false, time.Minute)
+	if err == nil {
+		t.Fatal("expected missing AWS region error")
+	}
+	if !strings.Contains(err.Error(), "CRABBOX_AWS_REGION or AWS_REGION is required") {
+		t.Fatalf("err=%v, want AWS config validation before source preparation", err)
+	}
+	if strings.Contains(err.Error(), "prepare native checkpoint source") {
+		t.Fatalf("source was prepared before AWS config validation: %v", err)
+	}
+}
+
 func TestApplyNativeImageCheckpointRecordPersistsSnapshotIDs(t *testing.T) {
 	record := checkpointRecord{Kind: checkpointKindArchive, Provider: "aws"}
 	applyNativeImageCheckpointRecord(&record, CoordinatorImage{

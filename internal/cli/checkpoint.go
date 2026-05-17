@@ -1104,11 +1104,11 @@ func (a App) createDirectAWSAMICheckpoint(ctx context.Context, cfg Config, serve
 	if name == "" {
 		name = defaultNativeImageName(leaseID, repoName)
 	}
-	if err := prepareNativeImageSource(ctx, target); err != nil {
-		return CoordinatorImage{}, err
-	}
 	client, err := newAWSClient(ctx, cfg)
 	if err != nil {
+		return CoordinatorImage{}, err
+	}
+	if err := prepareNativeImageSource(ctx, target); err != nil {
 		return CoordinatorImage{}, err
 	}
 	image, err := client.CreateImageCheckpoint(ctx, server.CloudID, name, noReboot)
