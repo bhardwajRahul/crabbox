@@ -101,14 +101,38 @@ func runArtifactCollectScript(workdir, remotePath string, globs []string) string
 	for _, glob := range globs {
 		b.WriteString("for f in " + glob + "; do add_artifact_file \"$f\"; done\n")
 		if strings.Contains(glob, "**") {
-			matches := []string{`"./$rel" == ` + glob, `"$rel" == ` + strings.TrimPrefix(glob, "./")}
-			if zeroDepth := strings.ReplaceAll(glob, "**/", ""); zeroDepth != glob {
-				matches = append(matches, ` "./$rel" == `+zeroDepth, `"$rel" == `+strings.TrimPrefix(zeroDepth, "./"))
-			}
-			b.WriteString("while IFS= read -r -d '' f; do rel=${f#./}; if [[ " + strings.Join(matches, " || ") + " ]]; then add_artifact_file \"$f\"; fi; done < <(find . \\( -type f -o -type l \\) -print0)\n")
+			b.WriteString("artifact_regex=" + shellQuote(artifactGlobRegex(glob)) + "; while IFS= read -r -d '' f; do rel=${f#./}; if [[ \"$rel\" =~ $artifact_regex || \"./$rel\" =~ $artifact_regex ]]; then add_artifact_file \"$f\"; fi; done < <(find . \\( -type f -o -type l \\) -print0)\n")
 		}
 	}
 	b.WriteString("if [ ${#files[@]} -eq 0 ]; then printf 'warning: no artifact matches\\n' >&2; tar -czf " + shellQuote(remotePath) + " --files-from /dev/null; else tar -czf " + shellQuote(remotePath) + " -- \"${files[@]}\"; fi\n")
+	return b.String()
+}
+
+func artifactGlobRegex(glob string) string {
+	var b strings.Builder
+	b.WriteByte('^')
+	for i := 0; i < len(glob); {
+		if strings.HasPrefix(glob[i:], "**/") {
+			b.WriteString("(.*/)?")
+			i += 3
+			continue
+		}
+		if strings.HasPrefix(glob[i:], "**") {
+			b.WriteString(".*")
+			i += 2
+			continue
+		}
+		switch glob[i] {
+		case '*':
+			b.WriteString("[^/]*")
+		case '?':
+			b.WriteString("[^/]")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(glob[i])))
+		}
+		i++
+	}
+	b.WriteByte('$')
 	return b.String()
 }
 
