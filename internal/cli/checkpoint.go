@@ -712,7 +712,7 @@ func (a App) verifyCheckpointRecord(ctx context.Context, store checkpointStore, 
 			return audit, nil
 		}
 		if cfg, ok := directAWSCheckpointConfig(record); ok {
-			return verifyDirectAWSCheckpoint(ctx, audit, cfg, providerID), nil
+			return verifyDirectAWSCheckpoint(ctx, audit, cfg, providerID, record.Native.AccountID), nil
 		}
 		coord, err := configuredAdminCoordinator()
 		if err != nil {
@@ -743,12 +743,22 @@ func (a App) verifyCheckpointRecord(ctx context.Context, store checkpointStore, 
 	}
 }
 
-func verifyDirectAWSCheckpoint(ctx context.Context, audit checkpointAudit, cfg Config, providerID string) checkpointAudit {
+func verifyDirectAWSCheckpoint(ctx context.Context, audit checkpointAudit, cfg Config, providerID, expectedAccountID string) checkpointAudit {
 	client, clientErr := newAWSClient(ctx, cfg)
 	if clientErr != nil {
 		audit.ProviderState = "unknown"
 		audit.NextAction = "check_auth_or_provider"
 		audit.Error = clientErr.Error()
+		return audit
+	}
+	return verifyDirectAWSCheckpointWithClient(ctx, audit, client, providerID, expectedAccountID)
+}
+
+func verifyDirectAWSCheckpointWithClient(ctx context.Context, audit checkpointAudit, client *AWSClient, providerID, expectedAccountID string) checkpointAudit {
+	if guardErr := client.GuardAccount(ctx, expectedAccountID); guardErr != nil {
+		audit.ProviderState = "unknown"
+		audit.NextAction = "check_auth_or_provider"
+		audit.Error = guardErr.Error()
 		return audit
 	}
 	image, imageErr := client.GetImageCheckpoint(ctx, providerID)

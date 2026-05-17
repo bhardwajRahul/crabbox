@@ -444,6 +444,36 @@ func TestDirectAWSCheckpointConfigUsesDirectMarker(t *testing.T) {
 	}
 }
 
+func TestVerifyDirectAWSCheckpointRefusesAccountMismatchBeforeNotFound(t *testing.T) {
+	var describeHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		switch action := r.Form.Get("Action"); action {
+		case "GetCallerIdentity":
+			writeSTSXML(w, `<GetCallerIdentityResponse><GetCallerIdentityResult><Account>999999999999</Account><Arn>arn:aws:iam::999999999999:user/test</Arn><UserId>AIDAEXAMPLE</UserId></GetCallerIdentityResult></GetCallerIdentityResponse>`)
+		case "DescribeImages":
+			describeHits++
+			writeEC2Error(w, "InvalidAMIID.NotFound", "image not found", http.StatusBadRequest)
+		default:
+			writeEC2Error(w, "Unexpected", action, http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	audit := verifyDirectAWSCheckpointWithClient(context.Background(), checkpointAudit{}, testAWSClient(server.URL), "ami-12345678", "123456789012")
+	if audit.ProviderState != "unknown" || audit.NextAction != "check_auth_or_provider" {
+		t.Fatalf("audit=%#v, want account mismatch auth/provider state", audit)
+	}
+	if !strings.Contains(audit.Error, "account mismatch") {
+		t.Fatalf("error=%q, want account mismatch", audit.Error)
+	}
+	if describeHits != 0 {
+		t.Fatalf("DescribeImages called %d time(s), want zero", describeHits)
+	}
+}
+
 func TestCreateDirectAWSAMICheckpointValidatesConfigBeforePreparingSource(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Provider = "aws"
