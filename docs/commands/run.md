@@ -69,7 +69,11 @@ command through E2B process APIs. The final timing summary reports
 
 When the lease has been hydrated by `crabbox actions hydrate`, `run` reads the remote marker under `$HOME/.crabbox/actions`, syncs into the workflow's `$GITHUB_WORKSPACE`, and sources the non-secret env file written by the workflow. That preserves the setup the workflow performed: checkout path, installed dependencies, service containers, caches, runner temp/toolcache paths, and any project-specific preparation. GitHub secrets and OIDC request tokens remain workflow-step scoped unless the project explicitly persists its own short-lived credentials.
 
-If a configured Actions hydration workflow exists and a package-manager command such as `pnpm`, `npm`, `node`, or `corepack` is run before a hydration marker exists, Crabbox warns that the raw box may not have the project runtime installed. Hydrate first for CI-like setup, or include the runtime setup explicitly in the command.
+If a JavaScript package-manager command such as `pnpm`, `npm`, `node`, or
+`corepack` is run on a raw SSH workspace before a hydration marker exists,
+Crabbox probes the remote tool first. Missing tools fail before source sync with
+guidance to hydrate first, include runtime setup in the command, or choose a
+provider/image with the JavaScript toolchain.
 
 `--browser` provisions or requires a known browser binary and injects
 `CRABBOX_BROWSER=1`, `BROWSER`, and `CHROME_BIN` into the remote command. It
