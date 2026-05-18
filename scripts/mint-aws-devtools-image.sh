@@ -279,6 +279,19 @@ smoke() {
   run_cmd "$CRABBOX_BIN" run --provider aws --target "$target" --id "$lease" --no-sync --shell -- "$script"
 }
 
+run_prep() {
+  local lease="$1"
+  if [[ "$target" == "windows" ]]; then
+    local encoded command
+    encoded="$(base64 <"$prep_script" | tr -d '\n')"
+    command="powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$__crabboxPrep = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded')); Invoke-Expression \$__crabboxPrep\""
+    printf '+ %q run --provider aws --target windows --id %q --no-sync --shell -- <encoded powershell prep %s bytes>\n' "$CRABBOX_BIN" "$lease" "${#encoded}"
+    "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --shell -- "$command"
+    return
+  fi
+  run_cmd "$CRABBOX_BIN" run --provider aws --target "$target" --id "$lease" --no-sync --script "$prep_script"
+}
+
 windows_reboot_required() {
   local lease="$1"
   local output
@@ -297,7 +310,7 @@ reboot_windows_source_if_needed() {
   run_cmd "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --shell -- 'shutdown /r /t 5 /f; Write-Output "reboot scheduled"'
   sleep "$reboot_settle_seconds"
   run_cmd "$CRABBOX_BIN" status --provider aws --target windows --id "$lease" --wait --wait-timeout "$reboot_wait_timeout"
-  run_cmd "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --script "$prep_script"
+  run_prep "$lease"
   if windows_reboot_required "$lease"; then
     printf 'Windows prep still requires reboot after one reboot cycle\n' >&2
     exit 1
@@ -322,7 +335,7 @@ if [[ "$run" != "1" ]]; then
 fi
 
 source_lease="$(warmup source)"
-run_cmd "$CRABBOX_BIN" run --provider aws --target "$target" --id "$source_lease" --no-sync --script "$prep_script"
+run_prep "$source_lease"
 reboot_windows_source_if_needed "$source_lease"
 smoke "$source_lease"
 
