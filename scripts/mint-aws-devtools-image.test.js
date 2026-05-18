@@ -125,6 +125,7 @@ test("AWS devtools mint wrapper runs linux source candidate and promoted proof",
   assert.match(log, /--browser/);
   assert.doesNotMatch(log, /warmup .*--region us-west-2/);
   assert.match(log, /run --provider aws --target linux --id cbx_source --no-sync --script/);
+  assert.match(log, /docker image inspect hello-world ubuntu:24\.04 node:24-bookworm/);
   assert.match(log, /image create --id cbx_source --name crabbox-linux-devtools-/);
   assert.match(log, /image promote ami-devtools --target linux --json --region us-west-2/);
 });

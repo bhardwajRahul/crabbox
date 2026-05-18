@@ -241,6 +241,7 @@ corepack --version
 pnpm --version
 docker --version
 docker version
+docker image inspect mcr.microsoft.com/windows/servercore:ltsc2022 | Out-Null
 POWERSHELL
   else
     cat <<'SHELL'
@@ -258,8 +259,14 @@ command -v npm
 command -v corepack
 command -v pnpm
 command -v docker
-docker version
-docker compose version
+docker_probe='docker version && docker compose version && docker image inspect hello-world ubuntu:24.04 node:24-bookworm >/dev/null'
+if ! sh -c "$docker_probe"; then
+  if command -v sg >/dev/null 2>&1 && getent group docker | grep -Eq "(^|,)$(whoami)(,|$)"; then
+    sg docker -c "$docker_probe"
+  else
+    sudo sh -c "$docker_probe"
+  fi
+fi
 test -d /var/cache/crabbox/pnpm
 SHELL
   fi
