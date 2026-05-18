@@ -13,7 +13,10 @@ log() {
 
 need_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
-    log "run through sudo or as root"
+    if command -v sudo >/dev/null 2>&1; then
+      exec sudo -E bash "$0" "$@"
+    fi
+    log "sudo is required when not running as root"
     exit 2
   fi
 }
@@ -154,7 +157,7 @@ print_versions() {
   docker compose version
 }
 
-need_root
+need_root "$@"
 export DEBIAN_FRONTEND=noninteractive
 cat >/etc/apt/apt.conf.d/80-crabbox-retries <<'APT'
 Acquire::Retries "8";
