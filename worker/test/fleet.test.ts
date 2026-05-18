@@ -1603,8 +1603,8 @@ describe("fleet lease identity and idle", () => {
               status: "ready",
               repo: "openclaw",
               workflow: ".github/workflows/ci-check-testbox.yml",
-              job: "check",
-              ref: "main",
+              job: "lease",
+              ref: "lease",
               createdAt: "2026-05-05T10:00:00.000Z",
               actionsRepo: "openclaw/openclaw",
               actionsRunID: "123456",
@@ -1656,7 +1656,7 @@ describe("fleet lease identity and idle", () => {
     expect(body).toContain("table-scroll");
     expect(body).toContain(".lease-table th:nth-child(1)");
     expect(body).toContain(
-      'data-filter-buttons="active:active,ended:ended,external:external,dedicated:dedicated,stale:stale,stuck:stuck,aws:aws,azure:azure,hetzner:hetzner,blacksmith-testbox:blacksmith,linux:linux,macos:macos,windows:windows,all:all"',
+      'data-filter-groups="state|state|active|all:any state,active:active,ended:ended,stale:stale,stuck:stuck;provider|provider|all|all:any provider,aws:aws,azure:azure,hetzner:hetzner,blacksmith-testbox:blacksmith;target|os|all|all:any os,linux:Linux,macos:macOS,windows:Windows;kind|kind|all|all:any kind,lease:lease,external:external,dedicated:dedicated"',
     );
     expect(body).toContain('data-filter-default="active"');
     expect(body).not.toContain("external runners");
@@ -1666,6 +1666,9 @@ describe("fleet lease identity and idle", () => {
     expect(body).toContain("stuck");
     expect(body).toContain(
       'data-filter-tags="active stuck actions mine external blacksmith-testbox ready in_progress',
+    );
+    expect(body).toContain(
+      'lease lease" data-filter-group-tags="kind:external owner:mine provider:blacksmith-testbox state:active state:stuck"',
     );
     expect(body).toContain("tbx_01testbox");
     expect(body).toContain("/portal/runners/blacksmith-testbox/tbx_01testbox");
@@ -1686,8 +1689,13 @@ describe("fleet lease identity and idle", () => {
     expect(body).toContain('data-target="windows"');
     expect(body).toContain("<span>win</span>");
     expect(body).toContain("<span>win (wsl2)</span>");
-    expect(body).toContain('data-filter-tags="active mine hetzner linux"');
-    expect(body).toContain('data-filter-tags="active mine azure linux"');
+    expect(body).toContain(
+      'data-filter-tags="lease active mine hetzner linux" data-filter-group-tags="kind:lease owner:mine provider:hetzner state:active target:linux"',
+    );
+    expect(body).toContain(
+      'data-filter-tags="lease active mine azure linux" data-filter-group-tags="kind:lease owner:mine provider:azure state:active target:linux"',
+    );
+    expect(body).toContain('groupTags.includes(group.key + ":" + value)');
     expect(body).toContain('class="access-cell"');
     expect(body).toContain('title="server"');
     expect(body).toContain('data-access="vscode"');
@@ -2084,6 +2092,7 @@ describe("fleet lease identity and idle", () => {
     expect(userBody).toContain("blue-lobster");
     expect(userBody).not.toContain("testbox-runner");
     expect(userBody).not.toContain("system:system");
+    expect(userBody).not.toContain("owner|owner");
 
     const adminResponse = await fleet.fetch(
       request("GET", "/portal", {
@@ -2099,9 +2108,9 @@ describe("fleet lease identity and idle", () => {
     expect(adminBody).toContain("blue-lobster");
     expect(adminBody).toContain("testbox-runner");
     expect(adminBody).toContain("1 system");
-    expect(adminBody).toContain("mine:mine,system:system");
-    expect(adminBody).toContain('data-filter-tags="active mine hetzner linux"');
-    expect(adminBody).toContain('data-filter-tags="active system aws linux"');
+    expect(adminBody).toContain("owner|owner|all|all:any owner,mine:mine,system:system");
+    expect(adminBody).toContain('data-filter-tags="lease active mine hetzner linux"');
+    expect(adminBody).toContain('data-filter-tags="lease active system aws linux"');
     expect(adminBody).toContain("cbx_000000000002 · blacksmith");
 
     const detail = await fleet.fetch(

@@ -73,23 +73,10 @@ export function portalHome(
   const system = systemLeases + systemRunners;
   const defaultFilter =
     active.length + activeRunners.length + activeMacHosts.length > 0 ? "active" : "all";
-  const filterButtons = [
-    "active:active",
-    "ended:ended",
-    "external:external",
-    "dedicated:dedicated",
-    "stale:stale",
-    "stuck:stuck",
-    ...(admin ? ["mine:mine", "system:system"] : []),
-    "aws:aws",
-    "azure:azure",
-    "hetzner:hetzner",
-    "blacksmith-testbox:blacksmith",
-    "linux:linux",
-    "macos:macos",
-    "windows:windows",
-    "all:all",
-  ].join(",");
+  const filterGroups = portalHomeFilterGroups(sortedLeases, sortedRunners, macHosts, {
+    admin,
+    defaultState: defaultFilter,
+  });
   const rows = [
     ...sortedLeases.map((lease) => ({ kind: "lease" as const, sort: leaseSortTime(lease), lease })),
     ...sortedRunners.map((runner) => ({
@@ -127,7 +114,7 @@ export function portalHome(
           <h2>leases</h2>
           <span>${escapeHTML(summary)}</span>
         </div>
-        <table class="lease-table" data-portal-table data-page-size="12" data-search-placeholder="search leases" data-filter-buttons="${escapeHTML(filterButtons)}" data-filter-default="${defaultFilter}">
+        <table class="lease-table" data-portal-table data-page-size="12" data-search-placeholder="search leases" data-filter-groups="${escapeHTML(filterGroups)}" data-filter-default="${defaultFilter}">
           <thead>
             <tr>
               <th>lease</th>
@@ -1551,7 +1538,14 @@ function leaseRow(
   const timeLabel = active
     ? lease.lastTouchedAt || lease.updatedAt || lease.createdAt
     : lease.endedAt || lease.releasedAt || lease.updatedAt;
-  return `<tr data-filter-tags="${escapeHTML([filterValue, ownership, lease.provider, target].join(" "))}">
+  const groupTags = portalRowFilterGroupTags({
+    kind: "lease",
+    owner: ownership,
+    provider: lease.provider,
+    state: filterValue,
+    target,
+  });
+  return `<tr data-filter-tags="${escapeHTML(["lease", filterValue, ownership, lease.provider, target].join(" "))}" data-filter-group-tags="${escapeHTML(groupTags)}">
     <td><a class="lease-link" href="${detailPath}"><strong>${escapeHTML(label)}</strong><small>${escapeHTML(subline)}</small></a></td>
     <td><span class="pill" data-state="${escapeHTML(lease.state)}">${escapeHTML(lease.state)}</span></td>
     <td>${providerBadge(lease.provider)}</td>
@@ -1561,6 +1555,138 @@ function leaseRow(
     ${timeCell(timeLabel)}
     <td></td>
   </tr>`;
+}
+
+function portalRowFilterGroupTags(groups: Record<string, string | string[] | undefined>): string {
+  return Object.entries(groups)
+    .flatMap(([group, rawValues]) => {
+      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+      return values
+        .filter((value): value is string => Boolean(value))
+        .map((value) => `${group}:${value}`);
+    })
+    .join(" ");
+}
+
+type PortalHomeFilterGroup = {
+  key: string;
+  label: string;
+  defaultValue: string;
+  options: Array<{ value: string; label: string }>;
+};
+
+function portalHomeFilterGroups(
+  leases: LeaseRecord[],
+  runners: ExternalRunnerRecord[],
+  macHosts: PortalMacHostRecord[],
+  options: { admin: boolean; defaultState: string },
+): string {
+  const providerValues = orderedFilterValues(
+    [
+      ...leases.map((lease) => lease.provider),
+      ...runners.map((runner) => runner.provider),
+      ...macHosts.map((host) => host.provider),
+    ],
+    ["aws", "azure", "hetzner", "blacksmith-testbox"],
+  );
+  const targetValues = orderedFilterValues(
+    [
+      ...leases.map((lease) => lease.target || "linux"),
+      ...macHosts.map((host) => host.target || "macos"),
+    ],
+    ["linux", "macos", "windows"],
+  );
+  const groups: PortalHomeFilterGroup[] = [
+    {
+      key: "state",
+      label: "state",
+      defaultValue: options.defaultState,
+      options: [
+        { value: "all", label: "any state" },
+        { value: "active", label: "active" },
+        { value: "ended", label: "ended" },
+        { value: "stale", label: "stale" },
+        { value: "stuck", label: "stuck" },
+      ],
+    },
+    {
+      key: "provider",
+      label: "provider",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "any provider" },
+        ...providerValues.map((value) => ({ value, label: providerFilterLabel(value) })),
+      ],
+    },
+    {
+      key: "target",
+      label: "os",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "any os" },
+        ...targetValues.map((value) => ({ value, label: targetFilterLabel(value) })),
+      ],
+    },
+    {
+      key: "kind",
+      label: "kind",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "any kind" },
+        { value: "lease", label: "lease" },
+        { value: "external", label: "external" },
+        { value: "dedicated", label: "dedicated" },
+      ],
+    },
+  ];
+  if (options.admin) {
+    groups.push({
+      key: "owner",
+      label: "owner",
+      defaultValue: "all",
+      options: [
+        { value: "all", label: "any owner" },
+        { value: "mine", label: "mine" },
+        { value: "system", label: "system" },
+      ],
+    });
+  }
+  return groups
+    .map((group) =>
+      [
+        group.key,
+        group.label,
+        group.defaultValue,
+        group.options.map((option) => `${option.value}:${option.label}`).join(","),
+      ].join("|"),
+    )
+    .join(";");
+}
+
+function orderedFilterValues(values: Array<string | undefined>, preferred: string[]): string[] {
+  const seen = new Set(values.filter((value): value is string => Boolean(value)));
+  const preferredSet = new Set(preferred);
+  const extras = Array.from(seen)
+    .filter((value) => !preferredSet.has(value))
+    .toSorted((a, b) => a.localeCompare(b));
+  return [...preferred, ...extras];
+}
+
+function providerFilterLabel(value: string): string {
+  return value === "blacksmith-testbox" ? "blacksmith" : value;
+}
+
+function targetFilterLabel(value: string): string {
+  if (value === "macos") {
+    return "macOS";
+  }
+  if (value === "windows") {
+    return "Windows";
+  }
+  if (value === "linux") {
+    return "Linux";
+  }
+  return value;
 }
 
 function macHostRow(
@@ -1586,10 +1712,18 @@ function macHostRow(
     host.availabilityZone,
     activeLease ? "attached" : undefined,
   ];
+  const filterValue = host.state === "released" ? "ended" : "active";
+  const groupTags = portalRowFilterGroupTags({
+    kind: "dedicated",
+    owner: ownership,
+    provider: host.provider,
+    state: filterValue,
+    target: host.target,
+  });
   const leaseMeta = activeLease
     ? `lease ${activeLease.slug || activeLease.id}`
     : [host.region, host.availabilityZone].filter(Boolean).join(" · ");
-  return `<tr class="capacity-row" data-filter-tags="${escapeHTML(tags.filter(Boolean).join(" "))}">
+  return `<tr class="capacity-row" data-filter-tags="${escapeHTML(tags.filter(Boolean).join(" "))}" data-filter-group-tags="${escapeHTML(groupTags)}">
     <td><a class="lease-link dedicated-link" href="${detailPath}"><span class="dedicated-mark" title="dedicated host" aria-label="dedicated host">${dedicatedHostIcon}</span><span><strong>${escapeHTML(shortHostID(host.id))}</strong><small>${escapeHTML(leaseMeta || host.id)}</small></span></a></td>
     <td><span class="pill" data-tone="${stateTone}">${escapeHTML(host.state || "-")}</span></td>
     <td>${providerBadge(host.provider)}</td>
@@ -1683,7 +1817,13 @@ function externalRunnerLeaseRow(
     runner.job,
     runner.ref,
   ];
-  return `<tr class="external-row" data-filter-tags="${escapeHTML(filterTags.filter(Boolean).join(" "))}">
+  const groupTags = portalRowFilterGroupTags({
+    kind: "external",
+    owner: ownership,
+    provider: runner.provider,
+    state: actionState?.stuck ? [state, "stuck"] : state,
+  });
+  return `<tr class="external-row" data-filter-tags="${escapeHTML(filterTags.filter(Boolean).join(" "))}" data-filter-group-tags="${escapeHTML(groupTags)}">
     <td><a class="lease-link" href="${escapeHTML(detailPath)}"><strong>${escapeHTML(runner.id)}</strong><small>${escapeHTML(subline)}</small></a></td>
     <td><div class="state-stack"><span class="pill" data-tone="${runner.stale ? "warn" : runnerStatusTone(runner.status)}">${escapeHTML(runner.status || "-")}</span>${externalRunnerActionBadge(actionState)}</div></td>
     <td>${providerBadge(runner.provider)}</td>
@@ -2515,6 +2655,11 @@ function html(
     .table-filters::-webkit-scrollbar { display:none; }
     .table-filter { flex:0 0 auto; min-height:22px; padding:0 7px; border:0; border-radius:5px; background:transparent; color:var(--muted); cursor:pointer; font:inherit; font-size:11px; }
     .table-filter[aria-pressed="true"] { background:var(--panel); color:var(--fg); }
+    .table-filters-selects { display:grid; grid-template-columns:repeat(4,minmax(112px,1fr)); gap:6px; padding:0; border:0; background:transparent; overflow:visible; }
+    .table-filter-select { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:6px; min-width:0; }
+    .table-filter-select span { color:var(--muted); font-size:10px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }
+    .table-filter-select select { width:100%; height:28px; min-width:0; padding:0 8px; border:1px solid var(--line); border-radius:7px; background:var(--inset); color:var(--fg); font:inherit; font-size:12px; }
+    .table-filter-select select:focus { outline:2px solid color-mix(in srgb, var(--accent) 34%, transparent); outline-offset:1px; border-color:color-mix(in srgb, var(--accent) 55%, var(--line)); }
     .table-count { color:var(--muted); font-size:12px; white-space:nowrap; }
     .table-footer { display:flex; justify-content:flex-end; align-items:center; gap:6px; min-height:36px; padding:5px 8px; background:var(--panel-2); }
     .table-page { min-width:64px; color:var(--muted); font-size:12px; text-align:center; }
@@ -2640,6 +2785,8 @@ function html(
       .table-tools { grid-template-columns:1fr; align-items:stretch; }
       .table-filters { justify-content:stretch; }
       .table-filter { flex:1; }
+      .table-filters-selects { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .table-filter-select { grid-template-columns:1fr; gap:2px; }
       .table-footer { justify-content:space-between; }
       .top{align-items:flex-start;}
       .vnc-bar { flex-wrap:wrap; gap:8px; min-height:0; padding:6px 10px; margin:0 -12px; }
@@ -2789,22 +2936,75 @@ function portalEnhancementsScript(): string {
         const parts = item.split(":");
         return { value: parts[0], label: parts[1] || parts[0] };
       });
+    const filterGroups = (table.dataset.filterGroups || "")
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const parts = item.split("|");
+        return {
+          key: parts[0],
+          label: parts[1] || parts[0],
+          defaultValue: parts[2] || "all",
+          options: (parts[3] || "")
+            .split(",")
+            .map((option) => option.trim())
+            .filter(Boolean)
+            .map((option) => {
+              const optionParts = option.split(":");
+              return { value: optionParts[0], label: optionParts[1] || optionParts[0] };
+            }),
+        };
+      })
+      .filter((group) => group.key && group.options.length > 0);
+    const selectedGroups = new Map();
     const filters = document.createElement("div");
     filters.className = "table-filters";
-    filters.hidden = filterButtons.length === 0;
-    const filterControls = filterButtons.map((filter) => {
-      const button = document.createElement("button");
-      button.className = "table-filter";
-      button.type = "button";
-      button.textContent = filter.label;
-      button.addEventListener("click", () => {
-        selectedFilter = filter.value;
-        page = 1;
-        apply();
+    filters.hidden = filterButtons.length === 0 && filterGroups.length === 0;
+    const filterControls = [];
+    if (filterGroups.length > 0) {
+      filters.classList.add("table-filters-selects");
+      filterGroups.forEach((group) => {
+        const label = document.createElement("label");
+        label.className = "table-filter-select";
+        const labelText = document.createElement("span");
+        labelText.textContent = group.label;
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", group.label + " filter");
+        group.options.forEach((option) => {
+          const element = document.createElement("option");
+          element.value = option.value;
+          element.textContent = option.label;
+          select.append(element);
+        });
+        select.value = group.options.some((option) => option.value === group.defaultValue)
+          ? group.defaultValue
+          : "all";
+        selectedGroups.set(group.key, select.value);
+        select.addEventListener("change", () => {
+          selectedGroups.set(group.key, select.value);
+          page = 1;
+          apply();
+        });
+        label.append(labelText, select);
+        filters.append(label);
+        filterControls.push({ group, select });
       });
-      filters.append(button);
-      return { ...filter, button };
-    });
+    } else {
+      filterButtons.forEach((filter) => {
+        const button = document.createElement("button");
+        button.className = "table-filter";
+        button.type = "button";
+        button.textContent = filter.label;
+        button.addEventListener("click", () => {
+          selectedFilter = filter.value;
+          page = 1;
+          apply();
+        });
+        filters.append(button);
+        filterControls.push({ ...filter, button });
+      });
+    }
     const count = document.createElement("span");
     count.className = "table-count";
     tools.append(input, filters, count);
@@ -2870,8 +3070,14 @@ function portalEnhancementsScript(): string {
       const filtered = sorted(dataRows.filter(
         (row) => {
           const tags = (row.dataset.filterTags || row.dataset.filterValue || "").split(/\\s+/);
+          const groupTags = (row.dataset.filterGroupTags || "").split(/\\s+/);
+          const groupMatch = filterGroups.length === 0 || filterGroups.every((group) => {
+            const value = selectedGroups.get(group.key) || "all";
+            return value === "all" || groupTags.includes(group.key + ":" + value);
+          });
           return (
-            (selectedFilter === "all" || tags.includes(selectedFilter)) &&
+            groupMatch &&
+            (filterGroups.length > 0 || selectedFilter === "all" || tags.includes(selectedFilter)) &&
             row.textContent.toLowerCase().includes(query)
           );
         },
@@ -2887,7 +3093,9 @@ function portalEnhancementsScript(): string {
       generatedEmpty.hidden = dataRows.length === 0 || filtered.length > 0;
       if (originalEmpty) originalEmpty.hidden = dataRows.length > 0;
       filterControls.forEach((filter) => {
-        filter.button.setAttribute("aria-pressed", String(filter.value === selectedFilter));
+        if (filter.button) {
+          filter.button.setAttribute("aria-pressed", String(filter.value === selectedFilter));
+        }
       });
       count.textContent = dataRows.length ? filtered.length + " of " + dataRows.length : "0";
       pageLabel.textContent = page + " / " + pages;
