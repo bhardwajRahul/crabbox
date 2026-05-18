@@ -16,6 +16,8 @@ Use names that identify owner, purpose, and UTC bake time:
 
 ```text
 crabbox-linux-desktop-browser-YYYYMMDD-HHMM
+crabbox-linux-devtools-YYYYMMDD-HHMM
+crabbox-windows-devtools-YYYYMMDD-HHMM
 crabbox-macos-arm64-YYYYMMDD-HHMM
 ```
 
@@ -33,6 +35,8 @@ Bake machine capabilities:
 - Chrome/Chromium for browser leases;
 - `ffmpeg`, `ffprobe`, `scrot`, `xdotool`, and other capture helpers;
 - Node 24, npm, corepack, pnpm;
+- Docker Engine plus the Compose and buildx plugins where the platform supports
+  them;
 - build-essential, Python, and common native-addon headers;
 - empty cache directories such as `/var/cache/crabbox/pnpm`.
 
@@ -171,6 +175,73 @@ crabbox run \
 
 Keep the previous promoted AMI available until at least one normal brokered
 lease and one relevant QA lane pass on the new image.
+
+## Linux And Windows Developer Images
+
+For generic AWS Linux and Windows developer AMIs, use the guarded wrapper
+instead of hand-running the prep and image commands:
+
+```bash
+scripts/mint-aws-devtools-image.sh --target linux
+scripts/mint-aws-devtools-image.sh --target windows
+```
+
+The default is a no-spend plan. Add `--run` only when the selected AWS account,
+region, quotas, and image name are correct:
+
+```bash
+scripts/mint-aws-devtools-image.sh \
+  --target linux \
+  --region us-west-2 \
+  --type m7i.large \
+  --run
+
+scripts/mint-aws-devtools-image.sh \
+  --target windows \
+  --region us-west-2 \
+  --type m7i.large \
+  --windows-mode normal \
+  --run
+```
+
+The Linux prep script installs common CLI/build tooling, GitHub CLI, Node 24,
+corepack/pnpm, Chrome or Chromium for browser lanes, desktop/VNC helpers, Docker
+Engine, Compose, buildx, and a small default Docker image set. The Windows prep
+script installs common CLI/build tooling, GitHub CLI, Node 24, corepack/pnpm,
+and Windows Server container support with Docker Engine. It deliberately avoids
+Docker Desktop because headless image bakes should not depend on a user-session
+desktop app or Docker Desktop licensing.
+
+Tune the default prebake set with environment variables:
+
+```bash
+CRABBOX_LINUX_DOCKER_IMAGES='hello-world ubuntu:24.04 node:24-bookworm'
+CRABBOX_WINDOWS_DOCKER_IMAGES='mcr.microsoft.com/windows/servercore:ltsc2022'
+CRABBOX_LINUX_BROWSER=0
+CRABBOX_LINUX_DESKTOP_TOOLS=0
+CRABBOX_WINDOWS_INSTALL_DOCKER=0
+```
+
+The wrapper always proves the source lease, candidate AMI, and promoted AMI
+before declaring success unless `--no-promote` is set. It writes warmup timing
+logs under `.crabbox/image-mint-<image-name>-*.log`, which is the evidence to
+compare before and after each bake.
+
+## Fast Boot Expectations
+
+Fast images come from moving stable machine setup into the AMI and keeping
+per-lease bootstrap tiny. Bake OS patches, developer tools, Docker, browser
+bits, cache directories, service enablement, and first-run suppression. Do not
+bake repository checkouts, package installs tied to one lockfile, browser login
+state, or secrets.
+
+For Blacksmith-like cold-start times on AWS, an AMI alone is not always enough.
+EBS snapshots hydrate lazily by default, so new regions or availability zones
+can still pay first-read penalties. For hot production lanes, keep capacity in
+the same region as the promoted AMI, track the wrapper timing logs, and enable
+AWS Fast Snapshot Restore on the backing snapshots in the availability zones
+where the image must boot immediately. Treat snapshot warmup as a separate
+provider-cost decision; do not enable it casually for every candidate image.
 
 ## macOS Images
 
