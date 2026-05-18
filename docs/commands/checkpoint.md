@@ -34,6 +34,9 @@ crabbox checkpoint create --id blue-lobster --name after-npm-ci
 crabbox checkpoint fork chk_abc123 --class beast
 # Output: checkpoint forked id=chk_abc123 lease=cbx_xyz slug=purple-whale
 
+# Request a specific slug for the forked lease
+crabbox checkpoint fork chk_abc123 --slug update-flow-smoke
+
 # Use forked lease
 crabbox run --id purple-whale -- npm test
 ```
@@ -162,6 +165,7 @@ crabbox checkpoint fork chk_abc123 --class beast
 ```
 --class <class>  Lease class (standard, beast, etc.)
 --provider <p>   Provider (aws, azure, gcp, etc.)
+--slug <slug>    Request a friendly slug for the forked lease
 --keep           Keep lease running, default true
 ```
 
