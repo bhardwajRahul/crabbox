@@ -54,6 +54,9 @@ install_homebrew() {
   else
     prefix="/usr/local"
   fi
+  if [[ "$prefix" != "/usr/local" && -L /usr/local/bin/brew ]]; then
+    sudo rm -f /usr/local/bin/brew
+  fi
   if [[ ! -x "$prefix/bin/brew" ]]; then
     log "installing Homebrew into $prefix"
     NONINTERACTIVE=1 CI=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
