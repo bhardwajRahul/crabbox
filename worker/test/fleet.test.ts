@@ -1833,6 +1833,10 @@ describe("fleet lease identity and idle", () => {
     expect(startBody).toContain(
       "CRABBOX_HOST_ID=h-000000000003 crabbox warmup --provider aws --target macos --market on-demand --type mac2.metal --desktop",
     );
+    expect(startBody).toContain(
+      'data-copy-value="CRABBOX_HOST_ID=h-000000000003 crabbox warmup --provider aws --target macos --market on-demand --type mac2.metal --desktop"',
+    );
+    expect(startBody).toContain("copy start command");
     expect(startBody).toContain("crabbox webvnc --id &lt;lease-id-or-slug&gt; --open");
     expect(startBody).toContain("host-pinned macOS run");
 

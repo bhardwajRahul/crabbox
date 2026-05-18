@@ -429,12 +429,13 @@ export function portalMacHostDetail(
   const activeLease = lease?.state === "active" ? lease : undefined;
   const stateTone = macHostStateTone(host.state);
   const hostID = shortHostID(host.id);
+  const startDesktopCommand = activeLease ? "" : macHostStartDesktopCommand(host);
   const vncAction =
     activeLease?.desktop === true
       ? `<a class="button" href="/portal/leases/${encodeURIComponent(activeLease.id)}/vnc">open VNC</a>`
       : activeLease
         ? `<form method="post" action="${macHostVNCPath(host)}"><button class="button" type="submit">enable VNC</button></form>`
-        : `<a class="button" href="#access-commands">start locally</a>`;
+        : `<button class="button" type="button" data-copy-value="${escapeHTML(startDesktopCommand)}">copy start command</button>`;
   const codeAction =
     activeLease?.code === true
       ? `<a class="button" href="/portal/leases/${encodeURIComponent(activeLease.id)}/code/">open code</a>`
@@ -452,7 +453,7 @@ export function portalMacHostDetail(
         .filter(Boolean)
         .join("")
     : [
-        commandBlock("start desktop lease", macHostStartDesktopCommand(host)),
+        commandBlock("start desktop lease", startDesktopCommand),
         commandBlock("open WebVNC", "crabbox webvnc --id <lease-id-or-slug> --open"),
         commandBlock(
           "host-pinned macOS run",
@@ -2348,13 +2349,14 @@ function html(
     .section-head { display:flex; justify-content:space-between; align-items:center; min-height:34px; padding:7px 10px; border-bottom:1px solid var(--line); }
     .section-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; color:var(--muted); }
     .section-actions span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .button { display:inline-flex; align-items:center; justify-content:center; min-height:28px; padding:0 10px; border-radius:7px; background:var(--accent); color:#001018; text-decoration:none; font-size:12px; font-weight:700; white-space:nowrap; }
+    .button { display:inline-flex; align-items:center; justify-content:center; min-height:28px; padding:0 10px; border-radius:7px; border:1px solid transparent; background:var(--accent); color:#001018; text-decoration:none; font-size:12px; font-weight:700; white-space:nowrap; cursor:pointer; }
     .button.secondary { background:transparent; color:var(--fg); border:1px solid var(--line); font-weight:500; }
     .button.secondary:hover { background:#1b1f24; border-color:#3a4046; }
     .button.action { min-width:56px; border:1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); background:color-mix(in srgb, var(--accent) 10%, transparent); color:#bae6fd; }
     .button.action:hover { background:color-mix(in srgb, var(--accent) 16%, transparent); border-color:color-mix(in srgb, var(--accent) 58%, var(--line)); }
     .button:disabled { opacity:0.45; cursor:not-allowed; }
     .button.danger { border:1px solid color-mix(in srgb, var(--bad) 42%, var(--line)); background:color-mix(in srgb, var(--bad) 18%, transparent); color:#fecaca; cursor:pointer; }
+    .button[data-state="ok"] { border-color:color-mix(in srgb, var(--ok) 45%, var(--line)); color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent); }
     .lease-link { display:block; min-width:0; text-decoration:none; overflow:hidden; text-overflow:ellipsis; }
     .lease-link strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .mono { font-family:var(--mono); }
