@@ -26,9 +26,11 @@ import {
   portalExternalRunnerDetail,
   portalHome,
   portalLeaseDetail,
+  portalMacHostDetail,
   portalRunDetail,
   portalShareLease,
   portalVNC,
+  type PortalLeaseBridgeStatus,
   type PortalMacHostRecord,
   webVNCBridgeCommand,
 } from "./portal";
@@ -1341,7 +1343,7 @@ export class FleetDurableObject implements DurableObject {
         this.visibleExternalRunners(request),
         this.portalMacHosts(),
       ]);
-      return portalHome(leases, runners, request, macHosts);
+      return portalHome(leases, runners, request, this.attachPortalMacHostLeases(macHosts, leases));
     }
     if (method === "GET" && parts[1] === "runs" && parts[2]) {
       return await this.portalRunRoute(request, parts[2], parts[3]);
@@ -1354,6 +1356,28 @@ export class FleetDurableObject implements DurableObject {
       parts[4] === undefined
     ) {
       return await this.portalExternalRunnerPage(request, parts[2], parts[3]);
+    }
+    if (
+      method === "GET" &&
+      parts[1] === "hosts" &&
+      parts[2] &&
+      parts[3] &&
+      parts[4] === undefined
+    ) {
+      return await this.portalMacHostPage(request, parts[2], parts[3]);
+    }
+    if (
+      method === "GET" &&
+      parts[1] === "hosts" &&
+      parts[2] &&
+      parts[3] &&
+      parts[4] === "vnc" &&
+      parts[5] === undefined
+    ) {
+      return await this.portalMacHostLeaseRedirect(request, parts[2], parts[3], "vnc");
+    }
+    if (method === "GET" && parts[1] === "hosts" && parts[2] && parts[3] && parts[4] === "code") {
+      return await this.portalMacHostLeaseRedirect(request, parts[2], parts[3], "code");
     }
     if (method === "GET" && parts[1] === "leases" && parts[2] && parts[3] === undefined) {
       return await this.portalLeasePage(request, parts[2]);
@@ -1463,6 +1487,79 @@ export class FleetDurableObject implements DurableObject {
     }
   }
 
+  private attachPortalMacHostLeases(
+    hosts: PortalMacHostRecord[],
+    leases: LeaseRecord[],
+  ): PortalMacHostRecord[] {
+    const activeMacLeases = leases.filter(
+      (lease) => lease.state === "active" && lease.target === "macos",
+    );
+    return hosts.map((host) => {
+      const lease = activeMacLeases.find((item) => leaseHostID(item) === host.id);
+      return lease ? { ...host, lease } : host;
+    });
+  }
+
+  private async resolvePortalMacHost(
+    request: Request,
+    provider: string,
+    hostID: string,
+  ): Promise<PortalMacHostRecord | undefined> {
+    if (provider !== "aws") {
+      return undefined;
+    }
+    const [leases, hosts] = await Promise.all([this.portalLeases(request), this.portalMacHosts()]);
+    return this.attachPortalMacHostLeases(hosts, leases).find(
+      (host) => host.provider === provider && host.id === hostID,
+    );
+  }
+
+  private async portalMacHostPage(
+    request: Request,
+    provider: string,
+    hostID: string,
+  ): Promise<Response> {
+    const host = await this.resolvePortalMacHost(request, provider, hostID);
+    if (!host) {
+      return portalError(
+        "Host not found",
+        "That dedicated host is not visible or the provider is not configured.",
+        404,
+      );
+    }
+    return portalMacHostDetail(host, host.lease ? this.leaseBridgeStatus(host.lease) : undefined);
+  }
+
+  private async portalMacHostLeaseRedirect(
+    request: Request,
+    provider: string,
+    hostID: string,
+    action: "vnc" | "code",
+  ): Promise<Response> {
+    const host = await this.resolvePortalMacHost(request, provider, hostID);
+    const lease = host?.lease?.state === "active" ? host.lease : undefined;
+    if (!host || !lease) {
+      return portalError(
+        action === "vnc" ? "WebVNC unavailable" : "Code unavailable",
+        "No active Crabbox lease is attached to that dedicated host.",
+        409,
+      );
+    }
+    const error = action === "vnc" ? webVNCLeaseError(lease) : codeLeaseError(lease);
+    if (error) {
+      return portalError(action === "vnc" ? "WebVNC unavailable" : "Code unavailable", error, 409);
+    }
+    return new Response(null, {
+      status: 303,
+      headers: {
+        location:
+          action === "vnc"
+            ? `/portal/leases/${encodeURIComponent(lease.id)}/vnc`
+            : `/portal/leases/${encodeURIComponent(lease.id)}/code/`,
+      },
+    });
+  }
+
   private async resolvePortalLease(
     identifier: string,
     request: Request,
@@ -1483,6 +1580,12 @@ export class FleetDurableObject implements DurableObject {
       .filter((run) => run.leaseID === lease.id && this.runVisibleToRequest(run, request))
       .toSorted((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, 12);
+    return portalLeaseDetail(lease, runs, this.leaseBridgeStatus(lease), {
+      canManage: this.leaseManageableByRequest(lease, request, isAdminRequest(request)),
+    });
+  }
+
+  private leaseBridgeStatus(lease: LeaseRecord): PortalLeaseBridgeStatus {
     const egress = this.egressSessions.get(lease.id);
     const egressKey = egress ? egressSocketKey(lease.id, egress.sessionID) : undefined;
     const bridgeStatus = {
@@ -1490,27 +1593,22 @@ export class FleetDurableObject implements DurableObject {
       webVNCViewerConnected: this.openWebVNCViewers(lease.id).length > 0,
       codeBridgeConnected: this.codeAgents.get(lease.id)?.readyState === WebSocket.OPEN,
     };
-    return portalLeaseDetail(
-      lease,
-      runs,
-      egress
-        ? {
-            ...bridgeStatus,
-            egress: {
-              profile: egress.profile ?? "",
-              allow: egress.allow,
-              hostConnected: egressKey
-                ? this.egressHosts.get(egressKey)?.readyState === WebSocket.OPEN
-                : false,
-              clientConnected: egressKey
-                ? this.egressClients.get(egressKey)?.readyState === WebSocket.OPEN
-                : false,
-              updatedAt: egress.updatedAt,
-            },
-          }
-        : bridgeStatus,
-      { canManage: this.leaseManageableByRequest(lease, request, isAdminRequest(request)) },
-    );
+    return egress
+      ? {
+          ...bridgeStatus,
+          egress: {
+            profile: egress.profile ?? "",
+            allow: egress.allow,
+            hostConnected: egressKey
+              ? this.egressHosts.get(egressKey)?.readyState === WebSocket.OPEN
+              : false,
+            clientConnected: egressKey
+              ? this.egressClients.get(egressKey)?.readyState === WebSocket.OPEN
+              : false,
+            updatedAt: egress.updatedAt,
+          },
+        }
+      : bridgeStatus;
   }
 
   private async portalReleaseLease(request: Request, identifier: string): Promise<Response> {
@@ -5012,6 +5110,10 @@ function identifierMatchesLease(identifier: string, lease: LeaseRecord): boolean
   return (
     identifier === lease.id || normalizeLeaseSlug(identifier) === normalizeLeaseSlug(lease.slug)
   );
+}
+
+function leaseHostID(lease: LeaseRecord): string {
+  return lease.hostId || lease.hostID || "";
 }
 
 export interface WebVNCBuffer {

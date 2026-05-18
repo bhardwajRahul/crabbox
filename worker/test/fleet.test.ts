@@ -1603,7 +1603,7 @@ describe("fleet lease identity and idle", () => {
     expect(body).toContain("table-scroll");
     expect(body).toContain(".lease-table th:nth-child(1)");
     expect(body).toContain(
-      'data-filter-buttons="active:active,ended:ended,external:external,stale:stale,stuck:stuck,aws:aws,azure:azure,hetzner:hetzner,blacksmith-testbox:blacksmith,linux:linux,macos:macos,windows:windows,all:all"',
+      'data-filter-buttons="active:active,ended:ended,external:external,dedicated:dedicated,stale:stale,stuck:stuck,aws:aws,azure:azure,hetzner:hetzner,blacksmith-testbox:blacksmith,linux:linux,macos:macos,windows:windows,all:all"',
     );
     expect(body).toContain('data-filter-default="active"');
     expect(body).not.toContain("external runners");
@@ -1681,8 +1681,28 @@ describe("fleet lease identity and idle", () => {
       },
     );
     vi.stubGlobal("fetch", fetchMock);
+    const storage = new MemoryStorage();
+    storage.seed(
+      "lease:cbx_000000000099",
+      testLease({
+        id: "cbx_000000000099",
+        slug: "mac-mini",
+        provider: "aws",
+        target: "macos",
+        desktop: true,
+        class: "mac",
+        serverType: "mac2.metal",
+        hostId: "h-000000000001",
+        cloudID: "i-000000000099",
+        region: "eu-west-1",
+        createdAt: "2026-05-17T00:10:00.000Z",
+        updatedAt: "2026-05-17T00:20:00.000Z",
+        lastTouchedAt: "2026-05-17T00:20:00.000Z",
+        expiresAt: "2026-05-17T02:20:00.000Z",
+      }),
+    );
     const fleet = testFleet(
-      new MemoryStorage(),
+      storage,
       {},
       {
         AWS_ACCESS_KEY_ID: "test",
@@ -1702,13 +1722,45 @@ describe("fleet lease identity and idle", () => {
 
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain("mac hosts");
-    expect(body).toContain("1 available / 2 total");
+    expect(body).not.toContain("mac hosts");
+    expect(body).not.toContain("1 available / 2 total");
+    expect(body).toContain('class="capacity-row"');
+    expect(body).toContain("dedicated");
+    expect(body).toContain('data-filter-tags="active mine dedicated host aws macos available');
+    expect(body).toContain("/portal/hosts/aws/h-000000000001");
+    expect(body).toContain("/portal/hosts/aws/h-000000000001/vnc");
+    expect(body).toContain("lease mac-mini");
     expect(body).toContain("mac2.metal");
     expect(body).toContain("eu-west-1a");
     expect(body).toContain("eu-west-1b");
     expect(body).toContain("available");
     expect(body).toContain("pending");
+
+    const detail = await fleet.fetch(
+      request("GET", "/portal/hosts/aws/h-000000000001", {
+        headers: {
+          "x-crabbox-owner": "peter@example.com",
+          "x-crabbox-org": "openclaw",
+        },
+      }),
+    );
+    expect(detail.status).toBe(200);
+    const detailBody = await detail.text();
+    expect(detailBody).toContain("dedicated host");
+    expect(detailBody).toContain("attached lease");
+    expect(detailBody).toContain("mac-mini / cbx_000000000099");
+    expect(detailBody).toContain("/portal/leases/cbx_000000000099/vnc");
+
+    const vnc = await fleet.fetch(
+      request("GET", "/portal/hosts/aws/h-000000000001/vnc", {
+        headers: {
+          "x-crabbox-owner": "peter@example.com",
+          "x-crabbox-org": "openclaw",
+        },
+      }),
+    );
+    expect(vnc.status).toBe(303);
+    expect(vnc.headers.get("location")).toBe("/portal/leases/cbx_000000000099/vnc");
   });
 
   it("syncs external runner visibility and marks missing runners stale", async () => {
