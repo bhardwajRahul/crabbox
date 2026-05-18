@@ -158,7 +158,8 @@ test("AWS devtools mint wrapper maps windows flags", async () => {
   assert.match(log, /--windows-mode normal/);
   assert.doesNotMatch(log, /--browser/);
   assert.doesNotMatch(log, /warmup .*--region us-east-1/);
-  assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- powershell/);
+  assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- New-Item/);
+  assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- Add-Content/);
   assert.match(log, /FromBase64String/);
   assert.doesNotMatch(log, /image promote/);
 });
@@ -190,5 +191,6 @@ test("AWS devtools mint wrapper reboots windows source when prep requires it", a
   assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- if \(Test-Path/);
   assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- shutdown \/r \/t 5 \/f/);
   assert.match(log, /status --provider aws --target windows --id cbx_source --wait --wait-timeout 25m/);
-  assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- powershell/);
+  assert.match(log, /run --provider aws --target windows --id cbx_source --no-sync --shell -- Add-Content/);
+  assert.match(log, /FromBase64String/);
 });

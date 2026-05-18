@@ -282,10 +282,18 @@ smoke() {
 run_prep() {
   local lease="$1"
   if [[ "$target" == "windows" ]]; then
-    local encoded command
+    local encoded chunk_size offset chunk remote_b64 remote_script command
     encoded="$(base64 <"$prep_script" | tr -d '\n')"
-    command="powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$__crabboxPrep = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded')); Invoke-Expression \$__crabboxPrep\""
-    printf '+ %q run --provider aws --target windows --id %q --no-sync --shell -- <encoded powershell prep %s bytes>\n' "$CRABBOX_BIN" "$lease" "${#encoded}"
+    chunk_size=1800
+    remote_b64='C:\ProgramData\crabbox\image-prep.b64'
+    remote_script='C:\ProgramData\crabbox\image-prep.ps1'
+    run_cmd "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --shell -- "New-Item -ItemType Directory -Force -Path 'C:\\ProgramData\\crabbox' | Out-Null; Set-Content -Path '$remote_b64' -Value '' -NoNewline"
+    for ((offset = 0; offset < ${#encoded}; offset += chunk_size)); do
+      chunk="${encoded:offset:chunk_size}"
+      run_cmd "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --shell -- "Add-Content -Path '$remote_b64' -Value '$chunk' -NoNewline"
+    done
+    command="\$__crabboxPrep = Get-Content -Raw '$remote_b64'; [IO.File]::WriteAllBytes('$remote_script', [Convert]::FromBase64String(\$__crabboxPrep)); powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '$remote_script'"
+    printf '+ %q run --provider aws --target windows --id %q --no-sync --shell -- <chunked powershell prep %s bytes>\n' "$CRABBOX_BIN" "$lease" "${#encoded}"
     "$CRABBOX_BIN" run --provider aws --target windows --id "$lease" --no-sync --shell -- "$command"
     return
   fi
