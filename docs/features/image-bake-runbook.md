@@ -360,10 +360,11 @@ requires an active Apple developer tools directory, a macOS SDK through
 waits for the portal bridge to report `connected=true`, collects desktop
 artifacts, creates a candidate AMI with a rebooting image capture, boots and
 smokes the candidate, then promotes and smokes the promoted image when
-`CRABBOX_MACOS_PROMOTE=1`. Command Line Tools are enough by default; full Xcode
-is not required unless `CRABBOX_MACOS_REQUIRE_XCODE=1` is set. For `mac2*`
-families the default gates are macOS 14+ and Swift tools 6.0+ because those are
-the launchable hosts commonly available today. For newer `mac-m*` families the
+`CRABBOX_MACOS_PROMOTE=1`. The generic lifecycle defaults to Command Line
+Tools-compatible checks; set `CRABBOX_MACOS_REQUIRE_XCODE=1` when the image must
+run SwiftPM, app, or SDK lanes that depend on Xcode.app. For `mac2*` families
+the default gates are macOS 14+ and Swift tools 6.0+ because those are the
+launchable hosts commonly available today. For newer `mac-m*` families the
 defaults are macOS 15+ and Swift tools 6.2+, which matches Swift package lanes
 that require `swift-tools-version: 6.2` and macOS 15 SDKs. Tune the toolchain
 gates with `CRABBOX_MACOS_REQUIRED_MAJOR` and
@@ -397,13 +398,15 @@ scripts/macos-image-lifecycle-smoke.sh
 ```
 
 The bundled developer-tool prep script keeps the image generic: it verifies
-Command Line Tools, installs Homebrew when missing, installs common developer
-packages such as Git, GitHub CLI, jq/yq, ripgrep, fd, ShellCheck, shfmt, Python,
-Node 24, and activates pnpm through corepack. It also creates `/usr/local/bin`
-shims so non-login SSH commands can find those tools after the AMI boots. Use a
-private prep hook only for organization-specific setup. Do not put Apple
-credentials, download tokens, or private package mirrors in this repository or
-in baked images.
+Command Line Tools by default, or selects an installed `/Applications/Xcode*.app`
+developer directory when `CRABBOX_MACOS_REQUIRE_XCODE=1`. It installs Homebrew
+when missing, installs common developer packages such as Git, GitHub CLI, jq/yq,
+ripgrep, fd, ShellCheck, shfmt, Python, Node 24, and activates pnpm through
+corepack. It also creates `/usr/local/bin` shims so non-login SSH commands can
+find those tools after the AMI boots. The script does not download Xcode;
+install Xcode in a private prep hook first if the base image does not already
+contain it. Do not put Apple credentials, download tokens, or private package
+mirrors in this repository or in baked images.
 
 For the generic developer-tools image, prefer the small wrapper instead of
 remembering the lifecycle environment by hand:
@@ -414,12 +417,18 @@ scripts/mint-macos-devtools-image.sh
 
 That default is no-spend: it runs coordinator, IAM, offering, quota, host list,
 and allocation dry-run checks, writes the usual lifecycle summary, and stops
-before lease creation. To mint from an already available host:
+before lease creation. The wrapper is intentionally stricter than the generic
+lifecycle: it defaults to `mac-m4.metal`, macOS 15+, Swift tools 6.2+, and full
+Xcode.app via `CRABBOX_MACOS_REQUIRE_XCODE=1`. For an older CLT-only image, set
+`CRABBOX_MACOS_TYPE=mac2.metal`, `CRABBOX_MACOS_REQUIRED_MAJOR=14`,
+`CRABBOX_MACOS_REQUIRED_SWIFT_TOOLS=6.0`, and
+`CRABBOX_MACOS_REQUIRE_XCODE=0` explicitly. To mint from an already available
+host:
 
 ```bash
 scripts/mint-macos-devtools-image.sh \
   --region us-west-2 \
-  --type mac2.metal \
+  --type mac-m4.metal \
   --use-existing
 ```
 
@@ -428,7 +437,7 @@ To allow paid host allocation when no reusable host exists:
 ```bash
 scripts/mint-macos-devtools-image.sh \
   --region us-west-2 \
-  --type mac2.metal \
+  --type mac-m4.metal \
   --allocate
 ```
 
