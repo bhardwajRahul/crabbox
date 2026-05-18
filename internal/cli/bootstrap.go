@@ -569,9 +569,14 @@ set -euo pipefail
 rsync --version >/dev/null
 curl --version >/dev/null
 test -w ` + shellQuote(workRoot) + `
+ssh_ready=0
 for port in ` + sshPortsShell + `; do
-  nc -z 127.0.0.1 "$port"
+  if nc -z 127.0.0.1 "$port"; then
+    ssh_ready=1
+    break
+  fi
 done
+test "$ssh_ready" -eq 1
 nc -z 127.0.0.1 5900
 READY
 chmod 0755 /usr/local/bin/crabbox-ready
