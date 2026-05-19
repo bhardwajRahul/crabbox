@@ -214,7 +214,6 @@ Install-ChocoPackage @(
   "python313",
   "curl",
   "wget",
-  "openssh",
   "vcredist-all"
 )
 Refresh-SessionPath
