@@ -1157,6 +1157,45 @@ func TestConfigHelperBranches(t *testing.T) {
 	}
 }
 
+func TestConfigHelperErrorBranches(t *testing.T) {
+	t.Run("unavailable user config dir", func(t *testing.T) {
+		t.Setenv("CRABBOX_CONFIG", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("HOME", "")
+		if _, err := writeUserFileConfig(fileConfig{Profile: "missing-home"}); err == nil {
+			t.Fatal("expected unavailable user config dir error")
+		}
+	})
+
+	t.Run("config parent is file", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "not-dir")
+		if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CRABBOX_CONFIG", filepath.Join(parent, "config.yaml"))
+		if _, err := writeUserFileConfig(fileConfig{Profile: "mkdir-fails"}); err == nil {
+			t.Fatal("expected config directory create error")
+		}
+	})
+
+	t.Run("config path is directory", func(t *testing.T) {
+		path := t.TempDir()
+		t.Setenv("CRABBOX_CONFIG", path)
+		if _, err := writeUserFileConfig(fileConfig{Profile: "write-fails"}); err == nil {
+			t.Fatal("expected config write error")
+		}
+	})
+}
+
+func TestWindowsWSLWorkRoot(t *testing.T) {
+	if got := windowsWSLWorkRoot(Config{}); got != defaultPOSIXWorkRoot {
+		t.Fatalf("windowsWSLWorkRoot default=%q want %q", got, defaultPOSIXWorkRoot)
+	}
+	if got := windowsWSLWorkRoot(Config{WorkRoot: "/work/custom"}); got != "/work/custom" {
+		t.Fatalf("windowsWSLWorkRoot custom=%q", got)
+	}
+}
+
 func TestEnvHelperBranches(t *testing.T) {
 	t.Setenv("CRABBOX_INT", "42")
 	t.Setenv("CRABBOX_BAD_INT", "oops")
