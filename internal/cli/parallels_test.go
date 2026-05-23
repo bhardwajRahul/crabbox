@@ -122,6 +122,9 @@ func TestParallelsRemoteCommandUsesSSHHostThenCommand(t *testing.T) {
 	if strings.HasPrefix(runner.lastReq.Args[1], "-- ") {
 		t.Fatalf("remote command should not start with --: %#v", runner.lastReq.Args)
 	}
+	if !strings.HasPrefix(runner.lastReq.Args[1], "PATH=/usr/local/bin:/opt/homebrew/bin:$PATH ") {
+		t.Fatalf("remote command should add Mac binary dirs to PATH: %q", runner.lastReq.Args[1])
+	}
 	if !strings.Contains(runner.lastReq.Args[1], "prlctl") || !strings.Contains(runner.lastReq.Args[1], "--version") {
 		t.Fatalf("remote command=%q", runner.lastReq.Args[1])
 	}
@@ -158,6 +161,14 @@ func TestParallelsLinkedCloneRequiresExplicitSnapshot(t *testing.T) {
 	}
 	if len(runner.requests) != 0 {
 		t.Fatalf("clone should fail before prlctl: %#v", runner.requests)
+	}
+}
+
+func TestValidateParallelsSnapshotCloneModeRejectsPowerOnDryRun(t *testing.T) {
+	snapshot := ParallelsSnapshot{Name: "macOS 26.3.1 LATEST", State: "poweron"}
+	err := validateParallelsSnapshotCloneMode(snapshot, "linked")
+	if err == nil || !strings.Contains(err.Error(), "power-off snapshot") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

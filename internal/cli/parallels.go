@@ -199,8 +199,10 @@ func (c *ParallelsClient) Clone(ctx context.Context, source, snapshotID, leaseID
 			if err != nil {
 				return Server{}, err
 			}
-			if ok && !strings.EqualFold(snapshot.State, "poweroff") {
-				return Server{}, exit(2, "Parallels linked clones require a power-off snapshot; snapshot %q state=%s", snapshot.Name, blank(snapshot.State, "unknown"))
+			if ok {
+				if err := validateParallelsSnapshotCloneMode(snapshot, c.Cfg.Parallels.CloneMode); err != nil {
+					return Server{}, err
+				}
 			}
 		}
 		args = append(args, "--linked")
@@ -598,7 +600,7 @@ touch /var/lib/crabbox/bootstrapped 2>/dev/null || true
 
 func (c *ParallelsClient) prlctl(ctx context.Context, extraEnv []string, args ...string) (LocalCommandResult, error) {
 	if c.Cfg.Parallels.Host != "" {
-		remote := append([]string{"prlctl"}, args...)
+		remote := "PATH=/usr/local/bin:/opt/homebrew/bin:$PATH " + strings.Join(shellWords(append([]string{"prlctl"}, args...)), " ")
 		sshArgs := []string{}
 		if c.Cfg.Parallels.HostKey != "" {
 			sshArgs = append(sshArgs, "-i", c.Cfg.Parallels.HostKey, "-o", "IdentitiesOnly=yes")
@@ -607,10 +609,24 @@ func (c *ParallelsClient) prlctl(ctx context.Context, extraEnv []string, args ..
 		if c.Cfg.Parallels.HostUser != "" {
 			host = c.Cfg.Parallels.HostUser + "@" + host
 		}
-		sshArgs = append(sshArgs, host, strings.Join(shellWords(remote), " "))
+		sshArgs = append(sshArgs, host, remote)
 		return c.Runner.Run(ctx, LocalCommandRequest{Name: "ssh", Args: sshArgs, Env: extraEnv})
 	}
 	return c.Runner.Run(ctx, LocalCommandRequest{Name: "prlctl", Args: args, Env: extraEnv})
+}
+
+func validateParallelsSnapshotCloneMode(snapshot ParallelsSnapshot, cloneMode string) error {
+	switch strings.ToLower(strings.TrimSpace(cloneMode)) {
+	case "", "linked":
+		if !strings.EqualFold(snapshot.State, "poweroff") {
+			return exit(2, "Parallels linked clones require a power-off snapshot; snapshot %q state=%s", snapshot.Name, blank(snapshot.State, "unknown"))
+		}
+		return nil
+	case "full", "unlink":
+		return exit(2, "Parallels snapshot forks require cloneMode=linked; prlctl selects snapshots only for linked clones")
+	default:
+		return exit(2, "parallels.cloneMode must be linked, full, or unlink")
+	}
 }
 
 func parseParallelsVMs(data string) ([]ParallelsVM, error) {

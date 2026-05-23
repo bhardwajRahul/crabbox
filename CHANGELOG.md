@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed portal and documentation theme toggles so dark mode shows only the sun icon and light mode shows only the moon icon.
+- Fixed remote Parallels hosts so `prlctl` is found on standard Mac install paths, and made snapshot fork dry-runs reject non-forkable power-on snapshots consistently.
 
 ### Changed
 

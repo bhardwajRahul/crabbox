@@ -361,7 +361,11 @@ func (a App) checkpointListParallelsSnapshots(ctx context.Context, cfg Config, i
 		return json.NewEncoder(a.Stdout).Encode(views)
 	}
 	if len(views) == 0 {
-		fmt.Fprintf(a.Stdout, "no snapshots source=%s\n", vm.ID)
+		kind := "snapshots"
+		if opts.ForkableOnly {
+			kind = "forkable snapshots"
+		}
+		fmt.Fprintf(a.Stdout, "no %s source=%s\n", kind, vm.ID)
 		return nil
 	}
 	for _, view := range views {
@@ -829,6 +833,9 @@ func (a App) checkpointForkParallelsSnapshot(ctx context.Context, fs *flag.FlagS
 		}
 		snapshot, err := NewParallelsClient(selected, nil).Snapshot(ctx, cfg.Parallels.Source, cfg.Parallels.SourceSnapshot)
 		if err != nil {
+			return err
+		}
+		if err := validateParallelsSnapshotCloneMode(snapshot, cfg.Parallels.CloneMode); err != nil {
 			return err
 		}
 		fmt.Fprintf(a.Stdout, "would fork provider=parallels host=%s source=%s snapshot=%s name=%q slug=%s\n", blank(selected.Parallels.SelectedHost, "local"), cfg.Parallels.Source, snapshot.ID, snapshot.Name, blank(requestedSlug, "-"))
