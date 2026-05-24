@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed Linux desktop theme setup so WebVNC sessions install and prefer native Arc-Dark/other dark XFCE themes instead of custom-painting panel and window chrome.
+- Fixed Linux WebVNC desktop sessions so they follow the portal light/dark toggle and system theme changes after the remote desktop has already connected.
 - Fixed run failure summaries and timing JSON to classify likely blocked stages, redact known HTML auth challenge bodies from failure excerpts, and reject unsupported Blacksmith environment forwarding before warmup.
 - Fixed desktop browser launches so Linux WebVNC browser sessions inherit the dark desktop theme, advertise dark color-scheme preference to web apps, and repair older managed browser wrappers before launch.
 

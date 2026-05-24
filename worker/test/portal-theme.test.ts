@@ -12,5 +12,6 @@ describe("portal theme", () => {
     expect(body).toContain("crabbox-theme");
     expect(body).toContain('const next = current === "system" ? "dark"');
     expect(body).toContain('Theme: " + source');
+    expect(body).toContain("crabbox-theme-change");
   });
 });

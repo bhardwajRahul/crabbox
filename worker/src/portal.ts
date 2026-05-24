@@ -647,6 +647,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
   const wsPath = `/portal/leases/${encodeURIComponent(lease.id)}/vnc/viewer`;
   const statusPath = `/portal/leases/${encodeURIComponent(lease.id)}/vnc/status`;
   const controlPath = `/portal/leases/${encodeURIComponent(lease.id)}/vnc/control`;
+  const themePath = `/portal/leases/${encodeURIComponent(lease.id)}/vnc/theme`;
   const sharePath = `/portal/leases/${encodeURIComponent(lease.id)}/share`;
   const shareAPIPath = `${sharePath}?format=json`;
   const canManage = options.canManage === true;
@@ -754,6 +755,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       wsURL.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const statusURL = new URL(${JSON.stringify(statusPath)}, window.location.href);
       const controlURL = new URL(${JSON.stringify(controlPath)}, window.location.href);
+      const themeURL = new URL(${JSON.stringify(themePath)}, window.location.href);
       const sharePageURL = new URL(${JSON.stringify(sharePath)}, window.location.href);
       const shareAPIURL = new URL(${JSON.stringify(shareAPIPath)}, window.location.href);
       const shareInitial = ${scriptJSON(shareData)};
@@ -787,6 +789,9 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       let takeControlAttempted = false;
       let credentialsSent = false;
       let authenticationFailed = false;
+      let pendingDesktopTheme = "";
+      let lastDesktopTheme = "";
+      let desktopThemeTimer;
       const terminalStatusCodes = new Set([403, 404, 409, 410]);
       function focusVNC() {
         if (!isController) return;
@@ -863,6 +868,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         const role = state.viewerRole || "none";
         const takeoverBtn = document.getElementById("vnc-takeover");
         const previousControllerLabel = controllerLabel;
+        const wasController = isController;
         controllerLabel = state.controllerLabel || "";
         const controlling = role === "controller";
         const connectedViewer = role === "controller" || role === "observer";
@@ -885,6 +891,9 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         if (!controlling && connectedViewer && previousControllerLabel && controllerLabel && previousControllerLabel !== controllerLabel) {
           setStatus(controllerLabel + " took control", "warn");
         }
+        if (controlling && !wasController) {
+          queueDesktopTheme();
+        }
       }
       async function refreshCollaborationState() {
         const state = await bridgeState();
@@ -906,6 +915,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         if (!response.ok) throw new Error(state?.message || "takeover failed");
         applyCollaborationState(state);
         setStatus(label, "ok");
+        queueDesktopTheme();
         focusVNC();
         return state;
       }
@@ -919,11 +929,40 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         await takeControl();
         takeControlAttempted = true;
       }
+      function resolvedPortalTheme() {
+        return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+      }
+      function queueDesktopTheme(theme = resolvedPortalTheme()) {
+        if (target !== "linux") return;
+        pendingDesktopTheme = theme === "light" ? "light" : "dark";
+        if (!connected) return;
+        window.clearTimeout(desktopThemeTimer);
+        desktopThemeTimer = window.setTimeout(syncDesktopTheme, 120);
+      }
+      async function syncDesktopTheme() {
+        if (target !== "linux" || !connected || !pendingDesktopTheme || pendingDesktopTheme === lastDesktopTheme) return;
+        const theme = pendingDesktopTheme;
+        const response = await fetch(themeURL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ viewerID, theme }),
+        });
+        if (!response.ok) return;
+        lastDesktopTheme = theme;
+      }
+      window.addEventListener("crabbox-theme-change", (event) => {
+        queueDesktopTheme(event.detail?.mode);
+      });
+      function clearDesktopThemeSyncState() {
+        lastDesktopTheme = "";
+        window.clearTimeout(desktopThemeTimer);
+      }
       function stopPolling(label) {
         stopped = true;
         connected = false;
         window.clearTimeout(retryTimer);
         window.clearInterval(statusTimer);
+        clearDesktopThemeSyncState();
         try { rfb?.disconnect(); } catch (_) {}
         screen.replaceChildren();
         setStatus(label, "bad");
@@ -965,6 +1004,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
             return;
           }
           setStatus(retryAttempt ? "bridge connected; opening viewer" : "connecting");
+          clearDesktopThemeSyncState();
           rfb = new RFB(screen, wsURL.toString(), options);
           rfb.showDotCursor = true;
           rfb.focusOnClick = true;
@@ -979,6 +1019,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
             connected = true;
             retryAttempt = 0;
             setStatus("connected", "ok");
+            queueDesktopTheme();
             void refreshCollaborationStateAndMaybeTakeControl().then(focusVNC).catch(() => {});
             window.clearInterval(statusTimer);
             statusTimer = window.setInterval(() => {
@@ -996,11 +1037,14 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
           });
           rfb.addEventListener("disconnect", () => {
             if (stopped) return;
-            if (!connected && (authenticationFailed || credentialsSent)) {
+            const wasConnected = connected;
+            connected = false;
+            clearDesktopThemeSyncState();
+            if (!wasConnected && (authenticationFailed || credentialsSent)) {
               stopPolling(authenticationFailed ? failedVNCCredentialMessage : "VNC authentication timed out; reopen WebVNC from crabbox webvnc status");
               return;
             }
-            scheduleRetry(connected ? "VNC bridge disconnected" : "waiting for VNC bridge");
+            scheduleRetry(wasConnected ? "VNC bridge disconnected" : "waiting for VNC bridge");
           });
           rfb.addEventListener("credentialsrequired", (event) => {
             const types = event.detail?.types || ["password"];
@@ -1034,6 +1078,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
         stopped = true;
         window.clearTimeout(retryTimer);
         window.clearInterval(statusTimer);
+        window.clearTimeout(desktopThemeTimer);
         rfb?.disconnect();
       });
       const takeoverBtn = document.getElementById("vnc-takeover");
@@ -2853,6 +2898,7 @@ function portalEnhancementsScript(): string {
     });
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute("content", dark ? "#0b0d0f" : "#f4f6f8");
+    window.dispatchEvent(new CustomEvent("crabbox-theme-change", { detail: { source, mode } }));
   }
   applyTheme(themeRoot.dataset.themeSource || storedTheme());
   document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {

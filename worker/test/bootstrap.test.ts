@@ -95,24 +95,31 @@ describe("cloud-init bootstrap", () => {
     expect(got).toContain("ExecStart=/usr/bin/startxfce4");
     expect(got).toContain("systemctl is-active --quiet crabbox-desktop.service");
     expect(got).toContain("systemctl is-active --quiet crabbox-desktop-session.service");
+    expect(got).toContain('requested_mode="${1:-${CRABBOX_DESKTOP_THEME:-}}"');
+    expect(got).toContain('"$config_dir/crabbox/desktop-theme"');
     expect(got).toContain("gtk_theme=Adwaita-dark");
-    expect(got).toContain("for candidate in Arc-Dark Greybird-dark Adwaita-dark Greybird");
+    expect(got).toContain('gtk_candidates="Arc-Dark Greybird-dark Adwaita-dark Greybird"');
+    expect(got).toContain('gtk_candidates="Arc Greybird Adwaita"');
     expect(got).toContain("xfwm_theme=Default");
-    expect(got).toContain("for candidate in Arc-Dark Greybird-dark Daloa Default");
+    expect(got).toContain('xfwm_candidates="Arc-Dark Greybird-dark Daloa Default"');
+    expect(got).toContain('xfwm_candidates="Arc Greybird Daloa Default"');
     expect(got).toContain('ThemeName" type="string" value="$gtk_theme');
     expect(got).toContain("$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml");
-    expect(got).toContain(
-      'if [ ! -s "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" ]; then',
-    );
     expect(got).toContain('theme" type="string" value="$xfwm_theme');
-    expect(got).toContain("gtk-application-prefer-dark-theme=1");
+    expect(got).toContain("gtk-application-prefer-dark-theme=$gtk_prefer_dark_ini");
     expect(got).toContain('mkdir -p "$config_dir/xfce4/xfconf/xfce-perchannel-xml"');
     expect(got).toContain("xfconf-query -c xsettings -p /Gtk/ApplicationPreferDarkTheme");
     expect(got).toContain("xfconf-query -c xfwm4 -p /general/theme");
     expect(got).toContain("xfconf-query -c xfce4-panel -p /panels/dark-mode");
+    expect(got).toContain("/panels/$panel_id/background-rgba");
+    expect(got).toContain("crabbox desktop theme start");
+    expect(got).toContain("crabbox-xfce4-panel-$user.log");
     expect(got).toContain("pkill -USR1 -x xfce4-panel");
     expect(got).toContain("xfwm4 --replace");
-    expect(got).toContain("gsettings set org.gnome.desktop.interface color-scheme prefer-dark");
+    expect(got).toContain('xsetroot -solid "$root_color"');
+    expect(got).toContain(
+      'gsettings set org.gnome.desktop.interface color-scheme "$gsettings_scheme"',
+    );
     expect(got).toContain(
       "CRABBOX_DESKTOP_USER=crabbox /usr/local/bin/crabbox-configure-desktop-theme",
     );
@@ -120,7 +127,6 @@ describe("cloud-init bootstrap", () => {
       'CRABBOX_DESKTOP_USER="$(id -un)" /usr/local/bin/crabbox-configure-desktop-theme',
     );
     expect(got).toContain("x11-xserver-utils xterm scrot ffmpeg xdotool wmctrl");
-    expect(got).toContain("xsetroot -solid '#20242b'");
     expect(got).toContain("xfce4-terminal --title='Crabbox Desktop'");
     expect(got).toContain("xterm -title 'Crabbox Desktop'");
     expect(got).toContain("(umask 077 && openssl rand -base64 18 > /var/lib/crabbox/vnc.password)");

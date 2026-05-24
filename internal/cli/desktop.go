@@ -726,12 +726,13 @@ fi
 browser_wrapper=` + shellQuote(strings.TrimSpace(browser)) + `
 if [ "$browser_wrapper" = "/usr/local/bin/crabbox-browser" ] && [ -f "$browser_wrapper" ] && {
   ! grep -q -- "--force-dark-mode" "$browser_wrapper" 2>/dev/null ||
+  ! grep -q -- "desktop-theme" "$browser_wrapper" 2>/dev/null ||
   ! grep -q -- "--user-data-dir" "$browser_wrapper" 2>/dev/null
 }; then
   browser_path="$(sed -n 's/^exec "\([^"]*\)".*/\1/p' "$browser_wrapper" | head -1)"
   if [ -n "$browser_path" ] && "$browser_path" --version 2>/dev/null | grep -Eiq 'chrome|chromium'; then
     tmp="$(mktemp)"
-    printf '%s\n' '#!/bin/sh' 'profile="${CRABBOX_BROWSER_PROFILE:-$HOME/.cache/crabbox/browser-profile}"' 'umask 077' 'mkdir -p "$profile"' 'chmod 700 "$profile"' "exec \"$browser_path\" --no-first-run --no-default-browser-check --disable-default-apps --force-dark-mode --enable-features=WebUIDarkMode --blink-settings=preferredColorScheme=2 --user-data-dir=\"\$profile\" --window-size=1500,900 --window-position=80,80 \"\$@\"" > "$tmp"
+    printf '%s\n' '#!/bin/sh' 'profile="${CRABBOX_BROWSER_PROFILE:-$HOME/.cache/crabbox/browser-profile}"' 'theme="$(cat "${CRABBOX_DESKTOP_THEME_FILE:-$HOME/.config/crabbox/desktop-theme}" 2>/dev/null || printf dark)"' 'umask 077' 'mkdir -p "$profile"' 'chmod 700 "$profile"' 'if [ "$theme" = light ]; then' "  exec \"$browser_path\" --no-first-run --no-default-browser-check --disable-default-apps --blink-settings=preferredColorScheme=1 --user-data-dir=\"\$profile\" --window-size=1500,900 --window-position=80,80 \"\$@\"" 'fi' "exec \"$browser_path\" --no-first-run --no-default-browser-check --disable-default-apps --force-dark-mode --enable-features=WebUIDarkMode --blink-settings=preferredColorScheme=2 --user-data-dir=\"\$profile\" --window-size=1500,900 --window-position=80,80 \"\$@\"" > "$tmp"
     chmod 0755 "$tmp"
     sudo install -m 0755 "$tmp" "$browser_wrapper" >/dev/null 2>&1 || install -m 0755 "$tmp" "$browser_wrapper" >/dev/null 2>&1 || true
     rm -f "$tmp"

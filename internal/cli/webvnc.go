@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -261,7 +262,7 @@ func serveWebVNCBridgeSlot(ctx context.Context, cfg webVNCBridgePoolConfig, slot
 	connectedOnce := false
 	attempt := 0
 	for {
-		bridge, err := connectWebVNCBridge(ctx, cfg.Coord, cfg.LeaseID, cfg.Host, cfg.Port)
+		bridge, err := connectWebVNCBridge(ctx, cfg.Coord, cfg.LeaseID, cfg.Host, cfg.Port, cfg.RescueCtx.Target, cfg.Log)
 		if err != nil {
 			attempt, kind := nextWebVNCBridgeFailure(connectedOnce, attempt)
 			events <- webVNCBridgePoolEvent{Kind: kind, Slot: slot, Attempt: attempt, Err: err}
@@ -1026,11 +1027,13 @@ func startVNCForegroundTunnel(ctx context.Context, target SSHTarget, localPort, 
 }
 
 type webVNCBridge struct {
-	tcp net.Conn
-	ws  *websocket.Conn
+	tcp    net.Conn
+	ws     *websocket.Conn
+	target SSHTarget
+	log    io.Writer
 }
 
-func connectWebVNCBridge(ctx context.Context, coord *CoordinatorClient, leaseID, host, port string) (*webVNCBridge, error) {
+func connectWebVNCBridge(ctx context.Context, coord *CoordinatorClient, leaseID, host, port string, target SSHTarget, log io.Writer) (*webVNCBridge, error) {
 	tcp, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, err
@@ -1040,11 +1043,12 @@ func connectWebVNCBridge(ctx context.Context, coord *CoordinatorClient, leaseID,
 		_ = tcp.Close()
 		return nil, err
 	}
-	ws, resp, err := websocket.Dial(ctx, webVNCAgentURL(coord.BaseURL, leaseID), &websocket.DialOptions{
+	capabilities := webVNCBridgeCapabilities(ctx, target)
+	ws, resp, err := websocket.Dial(ctx, webVNCAgentURLWithCapabilities(coord.BaseURL, leaseID, capabilities), &websocket.DialOptions{
 		HTTPHeader: bridgeTicketHeaders(coord, ticket.Ticket),
 	})
 	if retryBridgeTicketInQuery(resp, err) {
-		ws, _, err = websocket.Dial(ctx, webVNCAgentURLWithTicket(coord.BaseURL, leaseID, ticket.Ticket), &websocket.DialOptions{
+		ws, _, err = websocket.Dial(ctx, webVNCAgentURLWithTicketAndCapabilities(coord.BaseURL, leaseID, ticket.Ticket, capabilities), &websocket.DialOptions{
 			HTTPHeader: coord.webVNCAccessHeaders(),
 		})
 	}
@@ -1052,13 +1056,13 @@ func connectWebVNCBridge(ctx context.Context, coord *CoordinatorClient, leaseID,
 		_ = tcp.Close()
 		return nil, err
 	}
-	return &webVNCBridge{tcp: tcp, ws: ws}, nil
+	return &webVNCBridge{tcp: tcp, ws: ws, target: target, log: log}, nil
 }
 
 func (b *webVNCBridge) Serve(ctx context.Context) error {
 	defer b.Close()
 	errc := make(chan error, 2)
-	go func() { errc <- copyWebSocketToTCP(ctx, b.ws, b.tcp) }()
+	go func() { errc <- b.copyWebSocketToTCP(ctx) }()
 	go func() { errc <- copyTCPToWebSocket(ctx, b.ws, b.tcp) }()
 	select {
 	case <-ctx.Done():
@@ -1302,16 +1306,99 @@ func (b *webVNCBridge) Close() {
 	}
 }
 
-func copyWebSocketToTCP(ctx context.Context, ws *websocket.Conn, tcp net.Conn) error {
+func webVNCBridgeCapabilities(ctx context.Context, target SSHTarget) string {
+	if target.TargetOS != "" && target.TargetOS != targetLinux {
+		return ""
+	}
+	out, err := runSSHCombinedOutput(ctx, target, `set -eu
+if [ -x /usr/local/bin/crabbox-configure-desktop-theme ] && grep -q 'desktop-theme' /usr/local/bin/crabbox-configure-desktop-theme; then
+  exit 0
+fi
+if [ -x /usr/local/bin/crabbox-start-desktop ] && grep -q 'desktop-theme' /usr/local/bin/crabbox-start-desktop; then
+  exit 0
+fi
+echo "desktop theme helper does not support dynamic themes" >&2
+exit 1
+`)
+	if err != nil || strings.TrimSpace(out) != "" {
+		return ""
+	}
+	return "desktop_theme"
+}
+
+type webVNCBridgeControlMessage struct {
+	Type  string `json:"type"`
+	Theme string `json:"theme,omitempty"`
+}
+
+func (b *webVNCBridge) copyWebSocketToTCP(ctx context.Context) error {
 	for {
-		_, data, err := ws.Read(ctx)
+		typ, data, err := b.ws.Read(ctx)
 		if err != nil {
 			return err
 		}
-		if _, err := tcp.Write(data); err != nil {
+		if typ == websocket.MessageText {
+			handled, err := b.handleControlFrame(ctx, data)
+			if err != nil && b.log != nil {
+				fmt.Fprintf(b.log, "bridge: %v\n", err)
+			}
+			if handled {
+				continue
+			}
+		}
+		if _, err := b.tcp.Write(data); err != nil {
 			return err
 		}
 	}
+}
+
+func (b *webVNCBridge) handleControlFrame(ctx context.Context, data []byte) (bool, error) {
+	if len(data) == 0 || data[0] != '{' {
+		return false, nil
+	}
+	var msg webVNCBridgeControlMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return false, nil
+	}
+	if msg.Type != "desktop_theme" {
+		return false, nil
+	}
+	theme := strings.TrimSpace(msg.Theme)
+	if theme != "light" && theme != "dark" {
+		return true, fmt.Errorf("ignore invalid desktop theme %q", msg.Theme)
+	}
+	if b.target.TargetOS != "" && b.target.TargetOS != targetLinux {
+		return true, nil
+	}
+	out, err := runSSHCombinedOutput(ctx, b.target, webVNCDesktopThemeCommand(theme, b.target.User))
+	if err != nil {
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			return true, fmt.Errorf("apply desktop theme %s: %w", theme, err)
+		}
+		return true, fmt.Errorf("apply desktop theme %s: %w: %s", theme, err, detail)
+	}
+	return true, nil
+}
+
+func webVNCDesktopThemeCommand(theme, user string) string {
+	theme = strings.TrimSpace(theme)
+	if theme != "light" && theme != "dark" {
+		theme = "dark"
+	}
+	user = strings.TrimSpace(user)
+	if user == "" {
+		user = "crabbox"
+	}
+	return "set -eu\n" +
+		"if command -v /usr/local/bin/crabbox-configure-desktop-theme >/dev/null 2>&1; then\n" +
+		"  env DISPLAY=:99 CRABBOX_DESKTOP_USER=" + shellQuote(user) + " /usr/local/bin/crabbox-configure-desktop-theme " + shellQuote(theme) + "\n" +
+		"elif command -v /usr/local/bin/crabbox-start-desktop >/dev/null 2>&1; then\n" +
+		"  sudo env DISPLAY=:99 CRABBOX_SSH_USER=" + shellQuote(user) + " /usr/local/bin/crabbox-start-desktop " + shellQuote(theme) + "\n" +
+		"else\n" +
+		"  echo 'crabbox desktop theme helper not installed' >&2\n" +
+		"  exit 127\n" +
+		"fi\n"
 }
 
 func copyTCPToWebSocket(ctx context.Context, ws *websocket.Conn, tcp net.Conn) error {
@@ -1356,6 +1443,10 @@ func retryBridgeTicketInQuery(resp *http.Response, err error) bool {
 }
 
 func webVNCAgentURL(base, leaseID string) string {
+	return webVNCAgentURLWithCapabilities(base, leaseID, "")
+}
+
+func webVNCAgentURLWithCapabilities(base, leaseID, capabilities string) string {
 	u, err := url.Parse(base)
 	if err != nil {
 		return base
@@ -1366,17 +1457,25 @@ func webVNCAgentURL(base, leaseID string) string {
 		u.Scheme = "ws"
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/v1/leases/" + url.PathEscape(leaseID) + "/webvnc/agent"
-	u.RawQuery = ""
+	values := url.Values{}
+	if strings.TrimSpace(capabilities) != "" {
+		values.Set("capabilities", capabilities)
+	}
+	u.RawQuery = values.Encode()
 	u.Fragment = ""
 	return u.String()
 }
 
 func webVNCAgentURLWithTicket(base, leaseID, ticket string) string {
-	u, err := url.Parse(webVNCAgentURL(base, leaseID))
+	return webVNCAgentURLWithTicketAndCapabilities(base, leaseID, ticket, "")
+}
+
+func webVNCAgentURLWithTicketAndCapabilities(base, leaseID, ticket, capabilities string) string {
+	u, err := url.Parse(webVNCAgentURLWithCapabilities(base, leaseID, capabilities))
 	if err != nil {
 		return base
 	}
-	values := url.Values{}
+	values := u.Query()
 	values.Set("ticket", ticket)
 	u.RawQuery = values.Encode()
 	u.Fragment = ""

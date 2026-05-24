@@ -23,8 +23,14 @@ func TestWebVNCURLs(t *testing.T) {
 	if got := webVNCAgentURL("https://crabbox.openclaw.ai", "cbx_abcdef123456"); got != "wss://crabbox.openclaw.ai/v1/leases/cbx_abcdef123456/webvnc/agent" {
 		t.Fatalf("agent URL=%q", got)
 	}
+	if got := webVNCAgentURLWithCapabilities("https://crabbox.openclaw.ai", "cbx_abcdef123456", "desktop_theme"); got != "wss://crabbox.openclaw.ai/v1/leases/cbx_abcdef123456/webvnc/agent?capabilities=desktop_theme" {
+		t.Fatalf("agent capability URL=%q", got)
+	}
 	if got := webVNCAgentURLWithTicket("https://crabbox.openclaw.ai", "cbx_abcdef123456", "wvnc_abc"); got != "wss://crabbox.openclaw.ai/v1/leases/cbx_abcdef123456/webvnc/agent?ticket=wvnc_abc" {
 		t.Fatalf("agent fallback URL=%q", got)
+	}
+	if got := webVNCAgentURLWithTicketAndCapabilities("https://crabbox.openclaw.ai", "cbx_abcdef123456", "wvnc_abc", "desktop_theme"); got != "wss://crabbox.openclaw.ai/v1/leases/cbx_abcdef123456/webvnc/agent?capabilities=desktop_theme&ticket=wvnc_abc" {
+		t.Fatalf("agent capability fallback URL=%q", got)
 	}
 	if got := webVNCPortalURL("https://crabbox.openclaw.ai/", "cbx_abcdef123456", "", "secret value"); got != "https://crabbox.openclaw.ai/portal/leases/cbx_abcdef123456/vnc#password=secret+value" {
 		t.Fatalf("portal URL=%q", got)
@@ -122,7 +128,7 @@ func TestConnectWebVNCBridgeRegistersAgentBeforeServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	coord := &CoordinatorClient{BaseURL: server.URL, Token: "test-token", Client: server.Client()}
-	bridge, err := connectWebVNCBridge(ctx, coord, "cbx_abcdef123456", "127.0.0.1", port)
+	bridge, err := connectWebVNCBridge(ctx, coord, "cbx_abcdef123456", "127.0.0.1", port, SSHTarget{TargetOS: targetLinux}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +138,26 @@ func TestConnectWebVNCBridgeRegistersAgentBeforeServe(t *testing.T) {
 	case <-agentConnected:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+func TestWebVNCDesktopThemeCommand(t *testing.T) {
+	got := webVNCDesktopThemeCommand("light", "demo user")
+	for _, want := range []string{
+		"/usr/local/bin/crabbox-configure-desktop-theme",
+		"/usr/local/bin/crabbox-start-desktop",
+		"CRABBOX_DESKTOP_USER='demo user'",
+		"CRABBOX_SSH_USER='demo user'",
+		"light",
+		"DISPLAY=:99",
+		"exit 127",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("theme command missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(webVNCDesktopThemeCommand("neon", ""), "neon") {
+		t.Fatal("invalid theme should fall back to dark")
 	}
 }
 

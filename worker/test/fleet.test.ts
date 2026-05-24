@@ -2786,6 +2786,9 @@ describe("fleet lease identity and idle", () => {
     expect(pageBody).toContain("WebVNC daemon not running; run the bridge command below");
     expect(pageBody).toContain("waiting for an available WebVNC observer slot");
     expect(pageBody).toContain("/portal/leases/cbx_000000000001/vnc/control");
+    expect(pageBody).toContain("/portal/leases/cbx_000000000001/vnc/theme");
+    expect(pageBody).toContain("queueDesktopTheme(event.detail?.mode)");
+    expect(pageBody).toContain("body: JSON.stringify({ viewerID, theme })");
     expect(pageBody).toContain("vnc-takeover");
     expect(pageBody).toContain("vnc-control");
     expect(pageBody).toContain("take control");
@@ -2870,6 +2873,22 @@ describe("fleet lease identity and idle", () => {
       events: [],
     });
 
+    const invalidTheme = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/theme", {
+        headers,
+        body: { theme: "sepia" },
+      }),
+    );
+    expect(invalidTheme.status).toBe(400);
+
+    const missingThemeBridge = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/theme", {
+        headers,
+        body: { theme: "light", viewerID: "viewer_missing" },
+      }),
+    );
+    expect(missingThemeBridge.status).toBe(409);
+
     const reset = await fleet.fetch(
       request("POST", "/v1/leases/blue-lobster/webvnc/reset", { headers, body: {} }),
     );
@@ -2881,6 +2900,99 @@ describe("fleet lease identity and idle", () => {
       command: "crabbox webvnc --provider hetzner --target linux --id blue-lobster --open",
       events: [{ event: "reset", reason: "WebVNC reset requested" }],
     });
+
+    const agentFrames: string[] = [];
+    const agentSocket = {
+      readyState: WebSocket.OPEN,
+      send(data: string) {
+        agentFrames.push(data);
+      },
+      close() {},
+    } as WebSocket;
+    const viewerSocket = { readyState: WebSocket.OPEN, close() {} } as WebSocket;
+    const observerSocket = { readyState: WebSocket.OPEN, close() {} } as WebSocket;
+    const webVNCState = fleet as unknown as {
+      webVNCAgents: Map<string, Map<string, WebSocket>>;
+      webVNCAgentCapabilities: Map<string, Map<string, Set<string>>>;
+      webVNCControllers: Map<string, string>;
+      webVNCViewers: Map<
+        string,
+        Map<
+          string,
+          {
+            id: string;
+            agentID: string;
+            socket: WebSocket;
+            owner: string;
+            label: string;
+            connectedAt: string;
+          }
+        >
+      >;
+    };
+    webVNCState.webVNCAgents.set("cbx_000000000001", new Map([["agent_theme1", agentSocket]]));
+    webVNCState.webVNCViewers.set(
+      "cbx_000000000001",
+      new Map([
+        [
+          "viewer_theme1",
+          {
+            id: "viewer_theme1",
+            agentID: "agent_theme1",
+            socket: viewerSocket,
+            owner: "alice@example.com",
+            label: "alice@example.com",
+            connectedAt: new Date().toISOString(),
+          },
+        ],
+        [
+          "viewer_observer1",
+          {
+            id: "viewer_observer1",
+            agentID: "agent_theme1",
+            socket: observerSocket,
+            owner: "observer@example.com",
+            label: "observer@example.com",
+            connectedAt: new Date().toISOString(),
+          },
+        ],
+      ]),
+    );
+    webVNCState.webVNCControllers.set("cbx_000000000001", "viewer_theme1");
+    const oldBridgeTheme = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/theme", {
+        headers,
+        body: { theme: "dark", viewerID: "viewer_theme1" },
+      }),
+    );
+    expect(oldBridgeTheme.status).toBe(409);
+    await expect(oldBridgeTheme.json()).resolves.toMatchObject({
+      error: "webvnc_bridge_upgrade_required",
+    });
+    webVNCState.webVNCAgentCapabilities.set(
+      "cbx_000000000001",
+      new Map([["agent_theme1", new Set(["desktop_theme"])]]),
+    );
+    const observerTheme = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/theme", {
+        headers: { "x-crabbox-owner": "friend@example.com", "x-crabbox-org": "openclaw" },
+        body: { theme: "dark", viewerID: "viewer_observer1" },
+      }),
+    );
+    expect(observerTheme.status).toBe(403);
+
+    const theme = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/theme", {
+        headers,
+        body: { theme: "dark", viewerID: "viewer_theme1" },
+      }),
+    );
+    expect(theme.status).toBe(200);
+    await expect(theme.json()).resolves.toMatchObject({
+      leaseID: "cbx_000000000001",
+      theme: "dark",
+    });
+    expect(agentFrames).toEqual([JSON.stringify({ type: "desktop_theme", theme: "dark" })]);
 
     const plain = await fleet.fetch(
       request("GET", "/portal/leases/plain-lobster/vnc", { headers }),

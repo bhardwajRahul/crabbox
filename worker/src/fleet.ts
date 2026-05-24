@@ -272,7 +272,7 @@ interface AWSOrphanSweepRecord {
 }
 
 type BridgeAttachment =
-  | { kind: "webvnc-agent"; leaseID: string; id: string }
+  | { kind: "webvnc-agent"; leaseID: string; id: string; capabilities: Set<string> }
   | {
       kind: "webvnc-viewer";
       leaseID: string;
@@ -322,6 +322,7 @@ interface WebVNCViewerSession {
 
 export class FleetDurableObject implements DurableObject {
   private readonly webVNCAgents = new Map<string, Map<string, WebSocket>>();
+  private readonly webVNCAgentCapabilities = new Map<string, Map<string, Set<string>>>();
   private readonly webVNCViewers = new Map<string, Map<string, WebVNCViewerSession>>();
   private readonly webVNCControllers = new Map<string, string>();
   private readonly pendingWebVNCToViewer = new Map<string, WebVNCBuffer>();
@@ -596,7 +597,7 @@ export class FleetDurableObject implements DurableObject {
   private trackBridgeSocket(socket: WebSocket, attachment: BridgeAttachment): void {
     switch (attachment.kind) {
       case "webvnc-agent":
-        this.trackWebVNCAgent(attachment.leaseID, attachment.id, socket);
+        this.trackWebVNCAgent(attachment.leaseID, attachment.id, socket, attachment.capabilities);
         break;
       case "webvnc-viewer":
         this.trackWebVNCViewer(attachment.leaseID, {
@@ -628,10 +629,18 @@ export class FleetDurableObject implements DurableObject {
     }
   }
 
-  private trackWebVNCAgent(leaseID: string, agentID: string, socket: WebSocket): void {
+  private trackWebVNCAgent(
+    leaseID: string,
+    agentID: string,
+    socket: WebSocket,
+    capabilities: Set<string>,
+  ): void {
     const agents = this.webVNCAgents.get(leaseID) ?? new Map<string, WebSocket>();
     agents.set(agentID, socket);
     this.webVNCAgents.set(leaseID, agents);
+    const agentsCapabilities = this.webVNCAgentCapabilities.get(leaseID) ?? new Map();
+    agentsCapabilities.set(agentID, capabilities);
+    this.webVNCAgentCapabilities.set(leaseID, agentsCapabilities);
   }
 
   private trackWebVNCViewer(leaseID: string, session: WebVNCViewerSession): void {
@@ -835,6 +844,9 @@ export class FleetDurableObject implements DurableObject {
         );
         break;
       case "webvnc-viewer":
+        if (isReservedWebVNCControlFrame(message)) {
+          return;
+        }
         await forwardWebVNC(
           message,
           this.webVNCAgents.get(attachment.leaseID)?.get(attachment.agentID),
@@ -1485,6 +1497,15 @@ export class FleetDurableObject implements DurableObject {
       return await this.webVNCTakeControl(request, parts[2]);
     }
     if (
+      method === "POST" &&
+      parts[1] === "leases" &&
+      parts[2] &&
+      parts[3] === "vnc" &&
+      parts[4] === "theme"
+    ) {
+      return await this.webVNCTheme(request, parts[2]);
+    }
+    if (
       method === "GET" &&
       parts[1] === "leases" &&
       parts[2] &&
@@ -1872,9 +1893,15 @@ export class FleetDurableObject implements DurableObject {
     const agent = pair[1];
 
     const agentID = newWebVNCSessionID("agent");
-    this.trackWebVNCAgent(lease.id, agentID, agent);
+    const capabilities = webVNCAgentCapabilities(request);
+    this.trackWebVNCAgent(lease.id, agentID, agent, capabilities);
     this.recordWebVNCEvent(lease.id, "bridge_connected");
-    this.acceptBridgeWebSocket(agent, { kind: "webvnc-agent", leaseID: lease.id, id: agentID });
+    this.acceptBridgeWebSocket(agent, {
+      kind: "webvnc-agent",
+      leaseID: lease.id,
+      id: agentID,
+      capabilities,
+    });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -2129,6 +2156,7 @@ export class FleetDurableObject implements DurableObject {
       1012,
       "WebVNC reset requested",
     );
+    this.webVNCAgentCapabilities.delete(lease.id);
     this.recordWebVNCEvent(lease.id, "reset", "WebVNC reset requested");
     return json({
       leaseID: lease.id,
@@ -2180,6 +2208,69 @@ export class FleetDurableObject implements DurableObject {
       ),
       lease.id,
     );
+  }
+
+  private async webVNCTheme(request: Request, identifier: string): Promise<Response> {
+    const lease = await this.resolvePortalLease(identifier, request);
+    if (!lease) {
+      return notFound();
+    }
+    const error = webVNCLeaseError(lease);
+    if (error) {
+      return json({ error: "webvnc_unavailable", message: error }, { status: 409 });
+    }
+    const input = await optionalJson<{ theme?: string; viewerID?: string; viewerId?: string }>(
+      request,
+    );
+    const theme = input.theme === "light" ? "light" : input.theme === "dark" ? "dark" : "";
+    if (!theme) {
+      return json(
+        { error: "invalid_theme", message: "theme must be light or dark" },
+        { status: 400 },
+      );
+    }
+    const requestedViewerID = input.viewerID || input.viewerId || "";
+    if (!validWebVNCSessionID(requestedViewerID)) {
+      return json(
+        { error: "invalid_viewer", message: "valid WebVNC viewer id required" },
+        { status: 400 },
+      );
+    }
+    const viewer = this.webVNCViewers.get(lease.id)?.get(requestedViewerID);
+    if (!viewer || viewer.socket.readyState !== WebSocket.OPEN) {
+      return json(
+        { error: "viewer_not_connected", message: "viewer is not connected" },
+        { status: 409 },
+      );
+    }
+    const controllerID = this.activeWebVNCControllerID(lease.id);
+    const canManage = this.leaseManageableByRequest(lease, request, isAdminRequest(request));
+    if (viewer.id !== controllerID && !canManage) {
+      return json(
+        { error: "not_controller", message: "WebVNC control is required to change desktop theme" },
+        { status: 403 },
+      );
+    }
+    const agentSocket = this.webVNCAgents.get(lease.id)?.get(viewer.agentID);
+    if (!agentSocket || agentSocket.readyState !== WebSocket.OPEN) {
+      return json(
+        { error: "webvnc_bridge_missing", message: "No WebVNC backend is available yet." },
+        { status: 409 },
+      );
+    }
+    const agentCapabilities = this.webVNCAgentCapabilities.get(lease.id)?.get(viewer.agentID);
+    if (!agentCapabilities?.has("desktop_theme")) {
+      return json(
+        {
+          error: "webvnc_bridge_upgrade_required",
+          message: "Refresh the WebVNC bridge before changing the desktop theme.",
+        },
+        { status: 409 },
+      );
+    }
+    agentSocket.send(JSON.stringify({ type: "desktop_theme", theme }));
+    this.recordWebVNCEvent(lease.id, "theme_changed", theme);
+    return json({ ok: true, leaseID: lease.id, theme });
   }
 
   private async createCodeTicket(request: Request, identifier: string): Promise<Response> {
@@ -2652,6 +2743,11 @@ export class FleetDurableObject implements DurableObject {
       return;
     }
     agents.delete(agentID);
+    const capabilities = this.webVNCAgentCapabilities.get(leaseID);
+    capabilities?.delete(agentID);
+    if (capabilities?.size === 0) {
+      this.webVNCAgentCapabilities.delete(leaseID);
+    }
     if (agents.size === 0) {
       this.webVNCAgents.delete(leaseID);
     }
@@ -2677,6 +2773,11 @@ export class FleetDurableObject implements DurableObject {
     agents?.delete(viewer.agentID);
     if (agents?.size === 0) {
       this.webVNCAgents.delete(leaseID);
+    }
+    const capabilities = this.webVNCAgentCapabilities.get(leaseID);
+    capabilities?.delete(viewer.agentID);
+    if (capabilities?.size === 0) {
+      this.webVNCAgentCapabilities.delete(leaseID);
     }
     this.pendingWebVNCToViewer.delete(webVNCBufferKey(leaseID, viewer.agentID));
     this.recordWebVNCEvent(leaseID, "bridge_reset", "WebVNC viewer disconnected");
@@ -4809,6 +4910,28 @@ function validWebVNCSessionID(value: string | undefined): value is string {
   return typeof value === "string" && /^(agent|viewer)_[A-Za-z0-9_.:-]{6,80}$/.test(value);
 }
 
+function webVNCAgentCapabilities(request: Request): Set<string> {
+  const params = new URL(request.url).searchParams;
+  const raw = [params.get("capabilities"), ...params.getAll("cap")].filter(
+    (value): value is string => typeof value === "string",
+  );
+  return new Set(
+    raw.flatMap((value) => value.split(",").map((item) => item.trim())).filter(Boolean),
+  );
+}
+
+function isReservedWebVNCControlFrame(message: unknown): boolean {
+  if (typeof message !== "string" || message[0] !== "{") {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(message) as { type?: unknown };
+    return parsed.type === "desktop_theme";
+  } catch {
+    return false;
+  }
+}
+
 function webVNCBufferKey(leaseID: string, agentID: string): string {
   return `${leaseID}:${agentID}`;
 }
@@ -5268,7 +5391,11 @@ function bridgeAttachment(socket: WebSocket): BridgeAttachment | undefined {
         : undefined;
     case "webvnc-agent":
       return typeof attachment.leaseID === "string" && validWebVNCSessionID(attachment.id)
-        ? attachment
+        ? {
+            ...attachment,
+            capabilities:
+              attachment.capabilities instanceof Set ? attachment.capabilities : new Set<string>(),
+          }
         : undefined;
     case "code-agent":
       return typeof attachment.leaseID === "string" ? attachment : undefined;
