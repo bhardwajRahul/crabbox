@@ -1174,7 +1174,7 @@ if command -v xfconf-query >/dev/null 2>&1; then
     su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfce4-panel -p /panels/panel-$panel/background-style -n -t int -s 1 >/dev/null 2>&1 || true"
     su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfce4-panel -p /panels/panel-$panel/background-rgba -n -t double -t double -t double -t double -s 0.06 -s 0.07 -s 0.09 -s 1.0 >/dev/null 2>&1 || true"
   done
-  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfce4-panel -r >/dev/null 2>&1 || true"
+  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' pkill -USR1 -x xfce4-panel >/dev/null 2>&1 || true"
   su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfwm4 --replace >/tmp/crabbox-xfwm4-replace.log 2>&1 &"
 fi
 if command -v gsettings >/dev/null 2>&1; then

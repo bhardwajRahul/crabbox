@@ -357,7 +357,7 @@ func TestBootstrapScriptUsesAccountHomeDirectory(t *testing.T) {
 		`xfconf-query -c xfce4-panel -l`,
 		`s#^/panels/panel-\([0-9][0-9]*\)/.*#\1#p`,
 		`background-rgba`,
-		`xfce4-panel -r`,
+		`pkill -USR1 -x xfce4-panel`,
 		`xfwm4 --replace`,
 		`gsettings set org.gnome.desktop.interface color-scheme prefer-dark`,
 	} {

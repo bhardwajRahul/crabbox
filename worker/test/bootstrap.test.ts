@@ -113,7 +113,7 @@ describe("cloud-init bootstrap", () => {
     expect(got).toContain("xfconf-query -c xfce4-panel -l");
     expect(got).toContain(String.raw`s#^/panels/panel-\([0-9][0-9]*\)/.*#\1#p`);
     expect(got).toContain("background-rgba");
-    expect(got).toContain("xfce4-panel -r");
+    expect(got).toContain("pkill -USR1 -x xfce4-panel");
     expect(got).toContain("xfwm4 --replace");
     expect(got).toContain("gsettings set org.gnome.desktop.interface color-scheme prefer-dark");
     expect(got).toContain(
