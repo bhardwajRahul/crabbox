@@ -1069,12 +1069,26 @@ if [ "${CRABBOX_DESKTOP:-0}" = "1" ]; then
   chown "$user" /var/lib/crabbox/vnc.password /var/lib/crabbox/vnc.pass
   chmod 0600 /var/lib/crabbox/vnc.password /var/lib/crabbox/vnc.pass
   config_dir="$home_dir/.config"
+  gtk_theme=Adwaita-dark
+  for candidate in Greybird-dark Adwaita-dark Greybird; do
+    if [ -d "/usr/share/themes/$candidate/gtk-3.0" ]; then
+      gtk_theme="$candidate"
+      break
+    fi
+  done
+  xfwm_theme=Default
+  for candidate in Greybird-dark Daloa Greybird Default; do
+    if [ -d "/usr/share/themes/$candidate/xfwm4" ]; then
+      xfwm_theme="$candidate"
+      break
+    fi
+  done
   install -d -m 0700 -o "$user" "$config_dir/xfce4/xfconf/xfce-perchannel-xml" "$config_dir/xfce4/terminal" "$config_dir/gtk-3.0"
-  cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" <<'XML'
+  cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xsettings" version="1.0">
   <property name="Net" type="empty">
-    <property name="ThemeName" type="string" value="Adwaita-dark"/>
+    <property name="ThemeName" type="string" value="$gtk_theme"/>
     <property name="IconThemeName" type="string" value="Adwaita"/>
   </property>
   <property name="Gtk" type="empty">
@@ -1082,6 +1096,16 @@ if [ "${CRABBOX_DESKTOP:-0}" = "1" ]; then
   </property>
 </channel>
 XML
+  if [ ! -s "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" ]; then
+    cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="$xfwm_theme"/>
+  </property>
+</channel>
+XML
+  fi
   cat > "$config_dir/xfce4/terminal/terminalrc" <<'EOF'
 [Configuration]
 ColorForeground=#e5e7eb
@@ -1089,14 +1113,14 @@ ColorBackground=#111827
 ColorCursor=#f3f4f6
 MiscBell=FALSE
 EOF
-  cat > "$config_dir/gtk-3.0/settings.ini" <<'EOF'
+  cat > "$config_dir/gtk-3.0/settings.ini" <<EOF
 [Settings]
-gtk-theme-name=Adwaita-dark
+gtk-theme-name=$gtk_theme
 gtk-icon-theme-name=Adwaita
 gtk-application-prefer-dark-theme=1
 EOF
-  cat > "$home_dir/.gtkrc-2.0" <<'EOF'
-gtk-theme-name="Adwaita-dark"
+  cat > "$home_dir/.gtkrc-2.0" <<EOF
+gtk-theme-name="$gtk_theme"
 gtk-icon-theme-name="Adwaita"
 gtk-application-prefer-dark-theme=1
 EOF
@@ -1106,6 +1130,20 @@ EOF
 set -eu
 user="${CRABBOX_SSH_USER:-crabbox}"
 runtime="/tmp/crabbox-runtime-$user"
+gtk_theme=Adwaita-dark
+for candidate in Greybird-dark Adwaita-dark Greybird; do
+  if [ -d "/usr/share/themes/$candidate/gtk-3.0" ]; then
+    gtk_theme="$candidate"
+    break
+  fi
+done
+xfwm_theme=Default
+for candidate in Greybird-dark Daloa Greybird Default; do
+  if [ -d "/usr/share/themes/$candidate/xfwm4" ]; then
+    xfwm_theme="$candidate"
+    break
+  fi
+done
 install -d -m 0700 -o "$user" "$runtime"
 if ! pgrep -u "$user" -f 'Xvfb :99' >/dev/null 2>&1; then
   su "$user" -s /bin/sh -c "XDG_RUNTIME_DIR='$runtime' Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac >/tmp/crabbox-xvfb.log 2>&1 &"
@@ -1116,13 +1154,19 @@ if ! pgrep -u "$user" -f 'xfce4-session|startxfce4' >/dev/null 2>&1; then
 fi
 sleep 2
 if command -v xfconf-query >/dev/null 2>&1; then
-  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita-dark >/dev/null 2>&1 || true"
+  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s '$gtk_theme' >/dev/null 2>&1 || true"
   su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Adwaita >/dev/null 2>&1 || true"
   su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xsettings -p /Gtk/ApplicationPreferDarkTheme -n -t bool -s true >/dev/null 2>&1 || true"
+  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfwm4 -p /general/theme -n -t string -s '$xfwm_theme' >/dev/null 2>&1 || true"
+  for panel in $(su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfce4-panel -l 2>/dev/null" | sed -n 's#^/panels/panel-\([0-9][0-9]*\)$#\1#p; s#^/panels/panel-\([0-9][0-9]*\)/.*#\1#p' | sort -u); do
+    su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfce4-panel -p /panels/panel-$panel/background-style -n -t int -s 1 >/dev/null 2>&1 || true"
+    su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfconf-query -c xfce4-panel -p /panels/panel-$panel/background-rgba -n -t double -t double -t double -t double -s 0.06 -s 0.07 -s 0.09 -s 1.0 >/dev/null 2>&1 || true"
+  done
+  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfce4-panel -r >/dev/null 2>&1 || true"
 fi
 if command -v gsettings >/dev/null 2>&1; then
   su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' gsettings set org.gnome.desktop.interface color-scheme prefer-dark >/dev/null 2>&1 || true"
-  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' gsettings set org.gnome.desktop.interface gtk-theme Adwaita-dark >/dev/null 2>&1 || true"
+  su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' gsettings set org.gnome.desktop.interface gtk-theme '$gtk_theme' >/dev/null 2>&1 || true"
 fi
 if command -v xfce4-terminal >/dev/null 2>&1 && ! pgrep -u "$user" -f 'xfce4-terminal.*Crabbox Desktop' >/dev/null 2>&1; then
   su "$user" -s /bin/sh -c "DISPLAY=:99 XDG_RUNTIME_DIR='$runtime' xfce4-terminal --title='Crabbox Desktop' --geometry=110x32+48+48 >/tmp/crabbox-terminal.log 2>&1 &" || true

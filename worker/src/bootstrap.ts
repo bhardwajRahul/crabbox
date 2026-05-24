@@ -630,17 +630,31 @@ function optionalWriteFiles(config: LeaseConfig): string {
         home_dir="/home/$user"
       fi
       config_dir="$home_dir/.config"
+      gtk_theme=Adwaita-dark
+      for candidate in Greybird-dark Adwaita-dark Greybird; do
+        if [ -d "/usr/share/themes/$candidate/gtk-3.0" ]; then
+          gtk_theme="$candidate"
+          break
+        fi
+      done
+      xfwm_theme=Default
+      for candidate in Greybird-dark Daloa Greybird Default; do
+        if [ -d "/usr/share/themes/$candidate/xfwm4" ]; then
+          xfwm_theme="$candidate"
+          break
+        fi
+      done
       if [ "$(id -u)" -eq 0 ]; then
         install -d -m 0700 -o "$user" "$config_dir/xfce4/xfconf/xfce-perchannel-xml" "$config_dir/xfce4/terminal" "$config_dir/gtk-3.0"
       else
         mkdir -p "$config_dir/xfce4/xfconf/xfce-perchannel-xml" "$config_dir/xfce4/terminal" "$config_dir/gtk-3.0"
         chmod 0700 "$config_dir" "$config_dir/xfce4" "$config_dir/xfce4/xfconf" "$config_dir/xfce4/xfconf/xfce-perchannel-xml" "$config_dir/xfce4/terminal" "$config_dir/gtk-3.0"
       fi
-      cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" <<'XML'
+      cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml" <<XML
       <?xml version="1.0" encoding="UTF-8"?>
       <channel name="xsettings" version="1.0">
         <property name="Net" type="empty">
-          <property name="ThemeName" type="string" value="Adwaita-dark"/>
+          <property name="ThemeName" type="string" value="$gtk_theme"/>
           <property name="IconThemeName" type="string" value="Adwaita"/>
         </property>
         <property name="Gtk" type="empty">
@@ -648,6 +662,16 @@ function optionalWriteFiles(config: LeaseConfig): string {
         </property>
       </channel>
       XML
+      if [ ! -s "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" ]; then
+        cat > "$config_dir/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml" <<XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <channel name="xfwm4" version="1.0">
+        <property name="general" type="empty">
+          <property name="theme" type="string" value="$xfwm_theme"/>
+        </property>
+      </channel>
+      XML
+      fi
       cat > "$config_dir/xfce4/terminal/terminalrc" <<'EOF'
       [Configuration]
       ColorForeground=#e5e7eb
@@ -655,14 +679,14 @@ function optionalWriteFiles(config: LeaseConfig): string {
       ColorCursor=#f3f4f6
       MiscBell=FALSE
       EOF
-      cat > "$config_dir/gtk-3.0/settings.ini" <<'EOF'
+      cat > "$config_dir/gtk-3.0/settings.ini" <<EOF
       [Settings]
-      gtk-theme-name=Adwaita-dark
+      gtk-theme-name=$gtk_theme
       gtk-icon-theme-name=Adwaita
       gtk-application-prefer-dark-theme=1
       EOF
-      cat > "$home_dir/.gtkrc-2.0" <<'EOF'
-      gtk-theme-name="Adwaita-dark"
+      cat > "$home_dir/.gtkrc-2.0" <<EOF
+      gtk-theme-name="$gtk_theme"
       gtk-icon-theme-name="Adwaita"
       gtk-application-prefer-dark-theme=1
       EOF
@@ -670,13 +694,19 @@ function optionalWriteFiles(config: LeaseConfig): string {
         chown -R "$user" "$config_dir" "$home_dir/.gtkrc-2.0"
       fi
       if [ -n "\${DISPLAY:-}" ] && command -v xfconf-query >/dev/null 2>&1; then
-        xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita-dark >/dev/null 2>&1 || true
+        xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s "$gtk_theme" >/dev/null 2>&1 || true
         xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Adwaita >/dev/null 2>&1 || true
         xfconf-query -c xsettings -p /Gtk/ApplicationPreferDarkTheme -n -t bool -s true >/dev/null 2>&1 || true
+        xfconf-query -c xfwm4 -p /general/theme -n -t string -s "$xfwm_theme" >/dev/null 2>&1 || true
+        for panel in $(xfconf-query -c xfce4-panel -l 2>/dev/null | sed -n 's#^/panels/panel-\\([0-9][0-9]*\\)$#\\1#p; s#^/panels/panel-\\([0-9][0-9]*\\)/.*#\\1#p' | sort -u); do
+          xfconf-query -c xfce4-panel -p "/panels/panel-$panel/background-style" -n -t int -s 1 >/dev/null 2>&1 || true
+          xfconf-query -c xfce4-panel -p "/panels/panel-$panel/background-rgba" -n -t double -t double -t double -t double -s 0.06 -s 0.07 -s 0.09 -s 1.0 >/dev/null 2>&1 || true
+        done
+        xfce4-panel -r >/dev/null 2>&1 || true
       fi
       if command -v gsettings >/dev/null 2>&1; then
         gsettings set org.gnome.desktop.interface color-scheme prefer-dark >/dev/null 2>&1 || true
-        gsettings set org.gnome.desktop.interface gtk-theme Adwaita-dark >/dev/null 2>&1 || true
+        gsettings set org.gnome.desktop.interface gtk-theme "$gtk_theme" >/dev/null 2>&1 || true
       fi
   - path: /etc/systemd/system/crabbox-desktop.service
     permissions: '0644'

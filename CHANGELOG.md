@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed Linux desktop theme setup so WebVNC sessions also apply dark window-manager chrome and panel styling instead of only darkening GTK apps and browser content.
 - Fixed desktop browser launches so Linux WebVNC browser sessions inherit the dark desktop theme, advertise dark color-scheme preference to web apps, and repair older managed browser wrappers before launch.
 
 ## 0.18.0 - 2026-05-23
