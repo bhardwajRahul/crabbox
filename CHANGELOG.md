@@ -2,6 +2,12 @@
 
 ## 0.19.1 - Unreleased
 
+### Fixed
+
+- Fixed AWS Linux desktop bootstrap so generated theme helpers include the latest WebVNC desktop styling on fresh leases.
+- Fixed Linux WebVNC desktop panel styling so status and taskbar items avoid harsh high-contrast borders in dark mode.
+- Fixed Linux WebVNC terminal windows so the XFCE Terminal menu bar follows the dark desktop theme.
+
 ## 0.19.0 - 2026-05-25
 
 ### Added
