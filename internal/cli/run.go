@@ -346,6 +346,11 @@ func (a App) runCommand(ctx context.Context, args []string) (err error) {
 		if err := validateRunArtifactGlobTarget(SSHTarget{TargetOS: cfg.TargetOS, WindowsMode: cfg.WindowsMode}, expansion.ArtifactGlobs); err != nil {
 			return err
 		}
+		if envHelperName != "" {
+			if err := validateRunEnvHelperTarget(SSHTarget{TargetOS: cfg.TargetOS, WindowsMode: cfg.WindowsMode}, runEnvHelperPath(envHelperName)); err != nil {
+				return err
+			}
+		}
 		if expansion.Profile.Doctor.Enabled && cfg.TargetOS == targetWindows && cfg.WindowsMode == windowsModeNormal {
 			return exit(2, "profile doctor is not supported for native Windows targets")
 		}
