@@ -4,20 +4,18 @@
 
 ### Added
 
-- Added a portable `--os`/`os` lease selector with Ubuntu 26.04 as the preferred Linux image where provider catalogs support it, while preserving explicit provider image overrides.
-- Added `--desktop-env gnome` for a GNOME-apps desktop profile on labwc/WayVNC.
-- Added GNOME Panel taskbars to the `--desktop-env gnome` profile, with GNOME launches kept visible through Xwayland.
+- Added `--desktop-env gnome` for a GNOME-apps desktop profile on labwc/WayVNC with GNOME Panel taskbars and Xwayland-backed app launches.
 - Added native Windows support for GitHub-runner Actions hydration so workflows can prepare Windows leases before Crabbox attaches to the hydrated workspace.
+- Added a portable `--os`/`os` lease selector with Ubuntu 26.04 as the preferred Linux image where provider catalogs support it, while preserving explicit provider image overrides.
 
 ### Fixed
 
-- Removed the short-lived LXQt desktop profile before release.
 - Fixed failed-run summaries so application output mentioning provider auth no longer looks like a provider/auth blocker, shell `&&` command chains explain short-circuit behavior, observed phases identify the likely failed phase, and opt-in automatic JUnit discovery can add structured test failures.
-- Fixed Daytona provider sandbox inventory to use Daytona's cursor-based listing API.
-- Removed OpenClaw-specific hosted broker defaults and documentation from the generic Crabbox broker login flow.
 - Fixed native Windows `--fresh-pr` runs so PR checkout, local patch application, and post-bootstrap SSH port changes work over PowerShell.
 - Fixed native Windows Actions env handoff so `crabbox run` can consume bash-style hydrate env files and reuse hydrated Node/pnpm paths.
 - Fixed AWS coordinator EC2 polling to tolerate transient `InvalidInstanceID.NotFound` after instance creation and to report parsed AWS XML errors.
+- Fixed Daytona provider sandbox inventory to use Daytona's cursor-based listing API.
+- Removed OpenClaw-specific hosted broker defaults and documentation from the generic Crabbox broker login flow.
 
 ## 0.20.0 - 2026-05-26
 
