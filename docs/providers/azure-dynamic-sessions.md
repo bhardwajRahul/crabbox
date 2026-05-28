@@ -99,6 +99,8 @@ example `CRABBOX_AZURE_DYNAMIC_SESSIONS_ENDPOINT` and
   through the runner.
 - `--keep` retains the session for reuse. Without `--keep`, Crabbox calls the
   custom container `/.management/stopSession` endpoint after the run.
+- `run`, `status`, and `stop` accept kept Crabbox lease IDs or slugs from local
+  claims; raw Dynamic Sessions identifiers are not accepted.
 - `status` and `list` use `/.management/getSession` and
   `/.management/listSessions` plus local Crabbox claims.
 

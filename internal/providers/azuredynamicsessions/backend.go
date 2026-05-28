@@ -314,9 +314,9 @@ func (b *azureDynamicSessionsBackend) createSession(ctx context.Context, client 
 	return leaseID, slug, nil
 }
 
-func (b *azureDynamicSessionsBackend) resolveSessionID(ctx context.Context, client azureDynamicSessionsAPI, id, repoRoot string, reclaim bool) (string, string, error) {
+func (b *azureDynamicSessionsBackend) resolveSessionID(_ context.Context, _ azureDynamicSessionsAPI, id, repoRoot string, reclaim bool) (string, string, error) {
 	if id == "" {
-		return "", "", exit(2, "provider=%s requires a Crabbox lease id, slug, or Dynamic Sessions identifier", providerName)
+		return "", "", exit(2, "provider=%s requires a kept Crabbox lease id or slug", providerName)
 	}
 	if claim, ok, err := resolveLeaseClaimForProvider(id, providerName); err != nil {
 		return "", "", err
@@ -328,12 +328,7 @@ func (b *azureDynamicSessionsBackend) resolveSessionID(ctx context.Context, clie
 		}
 		return claim.LeaseID, claim.Slug, nil
 	}
-	session, err := client.GetSession(ctx, id)
-	if err != nil {
-		return "", "", providerError("get session", err)
-	}
-	identifier := blank(session.Identifier, id)
-	return identifier, newLeaseSlug(identifier), nil
+	return "", "", exit(4, "%s session %q is not claimed by Crabbox; use a kept Crabbox lease id or slug", providerName, id)
 }
 
 type coreLeaseClaim struct {
