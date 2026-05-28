@@ -1,12 +1,95 @@
 package azuredynamicsessions
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRunStopsNewSessionByDefault(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	fake := &recordingAzureDynamicSessionsAPI{}
+	restoreAzureDynamicSessionsClient(t, fake)
+	backend := testAzureDynamicSessionsBackend()
+
+	result, err := backend.Run(context.Background(), RunRequest{
+		Repo:    Repo{Root: repo, Name: "repo"},
+		NoSync:  true,
+		Command: []string{"printf", "ok"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 || result.Provider != providerName || result.LeaseID == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(fake.deleted) != 1 || fake.deleted[0] != result.LeaseID {
+		t.Fatalf("deleted sessions = %#v, want %s", fake.deleted, result.LeaseID)
+	}
+	if _, ok, err := resolveLeaseClaimForProvider(result.LeaseID, providerName); err != nil || ok {
+		t.Fatalf("claim after cleanup ok=%t err=%v", ok, err)
+	}
+}
+
+func TestRunKeepOnFailureRetainsNewSession(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	fake := &recordingAzureDynamicSessionsAPI{commandExit: 7}
+	restoreAzureDynamicSessionsClient(t, fake)
+	backend := testAzureDynamicSessionsBackend()
+
+	result, err := backend.Run(context.Background(), RunRequest{
+		Repo:          Repo{Root: repo, Name: "repo"},
+		NoSync:        true,
+		KeepOnFailure: true,
+		Command:       []string{"false"},
+	})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 7 {
+		t.Fatalf("err = %v, want exit 7", err)
+	}
+	if result.LeaseID == "" {
+		t.Fatalf("result missing lease: %#v", result)
+	}
+	if len(fake.deleted) != 0 {
+		t.Fatalf("deleted sessions = %#v, want retained session", fake.deleted)
+	}
+	if claim, ok, err := resolveLeaseClaimForProvider(result.LeaseID, providerName); err != nil || !ok || claim.RepoRoot != repo {
+		t.Fatalf("retained claim ok=%t claim=%#v err=%v", ok, claim, err)
+	}
+}
+
+func TestRunReusesClaimWithoutStoppingSession(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := t.TempDir()
+	if err := claimLeaseForRepoProvider("azds-kept", "kept-session", providerName, repo, time.Minute, false); err != nil {
+		t.Fatal(err)
+	}
+	fake := &recordingAzureDynamicSessionsAPI{}
+	restoreAzureDynamicSessionsClient(t, fake)
+	backend := testAzureDynamicSessionsBackend()
+
+	result, err := backend.Run(context.Background(), RunRequest{
+		Repo:    Repo{Root: repo, Name: "repo"},
+		ID:      "kept-session",
+		NoSync:  true,
+		Command: []string{"printf", "ok"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LeaseID != "azds-kept" || result.Slug != "kept-session" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(fake.deleted) != 0 {
+		t.Fatalf("deleted reused session: %#v", fake.deleted)
+	}
+}
 
 func TestResolveSessionIDRequiresLocalClaim(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -49,6 +132,9 @@ func TestResolveSessionIDUsesClaimedSlug(t *testing.T) {
 
 type recordingAzureDynamicSessionsAPI struct {
 	getSessionCalls int
+	deleted         []string
+	execs           []azureDynamicSessionsExecRequest
+	commandExit     int
 }
 
 func (r *recordingAzureDynamicSessionsAPI) CheckRunner(context.Context, string) error {
@@ -59,7 +145,11 @@ func (r *recordingAzureDynamicSessionsAPI) UploadFile(context.Context, string, s
 	return nil
 }
 
-func (r *recordingAzureDynamicSessionsAPI) ExecStream(context.Context, string, azureDynamicSessionsExecRequest, io.Writer, io.Writer) (int, error) {
+func (r *recordingAzureDynamicSessionsAPI) ExecStream(_ context.Context, _ string, req azureDynamicSessionsExecRequest, _ io.Writer, _ io.Writer) (int, error) {
+	r.execs = append(r.execs, req)
+	if r.commandExit != 0 && !strings.HasPrefix(req.Command, "mkdir -p ") {
+		return r.commandExit, nil
+	}
 	return 0, nil
 }
 
@@ -72,6 +162,28 @@ func (r *recordingAzureDynamicSessionsAPI) ListSessions(context.Context) ([]azur
 	return nil, nil
 }
 
-func (r *recordingAzureDynamicSessionsAPI) DeleteSession(context.Context, string) error {
+func (r *recordingAzureDynamicSessionsAPI) DeleteSession(_ context.Context, identifier string) error {
+	r.deleted = append(r.deleted, identifier)
 	return nil
+}
+
+func restoreAzureDynamicSessionsClient(t *testing.T, api azureDynamicSessionsAPI) {
+	t.Helper()
+	previous := newAzureDynamicSessionsClient
+	newAzureDynamicSessionsClient = func(context.Context, Config, Runtime) (azureDynamicSessionsAPI, error) {
+		return api, nil
+	}
+	t.Cleanup(func() {
+		newAzureDynamicSessionsClient = previous
+	})
+}
+
+func testAzureDynamicSessionsBackend() *azureDynamicSessionsBackend {
+	return &azureDynamicSessionsBackend{
+		cfg: Config{},
+		rt: Runtime{
+			Stdout: &bytes.Buffer{},
+			Stderr: &bytes.Buffer{},
+		},
+	}
 }

@@ -83,6 +83,22 @@ func TestAzureDynamicSessionsAccessTokenUsesDynamicsessionsAudience(t *testing.T
 	}
 }
 
+func TestAzureDynamicSessionsAccessTokenPrefersEnvironmentToken(t *testing.T) {
+	t.Setenv(tokenEnvName, " env-token ")
+	runner := &recordingRunner{result: LocalCommandResult{Stdout: "az-token\n"}}
+
+	token, err := azureDynamicSessionsAccessToken(context.Background(), Config{}, Runtime{Exec: runner})
+	if err != nil {
+		t.Fatalf("access token: %v", err)
+	}
+	if token != "env-token" {
+		t.Fatalf("token = %q, want env-token", token)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("az was called despite env token: %#v", runner.calls)
+	}
+}
+
 func TestAzureDynamicSessionsClientUsesCustomContainerEndpoints(t *testing.T) {
 	var sawHealth, sawUpload, sawExec, sawGet, sawList, sawDelete bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +202,56 @@ func TestAzureDynamicSessionsClientUsesCustomContainerEndpoints(t *testing.T) {
 	}
 	if !sawHealth || !sawUpload || !sawExec || !sawGet || !sawList || !sawDelete {
 		t.Fatalf("saw health=%t upload=%t exec=%t get=%t list=%t delete=%t", sawHealth, sawUpload, sawExec, sawGet, sawList, sawDelete)
+	}
+}
+
+func TestAzureDynamicSessionsListSessionsFollowsNextLink(t *testing.T) {
+	requests := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		switch r.URL.Query().Get("skip") {
+		case "0":
+			_, _ = w.Write([]byte(`{"value":[{"identifier":"azds-one"}],"nextLink":"/.management/listSessions?skip=1"}`))
+		case "1":
+			_, _ = w.Write([]byte(`{"sessions":[{"properties":{"identifier":"azds-two","status":"Running"}}]}`))
+		default:
+			t.Fatalf("unexpected list query = %s", r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+
+	client := &azureDynamicSessionsClient{
+		endpoint:             server.URL,
+		managementAPIVersion: "2025-02-02-preview",
+		token:                "test-token",
+		httpClient:           server.Client(),
+	}
+	sessions, err := client.ListSessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || sessions[0].Identifier != "azds-one" || sessions[1].Identifier != "azds-two" || sessions[1].Status != "Running" {
+		t.Fatalf("sessions = %#v", sessions)
+	}
+	if len(requests) != 2 || !strings.Contains(requests[1], "api-version=2025-02-02-preview") {
+		t.Fatalf("requests = %#v, want paginated api-version", requests)
+	}
+}
+
+func TestAzureDynamicSessionsExecStreamRejectsIncompleteStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"stdout\",\"data\":\"partial\"}\n"))
+	}))
+	defer server.Close()
+
+	client := &azureDynamicSessionsClient{
+		endpoint:   server.URL,
+		token:      "test-token",
+		httpClient: server.Client(),
+	}
+	if _, err := client.ExecStream(context.Background(), "azds-test", azureDynamicSessionsExecRequest{Command: "echo partial"}, nil, nil); err == nil || !strings.Contains(err.Error(), "ended before completion") {
+		t.Fatalf("err = %v, want incomplete stream", err)
 	}
 }
 
