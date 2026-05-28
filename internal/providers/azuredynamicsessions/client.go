@@ -111,10 +111,32 @@ var newAzureDynamicSessionsClient = func(ctx context.Context, cfg Config, rt Run
 }
 
 func azureDynamicSessionsEndpoint(cfg Config) (string, error) {
-	if endpoint := strings.TrimRight(strings.TrimSpace(cfg.AzureDynamicSessions.Endpoint), "/"); endpoint != "" {
-		return endpoint, nil
+	endpoint := strings.TrimSpace(cfg.AzureDynamicSessions.Endpoint)
+	if endpoint == "" {
+		return "", exit(2, "provider=%s requires azureDynamicSessions.endpoint set to the custom container poolManagementEndpoint", providerName)
 	}
-	return "", exit(2, "provider=%s requires azureDynamicSessions.endpoint set to the custom container poolManagementEndpoint", providerName)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", exit(2, "%s endpoint %q is invalid", providerName, endpoint)
+	}
+	if parsed.User != nil {
+		return "", exit(2, "%s endpoint must not include userinfo", providerName)
+	}
+	if parsed.Scheme != "https" && !isLoopbackHTTPURL(parsed) {
+		return "", exit(2, "%s endpoint %q must use https unless it targets localhost", providerName, endpoint)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", exit(2, "%s endpoint %q must not include query or fragment components", providerName, endpoint)
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func isLoopbackHTTPURL(parsed *url.URL) bool {
+	if parsed.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func azureDynamicSessionsAccessToken(ctx context.Context, cfg Config, rt Runtime) (string, error) {

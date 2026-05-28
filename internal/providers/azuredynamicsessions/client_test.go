@@ -29,6 +29,37 @@ func TestAzureDynamicSessionsEndpointRequiresPoolManagementEndpoint(t *testing.T
 	}
 }
 
+func TestAzureDynamicSessionsEndpointRejectsUnsafeTokenDestinations(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://pool.env.eastus.azurecontainerapps.io",
+		"https://user:pass@pool.env.eastus.azurecontainerapps.io",
+		"https://pool.env.eastus.azurecontainerapps.io?debug=true",
+		"https://pool.env.eastus.azurecontainerapps.io#fragment",
+		"pool.env.eastus.azurecontainerapps.io",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			cfg := Config{}
+			cfg.AzureDynamicSessions.Endpoint = endpoint
+			_, err := azureDynamicSessionsEndpoint(cfg)
+			if err == nil {
+				t.Fatal("endpoint should be rejected")
+			}
+		})
+	}
+}
+
+func TestAzureDynamicSessionsEndpointAllowsLoopbackHTTPForLocalRunner(t *testing.T) {
+	cfg := Config{}
+	cfg.AzureDynamicSessions.Endpoint = "http://127.0.0.1:8787/"
+	got, err := azureDynamicSessionsEndpoint(cfg)
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	if got != "http://127.0.0.1:8787" {
+		t.Fatalf("endpoint = %q", got)
+	}
+}
+
 func TestAzureDynamicSessionsAccessTokenUsesDynamicsessionsAudience(t *testing.T) {
 	t.Setenv(tokenEnvName, "")
 	runner := &recordingRunner{result: LocalCommandResult{Stdout: "token\n"}}
