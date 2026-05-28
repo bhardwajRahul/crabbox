@@ -199,6 +199,9 @@ func buildAzureDynamicSessionsCommand(command []string, shellMode bool) (string,
 	if shellMode {
 		return strings.Join(command, " "), nil
 	}
+	if len(command) == 1 && shouldUseShell(command) {
+		return command[0], nil
+	}
 	if shouldUseShell(command) || leadingEnvAssignment(command) {
 		return shellScriptFromArgv(command), nil
 	}
