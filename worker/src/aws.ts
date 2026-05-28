@@ -2134,8 +2134,7 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-const opaqueAWSHTTP400XMLOnlyError =
-  /^(?:[^;]+:\s*)?aws [A-Za-z]+: http 400: <\?xml version="1\.0" encoding="UTF-8"\?>\s*(?:;\s*(?:[^;]+:\s*)?aws [A-Za-z]+: http 400: <\?xml version="1\.0" encoding="UTF-8"\?>\s*)*$/;
+const opaqueAWSHTTP400XMLDeclaration = '<?xml version="1.0" encoding="UTF-8"?>';
 
 export function awsProvisioningErrorCategory(message: string): string {
   if (message.includes("no available EC2 Mac Dedicated Host")) {
@@ -2162,10 +2161,55 @@ export function awsProvisioningErrorCategory(message: string): string {
   ) {
     return "policy";
   }
-  if (opaqueAWSHTTP400XMLOnlyError.test(message)) {
+  if (isOpaqueAWSHTTP400XMLOnlyError(message)) {
     return "capacity";
   }
   return "";
+}
+
+function isOpaqueAWSHTTP400XMLOnlyError(message: string): boolean {
+  const entries = message
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 && entries.every(isOpaqueAWSHTTP400XMLEntry);
+}
+
+function isOpaqueAWSHTTP400XMLEntry(entry: string): boolean {
+  const awsIndex = entry.indexOf("aws ");
+  if (awsIndex < 0) {
+    return false;
+  }
+  if (awsIndex > 0 && !entry.slice(0, awsIndex).trimEnd().endsWith(":")) {
+    return false;
+  }
+
+  const payload = entry.slice(awsIndex);
+  const separator = ": http 400: ";
+  const separatorIndex = payload.indexOf(separator);
+  if (separatorIndex <= "aws ".length) {
+    return false;
+  }
+  const operation = payload.slice("aws ".length, separatorIndex);
+  if (!isAWSOperationName(operation)) {
+    return false;
+  }
+  return payload.slice(separatorIndex + separator.length).trim() === opaqueAWSHTTP400XMLDeclaration;
+}
+
+function isAWSOperationName(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    if (!isUpper && !isLower) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function isRetryableAWSProvisioningError(message: string): boolean {

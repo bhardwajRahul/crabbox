@@ -349,6 +349,10 @@ func runSSHCombinedOutput(ctx context.Context, target SSHTarget, remote string) 
 	for _, port := range sshPortCandidates(target.Port, target.FallbackPorts) {
 		probe := target
 		probe.Port = port
+		// Crabbox's SSH helpers intentionally execute commands assembled by
+		// typed remote-command builders. Callers must shell-quote user data
+		// before it reaches this boundary; see remoteCommand/shellQuote tests.
+		// codeql[go/command-injection]
 		cmd := exec.CommandContext(ctx, "ssh", sshArgs(probe, remote)...)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
