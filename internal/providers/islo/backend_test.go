@@ -112,15 +112,32 @@ func TestIsloStatusReady(t *testing.T) {
 }
 
 func TestResolveIsloLeaseIDRejectsUnclaimedRawSandbox(t *testing.T) {
-	if _, _, err := resolveIsloLeaseID("production", "", false); err == nil {
+	if _, _, _, err := resolveIsloLeaseID("production", "", false); err == nil {
 		t.Fatal("expected raw non-Crabbox sandbox to be rejected")
 	}
-	leaseID, name, err := resolveIsloLeaseID("crabbox-repo-abcdef", "", false)
+	leaseID, name, slug, err := resolveIsloLeaseID("crabbox-repo-abcdef", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if leaseID != "isb_crabbox-repo-abcdef" || name != "crabbox-repo-abcdef" {
-		t.Fatalf("lease=%q name=%q", leaseID, name)
+	if leaseID != "isb_crabbox-repo-abcdef" || name != "crabbox-repo-abcdef" || slug == "" {
+		t.Fatalf("lease=%q name=%q slug=%q", leaseID, name, slug)
+	}
+}
+
+func TestResolveIsloLeaseIDPreservesClaimSlug(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	leaseID := "isb_crabbox-repo-abcdef"
+	if err := claimLeaseForRepoProvider(leaseID, "web", isloProvider, root, time.Hour, false); err != nil {
+		t.Fatal(err)
+	}
+
+	gotLeaseID, name, slug, err := resolveIsloLeaseID("web", root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLeaseID != leaseID || name != "crabbox-repo-abcdef" || slug != "web" {
+		t.Fatalf("lease=%q name=%q slug=%q", gotLeaseID, name, slug)
 	}
 }
 
