@@ -2,6 +2,10 @@
 
 ## 0.22.1 - Unreleased
 
+### Added
+
+- Added `--arch arm64` / `architecture: arm64` for Linux ARM leases on Azure and AWS, including Azure Dpsv6/Dpdsv6 and AWS Graviton class fallback plus matching Ubuntu ARM64 image resolution.
+
 ### Fixed
 
 - Fixed brokered lease creation diagnostics so long coordinator requests print progress, timed-out create requests do not retry non-idempotent POSTs through curl, and Azure ARM errors preserve the useful conflict message.
