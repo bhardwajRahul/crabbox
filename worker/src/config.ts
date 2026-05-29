@@ -16,6 +16,7 @@ export const awsMacOSInstanceTypeCandidates = [
 export interface LeaseConfig {
   provider: Provider;
   target: TargetOS;
+  architecture: Architecture;
   os: string;
   windowsMode: WindowsMode;
   desktop: boolean;
@@ -84,6 +85,7 @@ export interface LeaseConfig {
 }
 
 export type AzureOSDiskMode = "managed" | "ephemeral";
+export type Architecture = "amd64" | "arm64";
 
 export interface LeaseConfigDefaults {
   azureOSDisk?: string;
@@ -99,6 +101,7 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
     throw new Error(`unsupported provider: ${String(provider)}`);
   }
   const target = normalizeTarget(input.target ?? input.targetOS ?? "linux");
+  const architecture = normalizeArchitecture(input.architecture);
   const os = normalizeOSImage(input.os);
   const osExplicit = Boolean(input.os?.trim());
   const linuxOSImage = target === "linux" ? osImageSpec(os) : undefined;
@@ -113,6 +116,14 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
       throw new Error(unsupportedManagedTargetMessage(provider, target));
     }
     throw new Error(`unsupported target for brokered ${provider}: ${target}`);
+  }
+  if (architecture === "arm64") {
+    if (target !== "linux") {
+      throw new Error("architecture=arm64 currently supports target=linux only");
+    }
+    if (provider !== "azure" && provider !== "aws") {
+      throw new Error("architecture=arm64 currently supports provider=azure or provider=aws");
+    }
   }
   if (
     provider === "azure" &&
@@ -142,7 +153,8 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
   }
   const machineClass = input.class ?? "beast";
   const serverType =
-    input.serverType ?? serverTypeForConfig(provider, target, windowsMode, machineClass);
+    input.serverType ??
+    serverTypeForConfig(provider, target, windowsMode, machineClass, architecture);
   const ttlSeconds = clampTTL(input.ttlSeconds ?? 5400);
   const idleTimeoutSeconds = clampIdleTimeout(input.idleTimeoutSeconds ?? 1800);
   const sshPublicKey = input.sshPublicKey?.trim() ?? "";
@@ -158,6 +170,7 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
   return {
     provider,
     target,
+    architecture,
     os,
     windowsMode,
     desktop: input.desktop ?? false,
@@ -188,7 +201,13 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
     awsSSHCIDRs: validCIDRs(input.awsSSHCIDRs ?? []),
     awsMacHostID: input.awsMacHostID ?? "",
     azureLocation: input.azureLocation ?? "",
-    azureImage: input.azureImage ?? (osExplicit ? (linuxOSImage?.azureImage ?? "") : ""),
+    azureImage:
+      input.azureImage ??
+      (osExplicit
+        ? architecture === "arm64"
+          ? (linuxOSImage?.azureArm64Image ?? "")
+          : (linuxOSImage?.azureImage ?? "")
+        : ""),
     azureSnapshot: input.azureSnapshot ?? "",
     azureOSDisk: normalizeAzureOSDiskMode(input.azureOSDisk ?? defaults.azureOSDisk),
     gcpProject: input.gcpProject ?? "",
@@ -261,6 +280,22 @@ export function normalizeDesktopEnv(value: string | undefined): "xfce" | "waylan
       return "gnome";
     default:
       throw new Error("desktopEnv must be xfce, wayland, or gnome");
+  }
+}
+
+export function normalizeArchitecture(value: string | undefined): Architecture {
+  const normalized = (value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "":
+    case "amd64":
+    case "x86_64":
+    case "x64":
+      return "amd64";
+    case "arm64":
+    case "aarch64":
+      return "arm64";
+    default:
+      throw new Error("architecture must be amd64 or arm64");
   }
 }
 
@@ -452,15 +487,18 @@ export function serverTypeForConfig(
   target: TargetOS,
   windowsMode: WindowsMode,
   machineClass: string,
+  architecture: Architecture = "amd64",
 ): string {
   if (provider === "aws") {
     return (
-      awsInstanceTypeCandidatesForTargetClass(target, machineClass, windowsMode)[0] ?? machineClass
+      awsInstanceTypeCandidatesForTargetClass(target, machineClass, windowsMode, architecture)[0] ??
+      machineClass
     );
   }
   if (provider === "azure") {
     return (
-      azureVMSizeCandidatesForTargetClass(target, machineClass, windowsMode)[0] ?? machineClass
+      azureVMSizeCandidatesForTargetClass(target, machineClass, windowsMode, architecture)[0] ??
+      machineClass
     );
   }
   if (provider === "gcp") {
@@ -507,9 +545,10 @@ export function azureVMSizeCandidatesForTargetClass(
   target: TargetOS,
   machineClass: string,
   windowsMode: WindowsMode = "normal",
+  architecture: Architecture = "amd64",
 ): string[] {
   if (target === "linux") {
-    return azureVMSizeCandidatesForClass(machineClass);
+    return azureVMSizeCandidatesForArchitectureClass(architecture, machineClass);
   }
   if (target === "windows" && (windowsMode === "normal" || windowsMode === "wsl2")) {
     return azureWindowsVMSizeCandidatesForClass(machineClass);
@@ -518,6 +557,16 @@ export function azureVMSizeCandidatesForTargetClass(
 }
 
 export function azureVMSizeCandidatesForClass(machineClass: string): string[] {
+  return azureVMSizeCandidatesForArchitectureClass("amd64", machineClass);
+}
+
+export function azureVMSizeCandidatesForArchitectureClass(
+  architecture: Architecture,
+  machineClass: string,
+): string[] {
+  if (architecture === "arm64") {
+    return azureARM64VMSizeCandidatesForClass(machineClass);
+  }
   switch (machineClass) {
     case "standard":
       return [
@@ -574,6 +623,35 @@ export function azureVMSizeCandidatesForClass(machineClass: string): string[] {
   }
 }
 
+export function azureARM64VMSizeCandidatesForClass(machineClass: string): string[] {
+  switch (machineClass) {
+    case "standard":
+      return ["Standard_D32ps_v6", "Standard_D32pds_v6", "Standard_D16ps_v6", "Standard_D16pds_v6"];
+    case "fast":
+      return [
+        "Standard_D64ps_v6",
+        "Standard_D64pds_v6",
+        "Standard_D48ps_v6",
+        "Standard_D48pds_v6",
+        "Standard_D32ps_v6",
+        "Standard_D32pds_v6",
+      ];
+    case "large":
+      return [
+        "Standard_D96ps_v6",
+        "Standard_D96pds_v6",
+        "Standard_D64ps_v6",
+        "Standard_D64pds_v6",
+        "Standard_D48ps_v6",
+        "Standard_D48pds_v6",
+      ];
+    case "beast":
+      return ["Standard_D96ps_v6", "Standard_D96pds_v6", "Standard_D64ps_v6", "Standard_D64pds_v6"];
+    default:
+      return [machineClass];
+  }
+}
+
 export function azureWindowsVMSizeCandidatesForClass(machineClass: string): string[] {
   switch (machineClass) {
     case "standard":
@@ -617,6 +695,7 @@ export function awsInstanceTypeCandidatesForTargetClass(
   target: TargetOS,
   machineClass: string,
   windowsMode: WindowsMode = "normal",
+  architecture: Architecture = "amd64",
 ): string[] {
   if (target === "macos") {
     return awsMacOSInstanceTypeCandidates;
@@ -649,7 +728,7 @@ export function awsInstanceTypeCandidatesForTargetClass(
         return [machineClass];
     }
   }
-  return awsInstanceTypeCandidatesForClass(machineClass);
+  return awsInstanceTypeCandidatesForArchitectureClass(architecture, machineClass);
 }
 
 export function serverTypeCandidatesForClass(machineClass: string): string[] {
@@ -668,6 +747,16 @@ export function serverTypeCandidatesForClass(machineClass: string): string[] {
 }
 
 export function awsInstanceTypeCandidatesForClass(machineClass: string): string[] {
+  return awsInstanceTypeCandidatesForArchitectureClass("amd64", machineClass);
+}
+
+export function awsInstanceTypeCandidatesForArchitectureClass(
+  architecture: Architecture,
+  machineClass: string,
+): string[] {
+  if (architecture === "arm64") {
+    return awsARM64InstanceTypeCandidatesForClass(machineClass);
+  }
   switch (machineClass) {
     case "standard":
       return ["c7a.8xlarge", "c7i.8xlarge", "m7a.8xlarge", "m7i.8xlarge", "c7a.4xlarge"];
@@ -703,6 +792,21 @@ export function awsInstanceTypeCandidatesForClass(machineClass: string): string[
         "c7a.24xlarge",
         "c7a.16xlarge",
       ];
+    default:
+      return [machineClass];
+  }
+}
+
+export function awsARM64InstanceTypeCandidatesForClass(machineClass: string): string[] {
+  switch (machineClass) {
+    case "standard":
+      return ["c7g.8xlarge", "m7g.8xlarge", "r7g.8xlarge", "c7g.4xlarge"];
+    case "fast":
+      return ["c7g.16xlarge", "m7g.16xlarge", "r7g.16xlarge", "c7g.12xlarge", "c7g.8xlarge"];
+    case "large":
+      return ["c7g.16xlarge", "m7g.16xlarge", "r7g.16xlarge", "c7g.12xlarge"];
+    case "beast":
+      return ["c7g.16xlarge", "m7g.16xlarge", "r7g.16xlarge", "c7g.12xlarge"];
     default:
       return [machineClass];
   }

@@ -1176,6 +1176,19 @@ func TestAWSServerTypeForClass(t *testing.T) {
 	}
 }
 
+func TestAWSARM64ServerTypeForConfig(t *testing.T) {
+	cfg := Config{
+		Provider:             "aws",
+		TargetOS:             targetLinux,
+		Architecture:         ArchitectureARM64,
+		architectureExplicit: true,
+		Class:                "beast",
+	}
+	if got := serverTypeForConfig(cfg); got != "c7g.16xlarge" {
+		t.Fatalf("serverTypeForConfig arm64=%q", got)
+	}
+}
+
 func TestCloudflareContainerInstanceTypeMapping(t *testing.T) {
 	tests := []struct {
 		class string
@@ -1289,12 +1302,21 @@ func TestAWSInstanceTypeCandidatesForTargetsAndModes(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("target class candidates=%v want %v", got, want)
 	}
+	got = awsInstanceTypeCandidatesForTargetModeArchitectureClass(targetLinux, windowsModeNormal, ArchitectureARM64, "fast")
+	want = []string{"c7g.16xlarge", "m7g.16xlarge", "r7g.16xlarge", "c7g.12xlarge", "c7g.8xlarge"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("arm target class candidates=%v want %v", got, want)
+	}
 }
 
 func TestAWSLaunchCandidatesAddsPolicyFallbackUnlessExact(t *testing.T) {
 	got := awsLaunchCandidates(Config{Provider: "aws", Class: "beast", ServerType: "c7a.48xlarge"})
 	if got[len(got)-1] != "t3.small" {
 		t.Fatalf("last fallback=%q want t3.small in %v", got[len(got)-1], got)
+	}
+	arm := awsLaunchCandidates(Config{Provider: "aws", TargetOS: targetLinux, Architecture: ArchitectureARM64, architectureExplicit: true, Class: "beast", ServerType: "c7g.16xlarge"})
+	if arm[len(arm)-1] != "t4g.small" {
+		t.Fatalf("last arm fallback=%q want t4g.small in %v", arm[len(arm)-1], arm)
 	}
 	wsl2 := awsLaunchCandidates(Config{Provider: "aws", TargetOS: targetWindows, WindowsMode: windowsModeWSL2, Class: "standard", ServerType: "m8i.large"})
 	for _, candidate := range wsl2 {

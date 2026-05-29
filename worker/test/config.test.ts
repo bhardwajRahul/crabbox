@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   awsMacOSInstanceTypeCandidates,
+  awsARM64InstanceTypeCandidatesForClass,
   awsInstanceTypeCandidatesForClass,
   awsInstanceTypeCandidatesForTargetClass,
+  azureARM64VMSizeCandidatesForClass,
   azureWindowsVMSizeCandidatesForClass,
   azureVMSizeCandidatesForClass,
   azureVMSizeCandidatesForTargetClass,
@@ -64,6 +66,9 @@ describe("machine class config", () => {
     expect(azureVMSizeCandidatesForTargetClass("linux", "standard")).toEqual(
       azureVMSizeCandidatesForClass("standard"),
     );
+    expect(azureVMSizeCandidatesForTargetClass("linux", "standard", "normal", "arm64")).toEqual(
+      azureARM64VMSizeCandidatesForClass("standard"),
+    );
     expect(azureVMSizeCandidatesForTargetClass("windows", "standard")).toEqual(
       azureWindowsVMSizeCandidatesForClass("standard"),
     );
@@ -88,6 +93,9 @@ describe("machine class config", () => {
       "m7a.large",
       "t3.large",
     ]);
+    expect(awsInstanceTypeCandidatesForTargetClass("linux", "standard", "normal", "arm64")).toEqual(
+      awsARM64InstanceTypeCandidatesForClass("standard"),
+    );
     expect(awsInstanceTypeCandidatesForTargetClass("macos", "standard")).toEqual([
       ...awsMacOSInstanceTypeCandidates,
     ]);
@@ -100,16 +108,22 @@ describe("machine class config", () => {
     const classes = ["standard", "fast", "large", "beast"];
     const hetzner = parseGoStringArrayCases(goFunctionBody(go, "serverTypeCandidatesForClass"));
     const awsLinux = parseGoStringArrayCases(
-      goFunctionBody(go, "awsInstanceTypeCandidatesForClass"),
+      goFunctionBody(go, "awsInstanceTypeCandidatesForArchitectureClass"),
     );
     const azureLinux = parseGoStringArrayCases(
-      goFunctionBody(goAzure, "azureVMSizeCandidatesForClass"),
+      goFunctionBody(goAzure, "azureVMSizeCandidatesForArchitectureClass"),
+    );
+    const azureLinuxARM64 = parseGoStringArrayCases(
+      goFunctionBody(goAzure, "azureARM64VMSizeCandidatesForClass"),
     );
     const azureWindows = parseGoStringArrayCases(
       goFunctionBody(goAzure, "azureWindowsVMSizeCandidatesForClass"),
     );
+    const awsLinuxARM64 = parseGoStringArrayCases(
+      goFunctionBody(go, "awsARM64InstanceTypeCandidatesForClass"),
+    );
     const gcp = parseGoStringArrayCases(goFunctionBody(goGCP, "gcpMachineTypeCandidatesForClass"));
-    const awsTarget = goFunctionBody(go, "awsInstanceTypeCandidatesForTargetModeClass");
+    const awsTarget = goFunctionBody(go, "awsInstanceTypeCandidatesForTargetModeArchitectureClass");
     const awsWSL2 = parseGoStringArrayCases(
       goSwitchAfter(awsTarget, "if windowsMode == windowsModeWSL2"),
     );
@@ -118,7 +132,9 @@ describe("machine class config", () => {
     for (const name of classes) {
       expect(serverTypeCandidatesForClass(name)).toEqual(hetzner[name]);
       expect(awsInstanceTypeCandidatesForClass(name)).toEqual(awsLinux[name]);
+      expect(awsARM64InstanceTypeCandidatesForClass(name)).toEqual(awsLinuxARM64[name]);
       expect(azureVMSizeCandidatesForClass(name)).toEqual(azureLinux[name]);
+      expect(azureARM64VMSizeCandidatesForClass(name)).toEqual(azureLinuxARM64[name]);
       expect(azureWindowsVMSizeCandidatesForClass(name)).toEqual(azureWindows[name]);
       expect(azureVMSizeCandidatesForTargetClass("windows", name)).toEqual(azureWindows[name]);
       expect(azureVMSizeCandidatesForTargetClass("windows", name, "wsl2")).toEqual(
@@ -334,6 +350,45 @@ describe("lease config", () => {
     expect(config.azureLocation).toBe("eastus");
     expect(config.azureImage).toBe("Canonical:offer:sku:latest");
     expect(config.azureOSDisk).toBe("managed");
+  });
+
+  it("uses Azure ARM defaults when requested", () => {
+    const config = leaseConfig({
+      provider: "azure",
+      architecture: "arm64",
+      os: "ubuntu:26.04",
+      sshPublicKey: "ssh-ed25519 test",
+    });
+    expect(config.architecture).toBe("arm64");
+    expect(config.serverType).toBe("Standard_D96ps_v6");
+    expect(config.azureImage).toBe("Canonical:ubuntu-26_04-lts:server-arm64:latest");
+  });
+
+  it("uses AWS ARM defaults when requested", () => {
+    const config = leaseConfig({
+      provider: "aws",
+      architecture: "arm64",
+      sshPublicKey: "ssh-ed25519 test",
+    });
+    expect(config.serverType).toBe("c7g.16xlarge");
+  });
+
+  it("rejects ARM leases outside supported Linux providers", () => {
+    expect(() =>
+      leaseConfig({
+        provider: "azure",
+        target: "windows",
+        architecture: "arm64",
+        sshPublicKey: "ssh-ed25519 test",
+      }),
+    ).toThrow("architecture=arm64 currently supports target=linux only");
+    expect(() =>
+      leaseConfig({
+        provider: "hetzner",
+        architecture: "arm64",
+        sshPublicKey: "ssh-ed25519 test",
+      }),
+    ).toThrow("architecture=arm64 currently supports provider=azure or provider=aws");
   });
 
   it("normalizes Azure OS disk requests", () => {
