@@ -4682,6 +4682,58 @@ describe("fleet lease identity and idle", () => {
     expect(body.lease.region).toBe("us-east-2");
   });
 
+  it("uses ARM64 promoted AWS Linux images for ARM leases", async () => {
+    const storage = new MemoryStorage();
+    let createdConfig: LeaseConfig | undefined;
+    const fleet = testFleet(
+      storage,
+      {
+        aws: fakeProvider(
+          (config) => {
+            createdConfig = config;
+          },
+          { provider: "aws", region: "us-east-2" },
+        ),
+      },
+      { CRABBOX_AWS_REGION: "eu-west-1" },
+    );
+    storage.seed("image:aws:promoted:linux:x86_64:ubuntu26.04", {
+      id: "ami-x86",
+      name: "crabbox-x86-image",
+      state: "available",
+      region: "us-east-1",
+      target: "linux",
+      architecture: "x86_64",
+      os: "ubuntu:26.04",
+      promotedAt: "2026-05-01T12:46:00Z",
+    });
+    storage.seed("image:aws:promoted:linux:arm64:ubuntu26.04", {
+      id: "ami-arm64",
+      name: "crabbox-arm-image",
+      state: "available",
+      region: "us-east-2",
+      target: "linux",
+      architecture: "arm64",
+      os: "ubuntu:26.04",
+      promotedAt: "2026-05-01T12:47:00Z",
+    });
+
+    const response = await fleet.fetch(
+      request("POST", "/v1/leases", {
+        body: {
+          provider: "aws",
+          architecture: "arm64",
+          sshPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test@example.com",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(createdConfig?.architecture).toBe("arm64");
+    expect(createdConfig?.awsAMI).toBe("ami-arm64");
+    expect(createdConfig?.awsRegion).toBe("us-east-2");
+  });
+
   it("passes provider-native checkpoint snapshot fields into new leases", async () => {
     let awsConfig: LeaseConfig | undefined;
     let azureConfig: LeaseConfig | undefined;
@@ -6614,13 +6666,17 @@ function fakeProvider(
           fakePromotedAWSImageKey({
             target: config.target,
             os: config.os,
-            architecture: fakeAWSImageArchitectureForTarget(config.target, config.serverType),
+            architecture: fakeAWSImageArchitectureForLease(
+              config.target,
+              config.serverType,
+              config.architecture,
+            ),
             region: config.awsRegion,
           }),
         )) ??
         (config.os
           ? await storage?.get<ProviderImage>(
-              `image:aws:promoted:linux:${fakeAWSImageArchitectureForTarget(config.target, config.serverType)}:${config.os.replaceAll(/[^a-z0-9._-]/g, "")}`,
+              `image:aws:promoted:linux:${fakeAWSImageArchitectureForLease(config.target, config.serverType, config.architecture)}:${config.os.replaceAll(/[^a-z0-9._-]/g, "")}`,
             )
           : undefined) ??
         (!config.os || config.os === "ubuntu:24.04"
@@ -7071,6 +7127,17 @@ function fakeAWSImageArchitectureForTarget(
     return serverType.startsWith("mac1.") ? "x86_64_mac" : "arm64_mac";
   }
   return "x86_64";
+}
+
+function fakeAWSImageArchitectureForLease(
+  target: "linux" | "macos" | "windows",
+  serverType: string,
+  architecture?: string,
+): string {
+  if (target === "linux" && architecture === "arm64") {
+    return "arm64";
+  }
+  return fakeAWSImageArchitectureForTarget(target, serverType);
 }
 
 function fakeNormalizeOSImage(value: string | undefined | null): string {

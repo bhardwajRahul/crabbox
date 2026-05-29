@@ -4684,6 +4684,17 @@ function awsImageArchitectureForTarget(target: TargetOS, serverType: string): st
   return "x86_64";
 }
 
+function awsImageArchitectureForLease(
+  target: TargetOS,
+  serverType: string,
+  architecture?: string,
+): string {
+  if (target === "linux" && architecture === "arm64") {
+    return "arm64";
+  }
+  return awsImageArchitectureForTarget(target, serverType);
+}
+
 function sanitizeAWSRegion(value: string): string {
   const region = value.trim().toLowerCase();
   return /^[a-z]{2}-[a-z-]+-[0-9]$/.test(region) ? region : "";
@@ -7374,15 +7385,21 @@ class AWSProvider implements CloudProvider {
 
   private async promotedImage(config: {
     target: TargetOS;
+    architecture?: string;
     os?: string;
     serverType: string;
     awsRegion: string;
   }): Promise<PromotedImageRecord | undefined> {
+    const architecture = awsImageArchitectureForLease(
+      config.target,
+      config.serverType,
+      config.architecture,
+    );
     const scoped = await this.storage.get<PromotedImageRecord>(
       promotedAWSImageKey({
         target: config.target,
         ...(config.os ? { os: config.os } : {}),
-        architecture: awsImageArchitectureForTarget(config.target, config.serverType),
+        architecture,
         serverType: config.serverType,
         region: config.awsRegion,
       }),
@@ -7394,7 +7411,7 @@ class AWSProvider implements CloudProvider {
       return this.storage.get<PromotedImageRecord>(
         legacyScopedPromotedAWSImageKey({
           target: config.target,
-          architecture: awsImageArchitectureForTarget(config.target, config.serverType),
+          architecture,
           region: config.awsRegion,
         }),
       );
@@ -7406,7 +7423,7 @@ class AWSProvider implements CloudProvider {
       const osScoped = await this.storage.get<PromotedImageRecord>(
         promotedAWSLinuxOSImageKey({
           os: config.os,
-          architecture: awsImageArchitectureForTarget(config.target, config.serverType),
+          architecture,
         }),
       );
       if (osScoped) {
@@ -7426,6 +7443,7 @@ class AWSProvider implements CloudProvider {
         // oxlint-disable-next-line eslint/no-await-in-loop -- storage reads preserve deterministic fallback key construction.
         const promoted = await this.promotedImage({
           target: config.target,
+          architecture: config.architecture,
           os: config.os,
           serverType,
           awsRegion: region,

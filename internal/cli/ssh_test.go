@@ -1189,6 +1189,20 @@ func TestAWSARM64ServerTypeForConfig(t *testing.T) {
 	}
 }
 
+func TestAWSExplicitARM64TypeInference(t *testing.T) {
+	for _, serverType := range []string{"c7g.16xlarge", "c7gd.16xlarge", "c7gn.16xlarge"} {
+		cfg := Config{
+			Provider:     "aws",
+			TargetOS:     targetLinux,
+			Architecture: ArchitectureAMD64,
+			ServerType:   serverType,
+		}
+		if got := effectiveArchitectureForConfig(cfg); got != ArchitectureARM64 {
+			t.Fatalf("effectiveArchitectureForConfig(%q)=%q want arm64", serverType, got)
+		}
+	}
+}
+
 func TestCloudflareContainerInstanceTypeMapping(t *testing.T) {
 	tests := []struct {
 		class string

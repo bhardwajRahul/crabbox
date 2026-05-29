@@ -3462,7 +3462,7 @@ func awsARM64InstanceTypeCandidatesForClass(class string) []string {
 
 func awsInstanceTypeIsARM64(instanceType string) bool {
 	name := strings.ToLower(strings.SplitN(instanceType, ".", 2)[0])
-	return strings.HasSuffix(name, "g")
+	return strings.HasSuffix(name, "g") || strings.HasSuffix(name, "gd") || strings.HasSuffix(name, "gn")
 }
 
 func getenv(name, fallback string) string {
