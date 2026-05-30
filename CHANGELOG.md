@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added Azure `--azure-os-disk ephemeral-preview` / `azure.osDisk: ephemeral-preview` for opt-in ephemeral OS disk full caching through Azure Compute API `2025-04-01`. Thanks @jwmoss.
 - Added configurable capacity-admin owner caps for coordinators that need elevated active lease limits for trusted operators.
 
 ### Changed
