@@ -176,6 +176,9 @@ func (b *backend) Status(ctx context.Context, req StatusRequest) (StatusView, er
 		if !req.Wait || view.Ready {
 			return view, nil
 		}
+		if boxStateFailed(view.State) {
+			return view, nil
+		}
 		if b.now().After(deadline) {
 			return StatusView{}, exit(5, "timed out waiting for ascii-box %s to become ready", boxID)
 		}

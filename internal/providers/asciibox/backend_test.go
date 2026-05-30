@@ -216,6 +216,19 @@ func TestStatusMapsBoxAPIFields(t *testing.T) {
 	}
 }
 
+func TestStatusWaitReturnsTerminalBoxState(t *testing.T) {
+	fake := &fakeAPI{box: boxData{ID: "bx_failed", State: "error", IP: "203.0.113.10"}}
+	withFakeAPI(t, fake)
+	backend := NewBackend(Provider{}.Spec(), testConfig(), testRuntime()).(*backend)
+	view, err := backend.Status(context.Background(), StatusRequest{ID: "bx_failed", Wait: true, WaitTimeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.State != "error" || view.Ready {
+		t.Fatalf("view=%#v", view)
+	}
+}
+
 func TestCleanWorkdirAndFlags(t *testing.T) {
 	if got, err := cleanWorkdir(" /home/user/crabbox/ "); err != nil || got != "/home/user/crabbox" {
 		t.Fatalf("workdir=%q err=%v", got, err)
