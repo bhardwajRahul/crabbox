@@ -18,11 +18,8 @@ describe("wrangler config", () => {
   it("keeps deployed and preview coordinator cost guardrails enabled", () => {
     for (const name of requiredCostGuardrails) {
       const values = configValues(name);
-      expect(values, `${name} should be set in production and preview vars`).toHaveLength(2);
-      expect(
-        values.every((value) => value > 0),
-        `${name} should be nonzero`,
-      ).toBe(true);
+      expect(values).toHaveLength(2);
+      expect(values.every((value) => value > 0)).toBe(true);
     }
   });
 });
