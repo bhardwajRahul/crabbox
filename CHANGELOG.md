@@ -6,6 +6,10 @@
 
 ### Fixed
 
+### Removed
+
+- Removed the stale root OpenClaw plugin package and its npm publish surface.
+
 ## 0.24.0 - 2026-05-31
 
 ### Added

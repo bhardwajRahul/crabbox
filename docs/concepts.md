@@ -83,10 +83,10 @@ providers that hand Crabbox a real SSH target it provisions and connects to, and
 **Operator** - a person with broker-side access (admin token, Cloudflare
 config). Operators run `crabbox admin` commands and image bake/promote flows.
 
-**Agent** - an LLM-backed process invoking Crabbox through the CLI or the
-OpenClaw plugin. Agents are first-class users of Crabbox; the docs are written
-for both humans and agents. Crabbox gives an agent a governed workspace with
-sync, logs, artifacts, sharing, cleanup, and review evidence.
+**Agent** - an LLM-backed process invoking Crabbox through the CLI. Agents are
+first-class users of Crabbox; the docs are written for both humans and agents.
+Crabbox gives an agent a governed workspace with sync, logs, artifacts, sharing,
+cleanup, and review evidence.
 
 ## Modes
 

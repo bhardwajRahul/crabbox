@@ -219,10 +219,6 @@ and authoring guide.
   verification, and service-token support keep normal use and operator
   automation separate. See [Auth and admin](docs/features/auth-admin.md) and
   [Security](docs/security.md).
-- **OpenClaw plugin.** The repo root is a native OpenClaw plugin for box
-  lifecycle operations. See [OpenClaw plugin](#openclaw-plugin) below and
-  [OpenClaw plugin](docs/features/openclaw-plugin.md).
-
 ## Machine classes
 
 `beast` is the default for providers that expose class-based managed capacity.
@@ -392,23 +388,6 @@ reference, per-provider sections, and per-command flags are in
 [docs/cli.md](docs/cli.md), [Configuration](docs/features/configuration.md),
 and the [provider docs](docs/providers/README.md).
 
-## OpenClaw plugin
-
-The repo root is a native OpenClaw plugin package. Once installed, it exposes
-Crabbox as agent tools:
-
-- `crabbox_run`, `crabbox_warmup`, `crabbox_status`, `crabbox_list`,
-  `crabbox_stop`
-
-The plugin shells out to the configured `crabbox` binary with argv arrays, so
-local config, broker login, repo claims, and sync behavior stay owned by the
-CLI. Set `plugins.entries.crabbox.config.binary` if `crabbox` is not on `PATH`.
-
-Durable run inspection is intentionally CLI/skill-led instead of additional
-plugin tools: use `crabbox history`, `crabbox events --after --limit`,
-`crabbox attach`, `crabbox logs`, `crabbox results`, and `crabbox usage` from a
-shell-capable agent. See [OpenClaw plugin](docs/features/openclaw-plugin.md).
-
 ## Development
 
 ```sh
@@ -422,15 +401,18 @@ npm ci --prefix worker
 npm test --prefix worker
 npm run build --prefix worker
 
+# Repository scripts
+node --test scripts/*.test.js
+
 # Docs
-npm run docs:check
+scripts/check-docs.sh
 
 # Optional live smoke, when broker/provider credentials are available
 CRABBOX_LIVE=1 CRABBOX_LIVE_REPO=/path/to/my-app scripts/live-smoke.sh
 ```
 
 CI runs the full gate (gofmt, vet, race tests, all Go modules, coverage
-threshold, docs link/build check, GoReleaser snapshot, and Worker
+threshold, repository script tests, docs link/build check, GoReleaser snapshot, and Worker
 lint/typecheck/tests/build) on every push and PR. Tagged pushes matching `v*`
 publish Go archives via GoReleaser and bump the Homebrew formula at
 [openclaw/homebrew-tap](https://github.com/openclaw/homebrew-tap).
@@ -453,7 +435,7 @@ The GitHub Pages site at <https://openclaw.github.io/crabbox/> is generated from
 the `docs/` Markdown:
 
 ```sh
-npm run docs:check
+scripts/check-docs.sh
 open dist/docs-site/index.html
 ```
 

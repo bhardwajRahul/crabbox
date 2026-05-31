@@ -78,7 +78,6 @@ Provider deep-dives that live here in `features/`:
 
 ## Integrations
 
-- [OpenClaw plugin](openclaw-plugin.md): agent tools that wrap the CLI.
 - [Repository onboarding](repository-onboarding.md): `crabbox init`, repo config, workflow stub, and agent skill.
 - [Source map](../source-map.md): implementation files behind documented behavior.
 
