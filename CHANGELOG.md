@@ -20,6 +20,7 @@
 - Fixed Apple Container bootstrap on hosts whose runtime does not inherit DNS by passing detected host resolvers while preserving explicit `--apple-container-extra-run-args --dns` overrides.
 - Fixed Apple Container runs to fail as soon as the container exits during SSH bootstrap and include a short container log tail instead of waiting for the full SSH timeout.
 - Classified Blacksmith Testbox cleanup, sync-marker, cancelled Actions, and post-ready stall failures as retryable infra stages instead of generic unknown failures.
+- Fixed Azure VM provisioning so slow creates time out quickly, continue through SKU/region fallback, and use a Worker Azure region list separate from AWS regions.
 - Fixed local Actions hydration after warmup SSH port fallback so prewarmed SSH-backed boxes reuse the resolved reachable endpoint instead of retrying the configured port.
 
 ### Removed
