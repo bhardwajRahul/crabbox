@@ -88,9 +88,9 @@ failed run; see [Ownership boundary](#ownership-boundary)).
 `--idle-timeout` (a core flag) sets the Testbox idle timeout; it is forwarded to
 `blacksmith testbox warmup` as whole minutes.
 
-Configured `cache.volumes` are forwarded during warmup as Blacksmith sticky disks
-using `key:path`. The `--cache-volume [name=]key:path` flag is repeatable and
-marks the volume required for that run.
+Configured [`cache.volumes`](cache-volumes.md) are forwarded during warmup as
+Blacksmith sticky disks using `key:path`. The `--cache-volume [name=]key:path`
+flag is repeatable and marks the volume required for that run.
 
 ### Environment variables
 

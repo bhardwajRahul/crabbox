@@ -73,7 +73,8 @@ Provider deep-dives that live here in `features/`:
 - [Artifacts](artifacts.md): screenshots, video, trimmed GIFs, logs, metadata, templates, and PR publishing.
 - [Linux VNC](vnc-linux.md), [Windows VNC](vnc-windows.md), [macOS VNC](vnc-macos.md): OS-specific desktop setup and troubleshooting.
 - [Test results](test-results.md): JUnit summaries attached to recorded runs.
-- [Cache controls](cache.md): inspect, purge, warm, and configure remote package/build caches and provider cache volumes.
+- [Cache controls](cache.md): inspect, purge, and warm remote package/build caches.
+- [Cache volumes](cache-volumes.md): provider-backed persistent cache mounts for rebuildable speed state.
 
 ## Integrations
 

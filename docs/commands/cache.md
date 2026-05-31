@@ -56,7 +56,8 @@ speed hints, not checkpoints; the provider may attach them during lease warmup
 when it advertises `cache-volume` support. Use `--cache-volume [name=]key:path`
 on `warmup` or a fresh `run` to require a volume for that lease; reused
 `run --id` leases require local claim metadata proving the volume was attached
-during warmup.
+during warmup. See [Cache volumes](../features/cache-volumes.md) for the full
+contract.
 
 `cache.maxGB` (default `80`) caps total cache size on the runner; the box
 trims the oldest entries automatically once caches exceed the cap, so
@@ -109,7 +110,9 @@ crabbox cache volumes --json
 
 Prints configured `cache.volumes` for the current repo. This command does not
 connect to a lease; it is a config view that helps confirm which provider cache
-volumes will be requested by future `warmup` or one-shot `run` commands.
+volumes will be requested by future `warmup` or one-shot `run` commands. See
+[Cache volumes](../features/cache-volumes.md) for provider support and reuse
+rules.
 
 ## purge
 

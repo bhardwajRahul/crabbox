@@ -605,6 +605,9 @@ cache:
       required: false
 ```
 
+See [Cache volumes](cache-volumes.md) for key design, provider support, and
+existing-lease reuse rules.
+
 ### Results
 
 ```yaml

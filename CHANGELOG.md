@@ -2,6 +2,10 @@
 
 ## 0.23.1 - Unreleased
 
+### Added
+
+- Added provider-backed cache volumes for rebuildable dependency caches, including `cache.volumes`, `CRABBOX_CACHE_VOLUMES`, repeatable `--cache-volume [name=]key:path`, `crabbox cache volumes`, Blacksmith Testbox sticky-disk forwarding, and claim-backed required-volume checks for reused leases.
+
 ### Fixed
 
 - Scoped the README Release badge to `?event=push` so it reflects tag-push release runs instead of cancelled `workflow_dispatch` runs. Fixes https://github.com/openclaw/crabbox/issues/189. Thanks @zozo123.

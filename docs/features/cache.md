@@ -32,41 +32,11 @@ cache state forward.
 
 ## Cache volumes
 
-Cache volumes are provider-backed persistent mount points for speed-only state.
-They use the same cache contract as the paths above: the synced worktree remains
-authoritative, and volume contents must be safe to delete and rebuild.
-
-Configure them under `cache.volumes`:
-
-```yaml
-cache:
-  volumes:
-    - name: pnpm-store
-      key: my-app-linux-amd64-node24-pnpm10-lockhash
-      path: /var/cache/crabbox/pnpm
-      sizeGB: 80
-```
-
-For one-off lease creation, use a repeatable flag:
-
-```sh
-crabbox warmup --provider blacksmith-testbox \
-  --cache-volume pnpm-store=my-app-linux-amd64-node24-pnpm10-lockhash:/var/cache/crabbox/pnpm
-```
-
-`key` is the provider cache identity. Include the repository, OS, architecture,
-runtime, package manager, lockfile hash, and image or workflow generation when
-those values can change the bytes. `path` must be absolute and should point
-outside the synced source tree, usually under `/var/cache/crabbox/...`.
-
-Today Blacksmith Testbox implements cache volumes by forwarding each configured
-volume as a Testbox sticky disk. Other providers may expose the same feature
-through attached data disks or host directories; until then, non-required
-configured volumes are ignored by providers that do not advertise cache-volume
-support. Volumes requested with `--cache-volume` are required and fail early when
-the selected provider does not support them, or when reusing an existing lease
-where Crabbox cannot verify from the local lease claim that the provider volume
-was attached during warmup.
+Provider-backed cache volumes persist rebuildable cache state across fresh
+leases. They are configured under `cache.volumes`, requested with
+`--cache-volume [name=]key:path`, and inspected with `crabbox cache volumes`.
+See [Cache volumes](cache-volumes.md) for the full feature contract, provider
+support rules, and the boundary with images and checkpoints.
 
 ## Config
 
