@@ -14,6 +14,19 @@ crabbox prewarm --dry-run
 The command prints the lease id and keeps the box running. Stop it with
 `crabbox stop <id>` when the test burst is done.
 
+## Reuse
+
+Run follow-up commands against the printed lease id or slug:
+
+```sh
+crabbox run --id <id-or-slug> --no-sync -- pnpm test
+crabbox run --id <id-or-slug> -- pnpm test
+```
+
+Use `--no-sync` when the prewarmed checkout already contains the code you want
+to test. Omit it when local edits must be copied; fingerprint sync should skip
+the upload quickly when nothing changed.
+
 ## Behavior
 
 - Creates a fresh lease with the normal `warmup` flags.

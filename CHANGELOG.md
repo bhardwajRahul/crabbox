@@ -12,6 +12,7 @@
 
 ### Changed
 
+- Raised the coordinator fleet-wide and org-wide reserved monthly caps while keeping per-owner and active lease limits in place, so trusted operators are not blocked by stale reserved-cost accounting.
 - Updated Go and Worker dependencies, including Wrangler, Vitest, oxlint, Cloudflare Workers types, AWS SDK, Daytona SDK, Google API modules, OpenTelemetry, and the Go toolchain.
 
 ### Fixed
