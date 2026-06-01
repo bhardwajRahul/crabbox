@@ -445,7 +445,10 @@ func TestBootstrapScriptUsesAccountHomeDirectory(t *testing.T) {
 		`gsettings set org.gnome.desktop.interface color-scheme '$gsettings_scheme'`,
 		`if [ "$(id -u)" -eq 0 ]; then`,
 		`mkdir -p "$config_dir/crabbox" "$config_dir/gtk-3.0" "$config_dir/gtk-4.0"`,
-		`DISPLAY="$display" XDG_RUNTIME_DIR="$runtime" GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme "$gsettings_scheme"`,
+		`dbus_address="${DBUS_SESSION_BUS_ADDRESS:-}"`,
+		`DBUS_SESSION_BUS_ADDRESS='$dbus_address' GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme`,
+		`DISPLAY="$display" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$dbus_address" GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme "$gsettings_scheme"`,
+		`nohup gnome-panel >/tmp/crabbox-gnome-panel.log 2>&1 &`,
 		`elif [ "$(id -u)" -ne 0 ] && pgrep -x gnome-panel`,
 	} {
 		if !strings.Contains(bootstrapScript, want) {

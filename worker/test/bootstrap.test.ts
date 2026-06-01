@@ -240,9 +240,14 @@ describe("cloud-init bootstrap", () => {
     expect(got).toContain(
       'mkdir -p "$config_dir/crabbox" "$config_dir/gtk-3.0" "$config_dir/gtk-4.0"',
     );
+    expect(got).toContain('dbus_address="${DBUS_SESSION_BUS_ADDRESS:-}"');
     expect(got).toContain(
-      'DISPLAY="$display" XDG_RUNTIME_DIR="$runtime" GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme "$gsettings_scheme"',
+      "DBUS_SESSION_BUS_ADDRESS='$dbus_address' GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme",
     );
+    expect(got).toContain(
+      'DISPLAY="$display" XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$dbus_address" GDK_BACKEND=x11 gsettings set org.gnome.desktop.interface color-scheme "$gsettings_scheme"',
+    );
+    expect(got).toContain("nohup gnome-panel >/tmp/crabbox-gnome-panel.log 2>&1 &");
     expect(got).toContain('elif [ "$(id -u)" -ne 0 ] && pgrep -x gnome-panel');
     expect(got).toContain("gnome-panel >/tmp/crabbox-gnome-panel.log 2>&1 &");
     expect(got).toContain("gnome-terminal -- bash -l");
