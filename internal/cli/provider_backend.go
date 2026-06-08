@@ -26,6 +26,10 @@ type ProviderRouter interface {
 	RouteConfig(cfg *Config, fs *flag.FlagSet, values any) error
 }
 
+type ProviderConfigValidator interface {
+	ValidateConfig(cfg Config) error
+}
+
 type ProviderRoutingFlagProvider interface {
 	RoutingFlagNames() []string
 }
@@ -65,6 +69,32 @@ type DelegatedRunBackend interface {
 	List(ctx context.Context, req ListRequest) ([]LeaseView, error)
 	Status(ctx context.Context, req StatusRequest) (StatusView, error)
 	Stop(ctx context.Context, req StopRequest) error
+}
+
+type PortsRequest struct {
+	Options   LeaseOptions
+	ID        string
+	Publish   []string
+	Unpublish []string
+	JSON      bool
+}
+
+type CopyRequest struct {
+	Options     LeaseOptions
+	ID          string
+	Source      string
+	Destination string
+	FollowLink  bool
+}
+
+type PortsBackend interface {
+	Backend
+	Ports(ctx context.Context, req PortsRequest) (string, error)
+}
+
+type CopyBackend interface {
+	Backend
+	Copy(ctx context.Context, req CopyRequest) error
 }
 
 type CleanupBackend interface {
