@@ -94,6 +94,10 @@ func ClaimLeaseForRepoProviderScopePond(leaseID, slug, provider, providerScope, 
 	return claimLeaseForRepoProviderScopePond(leaseID, slug, provider, providerScope, pond, repoRoot, idleTimeout, reclaim)
 }
 
+func ClaimLeaseForRepoProviderScopePondCacheVolumes(leaseID, slug, provider, providerScope, pond, repoRoot string, idleTimeout time.Duration, reclaim bool, cacheVolumes []string) error {
+	return claimLeaseForRepoProviderScopePondCacheVolumes(leaseID, slug, provider, providerScope, pond, repoRoot, idleTimeout, reclaim, cacheVolumes)
+}
+
 func ResolveLeaseClaim(identifier string) (LeaseClaim, bool, error) {
 	return resolveLeaseClaim(identifier)
 }

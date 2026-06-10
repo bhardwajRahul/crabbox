@@ -126,11 +126,7 @@ func (b *backend) Acquire(ctx context.Context, req core.AcquireRequest) (core.Le
 		cleanupContainer()
 		return core.LeaseTarget{}, err
 	}
-	if err := core.ClaimLeaseForRepoProviderScopePond(leaseID, slug, providerName, b.claimScope(ctx), cfg.Pond, req.Repo.Root, cfg.IdleTimeout, req.Reclaim); err != nil {
-		cleanupContainer()
-		return core.LeaseTarget{}, err
-	}
-	if err := core.UpdateLeaseClaimCacheVolumes(leaseID, core.CacheVolumeStickyDiskSpecs(cfg.Cache.Volumes)); err != nil {
+	if err := core.ClaimLeaseForRepoProviderScopePondCacheVolumes(leaseID, slug, providerName, b.claimScope(ctx), cfg.Pond, req.Repo.Root, cfg.IdleTimeout, req.Reclaim, core.CacheVolumeStickyDiskSpecs(cfg.Cache.Volumes)); err != nil {
 		cleanupContainer()
 		return core.LeaseTarget{}, err
 	}

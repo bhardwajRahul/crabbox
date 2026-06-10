@@ -89,6 +89,36 @@ func TestClaimLeaseForRepoProviderStoresPond(t *testing.T) {
 	}
 }
 
+func TestClaimLeaseForRepoProviderScopePondCacheVolumesStoresInitialClaim(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := filepath.Join(t.TempDir(), "repo")
+	specs := []string{"go-build:/var/cache/crabbox/go", "npm:/var/cache/crabbox/npm"}
+	if err := claimLeaseForRepoProviderScopePondCacheVolumes("cbx_cache", "cache", "local-container", "runtime:docker/context:desktop", "Alpha Pond", repo, 30*time.Minute, false, specs); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := readLeaseClaim("cbx_cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Provider != "local-container" || claim.ProviderScope != "runtime:docker/context:desktop" || claim.Pond != "alpha-pond" {
+		t.Fatalf("unexpected claim identity: %#v", claim)
+	}
+	if strings.Join(claim.CacheVolumes, "\n") != strings.Join(specs, "\n") {
+		t.Fatalf("cache volumes=%#v, want %#v", claim.CacheVolumes, specs)
+	}
+
+	if err := claimLeaseForRepoProviderScopePondCacheVolumes("cbx_cache", "cache", "local-container", "runtime:docker/context:desktop", "Alpha Pond", repo, 30*time.Minute, true, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err = readLeaseClaim("cbx_cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claim.CacheVolumes) != 0 {
+		t.Fatalf("cache volumes not cleared on reclaim: %#v", claim.CacheVolumes)
+	}
+}
+
 func TestClaimLeaseForRepoConfigScopesProviderClaims(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	repo := filepath.Join(t.TempDir(), "repo")

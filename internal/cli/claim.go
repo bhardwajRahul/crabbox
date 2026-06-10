@@ -53,10 +53,7 @@ func claimLeaseForRepoConfig(leaseID, slug string, cfg Config, repoRoot string, 
 			WindowsMode: strings.TrimSpace(cfg.WindowsMode),
 		}
 	}
-	if err := claimLeaseForRepoProviderScopePondDetails(leaseID, slug, provider, providerClaimScope(provider, cfg), cfg.Pond, staticDetails, repoRoot, idleTimeout, reclaim); err != nil {
-		return err
-	}
-	return updateLeaseClaimCacheVolumes(leaseID, CacheVolumeStickyDiskSpecs(cfg.Cache.Volumes))
+	return claimLeaseForRepoProviderScopePondDetailsCacheVolumes(leaseID, slug, provider, providerClaimScope(provider, cfg), cfg.Pond, staticDetails, repoRoot, idleTimeout, reclaim, true, CacheVolumeStickyDiskSpecs(cfg.Cache.Volumes))
 }
 
 func claimLeaseTargetForRepoConfig(leaseID, slug string, cfg Config, server Server, target SSHTarget, repoRoot string, idleTimeout time.Duration, reclaim bool) error {
@@ -82,6 +79,10 @@ func claimLeaseForRepoProviderScopePond(leaseID, slug, provider, providerScope, 
 	return claimLeaseForRepoProviderScopePondDetails(leaseID, slug, provider, providerScope, pond, staticClaimDetails{}, repoRoot, idleTimeout, reclaim)
 }
 
+func claimLeaseForRepoProviderScopePondCacheVolumes(leaseID, slug, provider, providerScope, pond, repoRoot string, idleTimeout time.Duration, reclaim bool, cacheVolumes []string) error {
+	return claimLeaseForRepoProviderScopePondDetailsCacheVolumes(leaseID, slug, provider, providerScope, pond, staticClaimDetails{}, repoRoot, idleTimeout, reclaim, true, cacheVolumes)
+}
+
 type staticClaimDetails struct {
 	Present     bool
 	Host        string
@@ -93,6 +94,10 @@ type staticClaimDetails struct {
 }
 
 func claimLeaseForRepoProviderScopePondDetails(leaseID, slug, provider, providerScope, pond string, staticDetails staticClaimDetails, repoRoot string, idleTimeout time.Duration, reclaim bool) error {
+	return claimLeaseForRepoProviderScopePondDetailsCacheVolumes(leaseID, slug, provider, providerScope, pond, staticDetails, repoRoot, idleTimeout, reclaim, false, nil)
+}
+
+func claimLeaseForRepoProviderScopePondDetailsCacheVolumes(leaseID, slug, provider, providerScope, pond string, staticDetails staticClaimDetails, repoRoot string, idleTimeout time.Duration, reclaim bool, setCacheVolumes bool, cacheVolumes []string) error {
 	if leaseID == "" || repoRoot == "" {
 		return nil
 	}
@@ -141,6 +146,9 @@ func claimLeaseForRepoProviderScopePondDetails(leaseID, slug, provider, provider
 	existing.LastUsedAt = now
 	if idleTimeout > 0 {
 		existing.IdleTimeoutSeconds = int(idleTimeout.Seconds())
+	}
+	if setCacheVolumes {
+		existing.CacheVolumes = append([]string(nil), cacheVolumes...)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return exit(2, "create claim directory: %v", err)
