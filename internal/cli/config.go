@@ -4053,7 +4053,7 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := os.Getenv("CRABBOX_TART_DISK"); v != "" {
 		cfg.Tart.Disk = getenvInt("CRABBOX_TART_DISK", cfg.Tart.Disk)
-		cfg.tartDiskExplicit = true
+		cfg.tartDiskExplicit = cfg.Tart.Disk > 0
 	}
 	if value, ok := getenvBool("CRABBOX_TAILSCALE"); ok {
 		cfg.Tailscale.Enabled = value

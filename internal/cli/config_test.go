@@ -543,6 +543,17 @@ func TestTartConfigDefaultsFileAndEnv(t *testing.T) {
 	if cfg.Tart.Image != "ghcr.io/env:latest" || cfg.Tart.User != "env-user" || cfg.Tart.WorkRoot != "/work/env" || cfg.Tart.CPUs != 8 || cfg.Tart.Memory != 16384 || cfg.Tart.Disk != 100 {
 		t.Fatalf("env tart config not applied: %+v", cfg.Tart)
 	}
+	if !cfg.tartDiskExplicit {
+		t.Fatal("positive CRABBOX_TART_DISK should mark tart disk explicit")
+	}
+	t.Setenv("CRABBOX_TART_DISK", "0")
+	applyEnv(&cfg)
+	if cfg.Tart.Disk != 0 {
+		t.Fatalf("zero CRABBOX_TART_DISK disk=%d, want clone default 0", cfg.Tart.Disk)
+	}
+	if cfg.tartDiskExplicit {
+		t.Fatal("zero CRABBOX_TART_DISK should not mark tart disk explicit")
+	}
 }
 
 func TestIncusConfigDefaultsFileAndEnv(t *testing.T) {
