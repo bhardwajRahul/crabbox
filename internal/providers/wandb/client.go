@@ -117,10 +117,9 @@ type Auth struct {
 
 // wandbClient is the gRPC-backed implementation of wandbAPI.
 //
-// One long-lived ClientConn is held per backend instance; HTTP/2 multiplexes
-// concurrent calls over it. If we later expose --parallel runs we will
-// upgrade to a small pool of conns (4–8) to avoid head-of-line blocking on a
-// single TCP socket's congestion window.
+// One ClientConn is held per backend operation; HTTP/2 multiplexes the calls
+// inside that operation, and the backend closes the connection before returning
+// to avoid leaking sockets in long-lived Crabbox processes.
 type wandbClient struct {
 	conn *grpc.ClientConn
 	gw   sandboxv1.GatewayServiceClient
@@ -158,6 +157,13 @@ func newWandbClient(cfg Config, _ Runtime) (wandbAPI, error) {
 		return nil, fmt.Errorf("dial cwsandbox gateway %s: %w", endpoint, err)
 	}
 	return &wandbClient{conn: conn, gw: sandboxv1.NewGatewayServiceClient(conn)}, nil
+}
+
+func (c *wandbClient) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
 }
 
 // resolveAuth walks the documented credential precedence:

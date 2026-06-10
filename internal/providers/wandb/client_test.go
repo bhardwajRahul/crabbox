@@ -13,6 +13,7 @@ import (
 	sandboxv1 "github.com/openclaw/crabbox/internal/providers/wandb/gen/coreweave/sandbox/v1beta2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -220,8 +221,11 @@ func TestWandbClientUsesPlaintextForHTTPOverride(t *testing.T) {
 	if !ok {
 		t.Fatalf("api = %T, want *wandbClient", api)
 	}
+	closed := false
 	t.Cleanup(func() {
-		_ = client.conn.Close()
+		if !closed {
+			_ = client.Close()
+		}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -232,6 +236,13 @@ func TestWandbClientUsesPlaintextForHTTPOverride(t *testing.T) {
 	}
 	if version != "coreweave.sandbox.v1beta2" {
 		t.Fatalf("version = %q", version)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close err: %v", err)
+	}
+	closed = true
+	if got := client.conn.GetState(); got != connectivity.Shutdown {
+		t.Fatalf("conn state = %s, want %s", got, connectivity.Shutdown)
 	}
 }
 
