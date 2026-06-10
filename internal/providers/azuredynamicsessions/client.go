@@ -273,11 +273,15 @@ func (c *azureDynamicSessionsClient) ExecStream(ctx context.Context, identifier 
 		switch event.Type {
 		case "stdout":
 			if stdout != nil {
-				_, _ = io.WriteString(stdout, event.Data)
+				if _, err := io.WriteString(stdout, event.Data); err != nil {
+					return exitCode, fmt.Errorf("write %s stdout: %w", providerName, err)
+				}
 			}
 		case "stderr":
 			if stderr != nil {
-				_, _ = io.WriteString(stderr, event.Data)
+				if _, err := io.WriteString(stderr, event.Data); err != nil {
+					return exitCode, fmt.Errorf("write %s stderr: %w", providerName, err)
+				}
 			}
 		case "complete":
 			completed = true
