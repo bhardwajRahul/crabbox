@@ -114,10 +114,20 @@ request_json() {
   shift 3
   local cfg
   cfg="$(mktemp)"
-  write_curl_config "$token" "${coord%/}$path" "$cfg" "$@"
+  if ! write_curl_config "$token" "${coord%/}$path" "$cfg" "$@"; then
+    rm -f "$cfg"
+    return 1
+  fi
   local response
+  local curl_status
+  set +e
   response="$(curl --config "$cfg")"
+  curl_status=$?
+  set -e
   rm -f "$cfg"
+  if [[ "$curl_status" != "0" ]]; then
+    return "$curl_status"
+  fi
   local status="${response##*$'\n'}"
   local body="${response%$'\n'*}"
   printf '%s' "$body" >"$body_file"
