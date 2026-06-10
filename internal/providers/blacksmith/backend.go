@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -497,17 +498,52 @@ func (b *blacksmithBackend) blacksmithProofResult(req RunRequest, leaseID, slug 
 }
 
 func firstBlacksmithActionsURL(text string) string {
-	return githubActionsRunURLPattern.FindString(text)
+	for _, candidate := range githubActionsRunURLPattern.FindAllString(text, -1) {
+		normalized := normalizeBlacksmithActionsURL(candidate)
+		if blacksmithActionsRunID(normalized) != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizeBlacksmithActionsURL(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	for candidate != "" {
+		trimmed := strings.TrimRight(candidate, ".,;:)]}")
+		if trimmed == candidate {
+			return candidate
+		}
+		candidate = trimmed
+		if blacksmithActionsRunID(candidate) != "" {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func blacksmithActionsRunID(actionsURL string) string {
-	_, after, ok := strings.Cut(actionsURL, "/actions/runs/")
-	if !ok {
+	parsed, err := url.Parse(strings.TrimSpace(actionsURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" {
 		return ""
 	}
-	runID, _, _ := strings.Cut(after, "/")
-	runID, _, _ = strings.Cut(runID, "?")
-	return runID
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i+2 < len(segments); i++ {
+		if segments[i] != "actions" || segments[i+1] != "runs" {
+			continue
+		}
+		runID := segments[i+2]
+		if runID == "" {
+			return ""
+		}
+		for _, r := range runID {
+			if r < '0' || r > '9' {
+				return ""
+			}
+		}
+		return runID
+	}
+	return ""
 }
 
 func persistBlacksmithRunArtifacts(repoRoot, leaseID string, exitCode int, commandDuration, total time.Duration, report timingReport, stdoutData, stderrData []byte, result RunResult) ([]core.RunArtifact, error) {

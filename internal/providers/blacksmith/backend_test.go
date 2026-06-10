@@ -561,6 +561,56 @@ func TestBlacksmithKeptRunWritesLeaseOutput(t *testing.T) {
 	}
 }
 
+func TestBlacksmithActionsURLExtractionNormalizesProse(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		wantURL string
+		wantID  string
+	}{
+		{
+			name:    "parenthesized sentence",
+			text:    "run: (https://github.com/example-org/my-app/actions/runs/123456).",
+			wantURL: "https://github.com/example-org/my-app/actions/runs/123456",
+			wantID:  "123456",
+		},
+		{
+			name:    "markdown link",
+			text:    "[run](https://github.com/example-org/my-app/actions/runs/222333)",
+			wantURL: "https://github.com/example-org/my-app/actions/runs/222333",
+			wantID:  "222333",
+		},
+		{
+			name:    "query string",
+			text:    "https://github.com/example-org/my-app/actions/runs/987654321?check_suite_focus=true.",
+			wantURL: "https://github.com/example-org/my-app/actions/runs/987654321?check_suite_focus=true",
+			wantID:  "987654321",
+		},
+		{
+			name:    "attempt suffix",
+			text:    "https://github.com/example-org/my-app/actions/runs/123456/attempts/1",
+			wantURL: "https://github.com/example-org/my-app/actions/runs/123456/attempts/1",
+			wantID:  "123456",
+		},
+		{
+			name: "reject nonnumeric run id",
+			text: "https://github.com/example-org/my-app/actions/runs/123abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotURL := firstBlacksmithActionsURL(tt.text)
+			if gotURL != tt.wantURL {
+				t.Fatalf("url=%q, want %q", gotURL, tt.wantURL)
+			}
+			gotID := blacksmithActionsRunID(gotURL)
+			if gotID != tt.wantID {
+				t.Fatalf("runID=%q, want %q", gotID, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestBlacksmithReusedRunWritesLeaseOutput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
