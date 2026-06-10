@@ -123,6 +123,28 @@ func TestClientPollsPartialCreateOutput(t *testing.T) {
 	}
 }
 
+func TestClientPreservesPartialCreateOnErrorEvent(t *testing.T) {
+	home := t.TempDir()
+	runner := &fakeCommandRunner{
+		configPath: home + "/Library/Application Support/ascii/box/config.json",
+		newStdout: strings.Join([]string{
+			`{"event":"created","id":"bx_3","ttlSeconds":1800}`,
+			`{"event":"error","id":"bx_3","message":"open https://box.ascii.dev/session?box_token=secret-value&ok=1"}`,
+		}, "\n"),
+	}
+	client := &client{apiKey: "box_key", apiURL: "https://ascii.dev", cliPath: "box", home: home, runner: runner}
+	box, err := client.CreateBox(context.Background(), createRequest{TTL: 30 * time.Minute})
+	if err == nil {
+		t.Fatal("CreateBox succeeded, want error")
+	}
+	if box.ID != "bx_3" {
+		t.Fatalf("box=%#v, want partial bx_3", box)
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("error leaked box token: %v", err)
+	}
+}
+
 func TestRedactBoxSecrets(t *testing.T) {
 	got := redactBoxSecrets(`open https://box.ascii.dev/session?box_token=secret-value&ok=1 with box_realToken`)
 	if strings.Contains(got, "secret-value") || strings.Contains(got, "box_realToken") {
@@ -167,6 +189,27 @@ func TestAcquireClaimsBoxAndReturnsSSHTarget(t *testing.T) {
 	}
 	if claim.Provider != providerName || claim.ProviderScope != "box:bx_1" || claim.Slug != "proof" {
 		t.Fatalf("claim=%#v", claim)
+	}
+}
+
+func TestAcquireReleasesPartiallyCreatedBox(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	fake := &fakeAPI{
+		box:       boxData{ID: "bx_partial"},
+		createErr: fmt.Errorf("create failed"),
+	}
+	withFakeAPI(t, fake)
+
+	backend := NewBackend(Provider{}.Spec(), testConfig(), testRuntime()).(*backend)
+	_, err := backend.Acquire(context.Background(), AcquireRequest{
+		Repo: core.Repo{Name: "repo", Root: t.TempDir()},
+		Keep: true,
+	})
+	if err == nil {
+		t.Fatal("Acquire succeeded, want error")
+	}
+	if !reflect.DeepEqual(fake.deletedIDs, []string{"bx_partial"}) {
+		t.Fatalf("deleted=%v, want [bx_partial]", fake.deletedIDs)
 	}
 }
 
@@ -340,6 +383,7 @@ func stubSSHWait(t *testing.T) {
 
 type fakeAPI struct {
 	createReq  createRequest
+	createErr  error
 	box        boxData
 	prepareIDs []string
 	deletedIDs []string
@@ -349,6 +393,9 @@ func (f *fakeAPI) CreateBox(_ context.Context, req createRequest) (boxData, erro
 	f.createReq = req
 	if f.box.ID == "" {
 		f.box = testBox()
+	}
+	if f.createErr != nil {
+		return f.box, f.createErr
 	}
 	return f.box, nil
 }

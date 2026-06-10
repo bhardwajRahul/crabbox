@@ -76,7 +76,11 @@ func (c *client) CreateBox(ctx context.Context, req createRequest) (boxData, err
 	}
 	result, err := c.run(ctx, args...)
 	if err != nil {
-		if partial, parseErr := decodeNewBox(result.Stdout); parseErr == nil && partial.ID != "" {
+		partial, parseErr := decodeNewBox(result.Stdout)
+		if partial.ID != "" {
+			if parseErr != nil {
+				return partial, fmt.Errorf("ascii-box CLI new failed after creating %s: %s", partial.ID, c.formatError(result, err))
+			}
 			if ready, waitErr := c.waitForBoxReady(ctx, partial); waitErr == nil {
 				return ready, nil
 			}
@@ -86,7 +90,7 @@ func (c *client) CreateBox(ctx context.Context, req createRequest) (boxData, err
 	}
 	box, err := decodeNewBox(result.Stdout)
 	if err != nil {
-		return boxData{}, err
+		return box, err
 	}
 	if strings.TrimSpace(box.ID) == "" {
 		return boxData{}, fmt.Errorf("ascii-box CLI new response missing box id")
@@ -344,7 +348,7 @@ func decodeNewBox(output string) (boxData, error) {
 			return latest, nil
 		}
 		if event.Event == "error" {
-			return boxData{}, fmt.Errorf("ascii-box CLI new failed: %s", redactBoxSecrets(string(line)))
+			return latest, fmt.Errorf("ascii-box CLI new failed: %s", redactBoxSecrets(string(line)))
 		}
 	}
 	if err := scanner.Err(); err != nil {
