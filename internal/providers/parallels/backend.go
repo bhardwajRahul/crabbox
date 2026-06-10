@@ -2,6 +2,7 @@ package parallels
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,10 +146,12 @@ func (b *leaseBackend) Resolve(ctx context.Context, req ResolveRequest) (LeaseTa
 	} else if ok {
 		id = claim.LeaseID
 	}
+	var hostErrs []error
 	for _, candidate := range core.ParallelsCandidateConfigs(b.Cfg) {
 		client := core.NewParallelsClient(candidate, b.RT.Exec)
 		vms, err := client.ListVMs(ctx)
 		if err != nil {
+			hostErrs = append(hostErrs, parallelsHostError(candidate, "list vms", err))
 			continue
 		}
 		for _, vm := range vms {
@@ -188,17 +191,20 @@ func (b *leaseBackend) Resolve(ctx context.Context, req ResolveRequest) (LeaseTa
 			}
 		}
 	}
+	if len(hostErrs) > 0 {
+		return LeaseTarget{}, fmt.Errorf("parallels fleet inventory incomplete while resolving %s: %w", req.ID, errors.Join(hostErrs...))
+	}
 	return LeaseTarget{}, core.Exit(4, "parallels lease not found: %s", req.ID)
 }
 
 func (b *leaseBackend) List(ctx context.Context, req ListRequest) ([]LeaseView, error) {
 	_ = req
 	var out []LeaseView
-	var lastErr error
+	var hostErrs []error
 	for _, cfg := range core.ParallelsCandidateConfigs(b.Cfg) {
 		leases, err := core.NewParallelsClient(cfg, b.RT.Exec).ListCrabboxServers(ctx)
 		if err != nil {
-			lastErr = err
+			hostErrs = append(hostErrs, parallelsHostError(cfg, "list leases", err))
 			continue
 		}
 		for i := range leases {
@@ -209,10 +215,14 @@ func (b *leaseBackend) List(ctx context.Context, req ListRequest) ([]LeaseView, 
 		}
 		out = append(out, leases...)
 	}
-	if len(out) == 0 && lastErr != nil {
-		return nil, lastErr
+	if len(hostErrs) > 0 {
+		return nil, fmt.Errorf("parallels fleet inventory incomplete: %w", errors.Join(hostErrs...))
 	}
 	return out, nil
+}
+
+func parallelsHostError(cfg Config, action string, err error) error {
+	return fmt.Errorf("host %s %s: %w", blank(cfg.Parallels.SelectedHost, "local"), action, err)
 }
 
 func (b *leaseBackend) Doctor(ctx context.Context, req core.DoctorRequest) (core.DoctorResult, error) {

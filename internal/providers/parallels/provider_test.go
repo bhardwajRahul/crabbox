@@ -1,10 +1,14 @@
 package parallels
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"strings"
 	"testing"
 
 	core "github.com/openclaw/crabbox/internal/cli"
+	"github.com/openclaw/crabbox/internal/providers/shared"
 )
 
 func TestApplyFlagsNameOverridesClearIDOverrides(t *testing.T) {
@@ -82,4 +86,85 @@ func TestApplyFlagsRejectsInvalidStartupTimeout(t *testing.T) {
 	if err := provider.ApplyFlags(&cfg, fs, values); err == nil {
 		t.Fatal("expected invalid startup timeout error")
 	}
+}
+
+func TestResolveReportsPartialFleetInventory(t *testing.T) {
+	backend := &leaseBackend{
+		DirectSSHBackend: sharedBackend(testParallelsFleetConfig(), &parallelsFleetRunner{}),
+	}
+	_, err := backend.Resolve(context.Background(), ResolveRequest{ID: "missing-lease"})
+	if err == nil {
+		t.Fatal("Resolve err=nil, want partial fleet inventory error")
+	}
+	for _, want := range []string{"fleet inventory incomplete", "bad-host", "ssh failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "lease not found") {
+		t.Fatalf("err=%q should not report false not-found", err)
+	}
+}
+
+func TestListReportsPartialFleetInventory(t *testing.T) {
+	backend := &leaseBackend{
+		DirectSSHBackend: sharedBackend(testParallelsFleetConfig(), &parallelsFleetRunner{}),
+	}
+	leases, err := backend.List(context.Background(), ListRequest{})
+	if err == nil {
+		t.Fatalf("List err=nil leases=%#v, want partial fleet inventory error", leases)
+	}
+	for _, want := range []string{"fleet inventory incomplete", "bad-host", "ssh failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%q missing %q", err, want)
+		}
+	}
+}
+
+func TestCleanupStopsOnPartialFleetInventory(t *testing.T) {
+	runner := &parallelsFleetRunner{}
+	backend := &leaseBackend{
+		DirectSSHBackend: sharedBackend(testParallelsFleetConfig(), runner),
+	}
+	err := backend.Cleanup(context.Background(), CleanupRequest{})
+	if err == nil {
+		t.Fatal("Cleanup err=nil, want partial fleet inventory error")
+	}
+	if runner.deleteCalls != 0 {
+		t.Fatalf("deleteCalls=%d want 0 before complete inventory", runner.deleteCalls)
+	}
+}
+
+func sharedBackend(cfg core.Config, runner core.CommandRunner) shared.DirectSSHBackend {
+	return shared.DirectSSHBackend{Cfg: cfg, RT: Runtime{Exec: runner}}
+}
+
+func testParallelsFleetConfig() core.Config {
+	cfg := core.BaseConfig()
+	cfg.Provider = "parallels"
+	cfg.TargetOS = core.TargetLinux
+	cfg.Parallels.Hosts = []core.ParallelsHostConfig{
+		{Name: "good-host", Host: "good.example"},
+		{Name: "bad-host", Host: "bad.example"},
+	}
+	return cfg
+}
+
+type parallelsFleetRunner struct {
+	deleteCalls int
+}
+
+func (r *parallelsFleetRunner) Run(_ context.Context, req core.LocalCommandRequest) (core.LocalCommandResult, error) {
+	if req.Name != "ssh" || len(req.Args) < 2 {
+		return core.LocalCommandResult{}, errors.New("unexpected command")
+	}
+	host := req.Args[len(req.Args)-2]
+	remote := req.Args[len(req.Args)-1]
+	if strings.Contains(remote, " delete ") {
+		r.deleteCalls++
+	}
+	if host == "bad.example" {
+		return core.LocalCommandResult{Stderr: "permission denied"}, errors.New("ssh failed")
+	}
+	return core.LocalCommandResult{Stdout: `[{"ID":"vm-good","Name":"crabbox-cbx-good-blue","State":"running","ip_configured":"10.0.0.5"}]`}, nil
 }
