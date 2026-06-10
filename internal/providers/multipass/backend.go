@@ -132,6 +132,9 @@ func (b *backend) Acquire(ctx context.Context, req AcquireRequest) (LeaseTarget,
 		_ = b.removeInstance(context.Background(), name)
 		return LeaseTarget{}, err
 	}
+	if req.Keep {
+		cleanupKey = false
+	}
 	claimCreated := false
 	rollbackProvisioned := func(cause error) error {
 		if req.Keep {

@@ -36,6 +36,9 @@ func (r *recordingRunner) Run(_ context.Context, req core.LocalCommandRequest) (
 		return result, nil
 	}
 	if len(req.Args) >= 4 && req.Args[0] == "info" {
+		if err, ok := r.errors["info"]; ok {
+			return r.responses["info"], err
+		}
 		if result, ok := r.responses["info"]; ok {
 			result.Stdout = strings.ReplaceAll(result.Stdout, "{{name}}", req.Args[3])
 			return result, nil
@@ -343,6 +346,52 @@ func TestAcquireCleansUpLaunchFailure(t *testing.T) {
 	if !strings.Contains(deleteArgs, "delete\n--purge\ncrabbox-") {
 		t.Fatalf("delete not recorded after launch failure:\n%s", deleteArgs)
 	}
+}
+
+func TestAcquireKeepRetainsKeyAfterPostLaunchInfoFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	runner := &recordingRunner{
+		responses: map[string]core.LocalCommandResult{
+			commandKey([]string{"list", "--format", "json"}): {Stdout: `{"list":[]}`},
+			"launch": {Stdout: "launched"},
+			"info":   {Stderr: "info failed"},
+		},
+		errors: map[string]error{"info": errors.New("info failed")},
+	}
+	b := testBackend(runner)
+	_, err := b.Acquire(context.Background(), core.AcquireRequest{Repo: core.Repo{Root: t.TempDir()}, Keep: true})
+	if err == nil || !strings.Contains(err.Error(), "multipass info failed") {
+		t.Fatalf("Acquire error=%v", err)
+	}
+	for _, call := range runner.calls {
+		if len(call.Args) > 0 && call.Args[0] == "delete" {
+			t.Fatalf("kept post-launch failure should not delete instance: %#v", call.Args)
+		}
+	}
+	keys, err := findStoredTestboxKeys(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("kept instance key count=%d, want 1: %#v", len(keys), keys)
+	}
+}
+
+func findStoredTestboxKeys(root string) ([]string, error) {
+	keys := []string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && entry.Name() == "id_ed25519" {
+			keys = append(keys, path)
+		}
+		return nil
+	})
+	return keys, err
 }
 
 func TestAcquireRemovesClaimAfterEndpointUpdateFailure(t *testing.T) {
