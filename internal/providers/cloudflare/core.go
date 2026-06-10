@@ -71,10 +71,6 @@ func claimLeaseForRepoProvider(leaseID, slug, provider, repoRoot string, idleTim
 	return core.ClaimLeaseForRepoProvider(leaseID, slug, provider, repoRoot, idleTimeout, reclaim)
 }
 
-func claimLeaseForRepoProviderPond(leaseID, slug, provider, pond, repoRoot string, idleTimeout time.Duration, reclaim bool) error {
-	return core.ClaimLeaseForRepoProviderPond(leaseID, slug, provider, pond, repoRoot, idleTimeout, reclaim)
-}
-
 func claimLeaseForRepoProviderPondLabels(leaseID, slug, provider, pond, repoRoot string, idleTimeout time.Duration, reclaim bool, labels map[string]string) error {
 	return core.ClaimLeaseForRepoProviderScopePondEndpoint(leaseID, slug, provider, "", pond, repoRoot, idleTimeout, reclaim, Server{Labels: labels}, core.SSHTarget{})
 }

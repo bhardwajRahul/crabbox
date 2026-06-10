@@ -636,7 +636,7 @@ func TestCloudflareRunCleanupDestroyUsesBoundedContext(t *testing.T) {
 	withCloudflareCleanupTimeout(t, 20*time.Millisecond)
 	var createdID string
 	execCalls := 0
-	deleteSeen := false
+	deleteSeen := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/sandboxes":
@@ -651,7 +651,7 @@ func TestCloudflareRunCleanupDestroyUsesBoundedContext(t *testing.T) {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			_, _ = io.WriteString(w, `{"type":"complete","exitCode":0}`+"\n")
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/sandboxes/"+createdID:
-			deleteSeen = true
+			deleteSeen <- struct{}{}
 			<-r.Context().Done()
 		default:
 			http.NotFound(w, r)
@@ -679,7 +679,9 @@ func TestCloudflareRunCleanupDestroyUsesBoundedContext(t *testing.T) {
 	if execCalls != 2 {
 		t.Fatalf("exec calls=%d, want prepare and command", execCalls)
 	}
-	if !deleteSeen {
+	select {
+	case <-deleteSeen:
+	default:
 		t.Fatal("destroy was not attempted")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
