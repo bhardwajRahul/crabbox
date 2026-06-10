@@ -37,6 +37,9 @@ func TestProviderSpec(t *testing.T) {
 	if !hasFeature(spec.Features, core.FeatureArchiveSync) {
 		t.Fatalf("features=%#v want archive sync", spec.Features)
 	}
+	if hasFeature(spec.Features, core.FeatureURLBridge) {
+		t.Fatalf("features=%#v should not advertise unsupported URL bridge", spec.Features)
+	}
 }
 
 func TestProviderForResolvesModal(t *testing.T) {

@@ -870,7 +870,7 @@ func (testModalProvider) Spec() ProviderSpec {
 		Name:        "modal",
 		Kind:        ProviderKindDelegatedRun,
 		Targets:     []TargetSpec{{OS: targetLinux}},
-		Features:    FeatureSet{FeatureArchiveSync, FeatureURLBridge},
+		Features:    FeatureSet{FeatureArchiveSync},
 		Coordinator: CoordinatorNever,
 	}
 }
@@ -929,7 +929,7 @@ func (testCloudflareProvider) Spec() ProviderSpec {
 		Name:        "cloudflare",
 		Kind:        ProviderKindDelegatedRun,
 		Targets:     []TargetSpec{{OS: targetLinux}},
-		Features:    FeatureSet{FeatureArchiveSync, FeatureCleanup, FeatureURLBridge},
+		Features:    FeatureSet{FeatureArchiveSync, FeatureCleanup},
 		Coordinator: CoordinatorNever,
 	}
 }

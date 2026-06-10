@@ -38,6 +38,9 @@ func TestProviderSpec(t *testing.T) {
 	if len(spec.Targets) != 1 || spec.Targets[0].OS != core.TargetLinux {
 		t.Fatalf("targets=%#v want [{linux}]", spec.Targets)
 	}
+	if spec.Features.Has(core.FeatureURLBridge) {
+		t.Fatalf("features=%#v should not advertise unsupported URL bridge", spec.Features)
+	}
 }
 
 func TestProviderForResolvesNameAndAliases(t *testing.T) {

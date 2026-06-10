@@ -27,6 +27,9 @@ func TestCloudflareProviderSpec(t *testing.T) {
 	if !hasCloudflareFeature(spec.Features, "archive-sync") || !hasCloudflareFeature(spec.Features, "cleanup") {
 		t.Fatalf("spec.Features = %#v, want archive-sync and cleanup", spec.Features)
 	}
+	if hasCloudflareFeature(spec.Features, "url-bridge") {
+		t.Fatalf("spec.Features = %#v, should not advertise unsupported URL bridge", spec.Features)
+	}
 	if aliases := (Provider{}).Aliases(); len(aliases) != 1 || aliases[0] != "cf" {
 		t.Fatalf("aliases = %#v, want [cf]", aliases)
 	}
