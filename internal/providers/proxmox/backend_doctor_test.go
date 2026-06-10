@@ -17,6 +17,8 @@ type fakeProxmoxDoctorClient struct {
 	deletedIDs  []string
 	mutated     bool
 	servers     []Server
+	created     Server
+	setLabels   []map[string]string
 }
 
 func (c *fakeProxmoxDoctorClient) ListCrabboxServers(context.Context) ([]Server, error) {
@@ -26,6 +28,9 @@ func (c *fakeProxmoxDoctorClient) ListCrabboxServers(context.Context) ([]Server,
 
 func (c *fakeProxmoxDoctorClient) CreateServer(context.Context, Config, string, string, string, bool) (Server, error) {
 	c.mutated = true
+	if c.created.CloudID != "" {
+		return c.created, nil
+	}
 	return Server{}, nil
 }
 
@@ -46,8 +51,12 @@ func (c *fakeProxmoxDoctorClient) DeleteServer(_ context.Context, id string) err
 	return nil
 }
 
-func (c *fakeProxmoxDoctorClient) SetLabels(context.Context, string, map[string]string) error {
+func (c *fakeProxmoxDoctorClient) SetLabels(_ context.Context, _ string, labels map[string]string) error {
 	c.mutated = true
+	c.setLabels = append(c.setLabels, map[string]string{})
+	for key, value := range labels {
+		c.setLabels[len(c.setLabels)-1][key] = value
+	}
 	return nil
 }
 
@@ -111,6 +120,37 @@ func TestProxmoxAcquirePollsUntilServerIPIsAvailable(t *testing.T) {
 	}
 	if fake.deleteCalls != 0 {
 		t.Fatal("delayed IP discovery should not delete the VM")
+	}
+}
+
+func TestProxmoxAcquireInitializesNilLabels(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	created := Server{CloudID: "101"}
+	created.PublicNet.IPv4.IP = "192.0.2.10"
+	fake := &fakeProxmoxDoctorClient{
+		created: created,
+	}
+	oldClient := newClient
+	newClient = func(Config) (proxmoxClient, error) {
+		return fake, nil
+	}
+	t.Cleanup(func() { newClient = oldClient })
+	oldWait := waitForSSHReadyFunc
+	waitForSSHReadyFunc = func(context.Context, *SSHTarget, io.Writer, string, time.Duration) error {
+		return nil
+	}
+	t.Cleanup(func() { waitForSSHReadyFunc = oldWait })
+
+	backend := NewLeaseBackend(Provider{}.Spec(), Config{SSHUser: "root"}, Runtime{Stdout: io.Discard, Stderr: io.Discard}).(*leaseBackend)
+	target, err := backend.Acquire(context.Background(), AcquireRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Server.Labels["state"] != "ready" {
+		t.Fatalf("labels=%v, want state=ready", target.Server.Labels)
+	}
+	if len(fake.setLabels) != 1 || fake.setLabels[0]["state"] != "ready" {
+		t.Fatalf("setLabels=%v, want state=ready", fake.setLabels)
 	}
 }
 

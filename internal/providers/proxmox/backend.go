@@ -96,6 +96,9 @@ func (b *leaseBackend) acquireOnce(ctx context.Context, keep bool, requestedSlug
 		_ = client.DeleteServer(context.Background(), server.CloudID)
 		return LeaseTarget{}, err
 	}
+	if server.Labels == nil {
+		server.Labels = map[string]string{}
+	}
 	server.Labels["state"] = "ready"
 	if err := client.SetLabels(ctx, server.CloudID, server.Labels); err != nil {
 		fmt.Fprintf(b.RT.Stderr, "warning: set proxmox labels: %v\n", err)
