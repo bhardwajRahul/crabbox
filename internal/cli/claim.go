@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 type leaseClaim struct {
@@ -34,6 +37,8 @@ type leaseClaim struct {
 	CacheVolumes       []string          `json:"cacheVolumes,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 }
+
+var claimMutationMutexes sync.Map
 
 type invalidLeaseClaimIDError struct{ id string }
 
@@ -139,96 +144,65 @@ func claimLeaseForRepoProviderScopePondDetailsMetadata(leaseID, slug, provider, 
 		return nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	path, err := leaseClaimPath(leaseID)
-	if err != nil {
-		return err
-	}
-	existing, err := readLeaseClaim(leaseID)
-	if err != nil {
-		return err
-	}
-	if existing.LeaseID != "" && existing.RepoRoot != "" && existing.RepoRoot != repoRoot && !reclaim {
-		return exit(2, "lease %s is claimed by repo %s; use --reclaim to claim it for %s", leaseID, existing.RepoRoot, repoRoot)
-	}
-	if existing.ClaimedAt == "" || reclaim || existing.RepoRoot != repoRoot {
-		existing.ClaimedAt = now
-	}
-	existing.LeaseID = leaseID
-	existing.Slug = slug
-	if provider != "" {
-		existing.Provider = provider
-	}
-	if providerScope != "" {
-		existing.ProviderScope = providerScope
-	}
-	if pond = normalizePondName(pond); pond != "" {
-		existing.Pond = pond
-	}
-	if staticDetails.Present {
-		existing.StaticHost = staticDetails.Host
-		existing.StaticUser = staticDetails.User
-		existing.StaticPort = staticDetails.Port
-		existing.StaticWorkRoot = staticDetails.WorkRoot
-		existing.TargetOS = staticDetails.TargetOS
-		existing.WindowsMode = staticDetails.WindowsMode
-	} else if provider != "" && !isStaticProvider(provider) {
-		existing.StaticHost = ""
-		existing.StaticUser = ""
-		existing.StaticPort = ""
-		existing.StaticWorkRoot = ""
-		existing.TargetOS = ""
-		existing.WindowsMode = ""
-	}
-	existing.RepoRoot = repoRoot
-	existing.LastUsedAt = now
-	if idleTimeout > 0 {
-		existing.IdleTimeoutSeconds = int(idleTimeout.Seconds())
-	}
-	if metadata.setCacheVolumes {
-		existing.CacheVolumes = append([]string(nil), metadata.cacheVolumes...)
-	}
-	if metadata.setEndpoint {
-		applyLeaseClaimEndpoint(&existing, metadata.server, metadata.target)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return exit(2, "create claim directory: %v", err)
-	}
-	data, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return exit(2, "write claim %s: %v", path, err)
-	}
-	return nil
+	return mutateLeaseClaim(leaseID, func(existing *leaseClaim) error {
+		if existing.LeaseID != "" && existing.RepoRoot != "" && existing.RepoRoot != repoRoot && !reclaim {
+			return exit(2, "lease %s is claimed by repo %s; use --reclaim to claim it for %s", leaseID, existing.RepoRoot, repoRoot)
+		}
+		if existing.ClaimedAt == "" || reclaim || existing.RepoRoot != repoRoot {
+			existing.ClaimedAt = now
+		}
+		existing.LeaseID = leaseID
+		existing.Slug = slug
+		if provider != "" {
+			existing.Provider = provider
+		}
+		if providerScope != "" {
+			existing.ProviderScope = providerScope
+		}
+		if pond = normalizePondName(pond); pond != "" {
+			existing.Pond = pond
+		}
+		if staticDetails.Present {
+			existing.StaticHost = staticDetails.Host
+			existing.StaticUser = staticDetails.User
+			existing.StaticPort = staticDetails.Port
+			existing.StaticWorkRoot = staticDetails.WorkRoot
+			existing.TargetOS = staticDetails.TargetOS
+			existing.WindowsMode = staticDetails.WindowsMode
+		} else if provider != "" && !isStaticProvider(provider) {
+			existing.StaticHost = ""
+			existing.StaticUser = ""
+			existing.StaticPort = ""
+			existing.StaticWorkRoot = ""
+			existing.TargetOS = ""
+			existing.WindowsMode = ""
+		}
+		existing.RepoRoot = repoRoot
+		existing.LastUsedAt = now
+		if idleTimeout > 0 {
+			existing.IdleTimeoutSeconds = int(idleTimeout.Seconds())
+		}
+		if metadata.setCacheVolumes {
+			existing.CacheVolumes = append([]string(nil), metadata.cacheVolumes...)
+		}
+		if metadata.setEndpoint {
+			applyLeaseClaimEndpoint(existing, metadata.server, metadata.target)
+		}
+		return nil
+	})
 }
 
 func updateLeaseClaimEndpoint(leaseID string, server Server, target SSHTarget) error {
 	if leaseID == "" {
 		return nil
 	}
-	path, err := leaseClaimPath(leaseID)
-	if err != nil {
-		return err
-	}
-	claim, err := readLeaseClaim(leaseID)
-	if err != nil {
-		return err
-	}
-	if claim.LeaseID == "" {
+	return mutateLeaseClaim(leaseID, func(claim *leaseClaim) error {
+		if claim.LeaseID == "" {
+			return nil
+		}
+		applyLeaseClaimEndpoint(claim, server, target)
 		return nil
-	}
-	applyLeaseClaimEndpoint(&claim, server, target)
-	data, err := json.MarshalIndent(claim, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return exit(2, "write claim %s: %v", path, err)
-	}
-	return nil
+	})
 }
 
 func applyLeaseClaimEndpoint(claim *leaseClaim, server Server, target SSHTarget) {
@@ -261,27 +235,117 @@ func updateLeaseClaimCacheVolumes(leaseID string, specs []string) error {
 	if leaseID == "" {
 		return nil
 	}
+	return mutateLeaseClaim(leaseID, func(claim *leaseClaim) error {
+		if claim.LeaseID == "" {
+			return nil
+		}
+		claim.CacheVolumes = append([]string(nil), specs...)
+		return nil
+	})
+}
+
+func mutateLeaseClaim(leaseID string, mutate func(*leaseClaim) error) error {
 	path, err := leaseClaimPath(leaseID)
 	if err != nil {
 		return err
 	}
-	claim, err := readLeaseClaim(leaseID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return exit(2, "create claim directory: %v", err)
+	}
+	return withLeaseClaimLock(path, func() error {
+		claim, err := readLeaseClaimPath(path)
+		if err != nil {
+			return err
+		}
+		if err := mutate(&claim); err != nil {
+			return err
+		}
+		if claim.LeaseID == "" {
+			return nil
+		}
+		return writeLeaseClaimAtomic(path, claim)
+	})
+}
+
+func claimMutationMutex(path string) *sync.Mutex {
+	value, _ := claimMutationMutexes.LoadOrStore(path, &sync.Mutex{})
+	return value.(*sync.Mutex)
+}
+
+func withLeaseClaimLock(path string, fn func() error) error {
+	lockPath, err := leaseClaimLockPath(path)
 	if err != nil {
 		return err
 	}
-	if claim.LeaseID == "" {
-		return nil
+	mu := claimMutationMutex(lockPath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	lock := flock.New(lockPath, flock.SetPermissions(0o600))
+	if err := lock.Lock(); err != nil {
+		return exit(2, "lock claim %s: %v", path, err)
 	}
-	claim.CacheVolumes = append([]string(nil), specs...)
+	defer lock.Unlock()
+	return fn()
+}
+
+func leaseClaimLockPath(path string) (string, error) {
+	dir := filepath.Join(filepath.Dir(filepath.Dir(path)), "claim-locks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", exit(2, "create claim lock directory: %v", err)
+	}
+	return filepath.Join(dir, filepath.Base(path)+".lock"), nil
+}
+
+func writeLeaseClaimAtomic(path string, claim leaseClaim) error {
 	data, err := json.MarshalIndent(claim, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return exit(2, "write claim %s: %v", path, err)
 	}
+	tmpPath := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return exit(2, "write claim %s: %v", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return exit(2, "write claim %s: %v", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return exit(2, "write claim %s: %v", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return exit(2, "write claim %s: %v", path, err)
+	}
+	if err := replaceClaimFile(tmpPath, path); err != nil {
+		return exit(2, "write claim %s: %v", path, err)
+	}
+	removeTemp = false
+	fsyncDir(dir)
 	return nil
+}
+
+func fsyncDir(dir string) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_ = f.Sync()
 }
 
 func canonicalClaimProvider(provider string) string {
@@ -393,7 +457,13 @@ func findLeaseClaim(identifier string, match func(leaseClaim) bool) (leaseClaim,
 func removeLeaseClaim(leaseID string) {
 	path, err := leaseClaimPath(leaseID)
 	if err == nil {
-		_ = os.Remove(path)
+		_ = withLeaseClaimLock(path, func() error {
+			err := os.Remove(path)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		})
 	}
 }
 
@@ -435,6 +505,19 @@ func readLeaseClaim(leaseID string) (leaseClaim, error) {
 		}
 		return leaseClaim{}, err
 	}
+	var claim leaseClaim
+	err = withLeaseClaimLock(path, func() error {
+		var readErr error
+		claim, readErr = readLeaseClaimPath(path)
+		return readErr
+	})
+	if err != nil {
+		return leaseClaim{}, err
+	}
+	return claim, nil
+}
+
+func readLeaseClaimPath(path string) (leaseClaim, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return leaseClaim{}, nil

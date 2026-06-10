@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -176,6 +178,86 @@ func TestClaimLeaseForRepoProviderScopePondEndpointStoresInitialClaim(t *testing
 	}
 	if claim.SSHHost != "192.0.2.44" || claim.SSHPort != 2222 || claim.Labels["instance"] != "crabbox-cache-1234" {
 		t.Fatalf("endpoint metadata not stored in initial claim: %#v", claim)
+	}
+}
+
+func TestLeaseClaimConcurrentMutationsRemainAtomic(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	leaseID := "cbx_atomic"
+	if err := claimLeaseForRepoProvider(leaseID, "atomic", "docker-sandbox", "/repo", time.Minute, false); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	readErr := make(chan error, 1)
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				if _, err := readLeaseClaim(leaseID); err != nil {
+					select {
+					case readErr <- err:
+					default:
+					}
+					return
+				}
+				time.Sleep(100 * time.Microsecond)
+			}
+		}
+	}()
+
+	errs := make(chan error, 200)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			errs <- updateLeaseClaimEndpoint(leaseID, Server{
+				Labels: map[string]string{
+					"state":     "ready",
+					"iteration": fmt.Sprintf("%d", i),
+				},
+			}, SSHTarget{Host: fmt.Sprintf("host-%03d.example", i), Port: "2202"})
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			errs <- updateLeaseClaimCacheVolumes(leaseID, []string{
+				fmt.Sprintf("cache-%03d:/var/cache/crabbox", i),
+				"shared:/var/cache/shared",
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(done)
+	<-readDone
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-readErr:
+		t.Fatalf("concurrent read failed: %v", err)
+	default:
+	}
+	claim, err := readLeaseClaim(leaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Provider != "docker-sandbox" || claim.RepoRoot != "/repo" {
+		t.Fatalf("claim identity lost: %#v", claim)
+	}
+	if claim.SSHHost == "" || claim.SSHPort != 2202 {
+		t.Fatalf("endpoint update lost: %#v", claim)
+	}
+	if len(claim.CacheVolumes) != 2 || !strings.Contains(claim.CacheVolumes[0], ":/var/cache/crabbox") {
+		t.Fatalf("cache volume update lost: %#v", claim.CacheVolumes)
 	}
 }
 
