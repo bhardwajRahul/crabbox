@@ -365,11 +365,19 @@ func TestCloudflareCreateSandboxSendsInstanceType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := backend.createSandbox(context.Background(), client, Repo{Name: "my-app", Root: t.TempDir()}, false, ""); err != nil {
+	leaseID, _, slug, err := backend.createSandbox(context.Background(), client, Repo{Name: "my-app", Root: t.TempDir()}, false, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got.InstanceType != "standard-4" {
 		t.Fatalf("instance type = %q, want standard-4", got.InstanceType)
+	}
+	claim, ok, err := resolveLeaseClaimForProvider(slug, providerName)
+	if err != nil || !ok {
+		t.Fatalf("claim for %s ok=%t err=%v", slug, ok, err)
+	}
+	if claim.LeaseID != leaseID || claim.Labels["instance_type"] != "standard-4" {
+		t.Fatalf("claim lease=%q labels=%#v, want instance_type=standard-4", claim.LeaseID, claim.Labels)
 	}
 }
 
@@ -408,6 +416,35 @@ func TestCloudflareListRefreshChecksClaimState(t *testing.T) {
 	}
 	if states["blue-lobster"] != "healthy" || states["red-lobster"] != "missing" {
 		t.Fatalf("states = %#v, want refreshed healthy and missing", states)
+	}
+}
+
+func TestCloudflareStatusUsesClaimedInstanceType(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := claimLeaseForRepoProviderPondLabels("cbx_lite", "blue-lobster", providerName, "", t.TempDir(), time.Hour, false, map[string]string{"instance_type": "lite"}); err != nil {
+		t.Fatal(err)
+	}
+	var gotInstanceType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sandboxes/cbx_lite" {
+			http.NotFound(w, r)
+			return
+		}
+		gotInstanceType = r.URL.Query().Get("instanceType")
+		_, _ = fmt.Fprint(w, `{"id":"cbx_lite","state":"healthy","workdir":"/workspace/repo","instanceType":"lite"}`)
+	}))
+	defer server.Close()
+
+	cfg := Config{Provider: providerName, ServerType: "standard-4"}
+	cfg.Cloudflare.APIURL = server.URL
+	cfg.Cloudflare.Token = "token"
+	backend := cloudflareBackend{cfg: cfg, rt: Runtime{HTTP: server.Client(), Stderr: io.Discard}}
+	view, err := backend.Status(context.Background(), StatusRequest{ID: "blue-lobster"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ID != "cbx_lite" || gotInstanceType != "lite" {
+		t.Fatalf("view=%#v instanceType=%q, want claimed lite sandbox", view, gotInstanceType)
 	}
 }
 
@@ -743,10 +780,10 @@ func TestCloudflareResolveClaimRequiresReclaimForOtherRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := cloudflareBackend{}
-	if _, _, _, err := backend.resolveSandboxID("blue-lobster", repoB, false); err == nil || !strings.Contains(err.Error(), "use --reclaim") {
+	if _, _, _, _, err := backend.resolveSandboxID("blue-lobster", repoB, false); err == nil || !strings.Contains(err.Error(), "use --reclaim") {
 		t.Fatalf("resolve without reclaim err=%v, want reclaim guard", err)
 	}
-	leaseID, sandboxID, slug, err := backend.resolveSandboxID("blue-lobster", repoB, true)
+	leaseID, sandboxID, slug, _, err := backend.resolveSandboxID("blue-lobster", repoB, true)
 	if err != nil {
 		t.Fatal(err)
 	}

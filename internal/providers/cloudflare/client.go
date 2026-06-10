@@ -108,6 +108,12 @@ func newCloudflareClient(cfg Config, rt Runtime) (*cloudflareClient, error) {
 	}, nil
 }
 
+func (c *cloudflareClient) useInstanceType(instanceType string) {
+	if normalized, ok := normalizeCloudflareContainerInstanceType(instanceType); ok {
+		c.instanceType = normalized
+	}
+}
+
 func cloudflareCleanupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), cloudflareCleanupTimeout)
 }
