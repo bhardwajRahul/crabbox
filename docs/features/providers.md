@@ -18,8 +18,10 @@ aliases is each adapter's `provider.go` (`Name()`, `Aliases()`, `Spec()`).
 Each adapter declares a `Spec` that drives how Crabbox treats it:
 
 - **Kind** — `ssh-lease` (Crabbox provisions or connects to an SSH-reachable box
-  and owns the full lifecycle, sync, run, and release) or `delegated-run` (the
-  provider owns sync and execution; there is no SSH lease).
+  and owns the full lifecycle, sync, run, and release), `delegated-run` (the
+  provider owns sync and execution; there is no SSH lease), or
+  `service-control` (Crabbox can inspect or stop a provider-owned service, but
+  cannot execute arbitrary run commands there).
 - **Coordinator** — `supported` means the provider *may* be brokered through the
   Cloudflare Worker; `never` means it always runs direct from the CLI. Only
   `aws`, `azure`, `gcp`, and `hetzner` are `supported`, and even those run direct
@@ -96,11 +98,19 @@ docker-sandbox          Docker Sandboxes through the standalone sbx CLI
 e2b                     E2B Firecracker sandboxes
 islo                    Islo sandboxes
 modal                   Modal Sandboxes
-railway                 Railway service redeploys
 tensorlake              Tensorlake Firecracker sandboxes
 upstash-box             Upstash sandboxes
 blacksmith-testbox      Blacksmith CI test runner (proof/session)
 wandb                   Weights & Biases run sandboxes
+```
+
+## Service-control providers
+
+These expose provider-native service inspection/control without an arbitrary
+command execution contract.
+
+```text
+railway                 Railway service status and stop controls
 ```
 
 ## Provider pages
@@ -121,7 +131,7 @@ wandb                   Weights & Biases run sandboxes
 - [KubeVirt](../providers/kubevirt.md): generic KubeVirt VMs over Kubernetes control-plane forwarding.
 - [External](../providers/external.md): configured executable provider protocol for private integrations.
 - [Namespace Devbox](../providers/namespace-devbox.md): Namespace Devbox SSH leases.
-- [Railway](../providers/railway.md): delegated Railway service redeploys.
+- [Railway](../providers/railway.md): Railway service status and stop controls.
 - [RunPod](../providers/runpod.md): RunPod GPU pods over public SSH.
 - [Semaphore](../providers/semaphore.md): Semaphore CI job leases.
 - [Sprites](../providers/sprites.md): Sprites microVM SSH leases through `sprite proxy`.

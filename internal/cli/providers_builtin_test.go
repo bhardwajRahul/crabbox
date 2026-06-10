@@ -31,6 +31,7 @@ func init() {
 	RegisterProvider(testTartProvider{})
 	RegisterProvider(testParallelsProvider{})
 	RegisterProvider(testWandbProvider{})
+	RegisterProvider(testServiceControlProvider{})
 }
 
 type testAzureProvider struct{}
@@ -1194,6 +1195,33 @@ type testDelegatedBackend struct {
 	portsOutput string
 	copyErr     error
 }
+
+type testServiceControlProvider struct{}
+
+func (testServiceControlProvider) Name() string      { return "service-control-test" }
+func (testServiceControlProvider) Aliases() []string { return nil }
+func (testServiceControlProvider) Spec() ProviderSpec {
+	return ProviderSpec{
+		Name:        "service-control-test",
+		Family:      "service-control-test",
+		Kind:        ProviderKindServiceControl,
+		Targets:     []TargetSpec{{OS: targetLinux}},
+		Coordinator: CoordinatorNever,
+	}
+}
+func (testServiceControlProvider) RegisterFlags(*flag.FlagSet, Config) any { return nil }
+func (testServiceControlProvider) ApplyFlags(*Config, *flag.FlagSet, any) error {
+	return nil
+}
+func (p testServiceControlProvider) Configure(Config, Runtime) (Backend, error) {
+	return testServiceControlBackend{spec: p.Spec()}, nil
+}
+
+type testServiceControlBackend struct {
+	spec ProviderSpec
+}
+
+func (b testServiceControlBackend) Spec() ProviderSpec { return b.spec }
 
 func (b testDelegatedBackend) Spec() ProviderSpec { return b.spec }
 func (b testDelegatedBackend) Warmup(context.Context, WarmupRequest) error {

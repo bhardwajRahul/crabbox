@@ -183,8 +183,9 @@ type ProviderSpec struct {
 type ProviderKind string
 
 const (
-	ProviderKindSSHLease     ProviderKind = "ssh-lease"
-	ProviderKindDelegatedRun ProviderKind = "delegated-run"
+	ProviderKindSSHLease       ProviderKind = "ssh-lease"
+	ProviderKindDelegatedRun   ProviderKind = "delegated-run"
+	ProviderKindServiceControl ProviderKind = "service-control"
 )
 
 type CoordinatorMode string
