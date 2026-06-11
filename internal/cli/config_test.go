@@ -134,6 +134,9 @@ func clearConfigEnv(t *testing.T) {
 		"CRABBOX_DOCKER_SANDBOX_EXTRA_WORKSPACES",
 		"CRABBOX_DOCKER_SANDBOX_MCP",
 		"CRABBOX_DOCKER_SANDBOX_KIT",
+		"CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_CLI",
+		"CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_SETTINGS",
+		"CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_DEBUG",
 		"CRABBOX_ASCII_BOX_API_KEY",
 		"ASCII_BOX_API_KEY",
 		"CRABBOX_ASCII_BOX_BASE_URL",
@@ -698,6 +701,57 @@ dockerSandbox:
 	}
 	if strings.Join(cfg.DockerSandbox.MCP, ",") != "one,two" {
 		t.Fatalf("applyEnv mcp cfg=%#v", cfg.DockerSandbox)
+	}
+}
+
+func TestAnthropicSandboxRuntimeConfigDefaultsFileAndEnv(t *testing.T) {
+	clearConfigEnv(t)
+	cfg := baseConfig()
+	if cfg.AnthropicSRT.CLIPath != "srt" || cfg.AnthropicSRT.Settings != "" || cfg.AnthropicSRT.Debug {
+		t.Fatalf("anthropicSandboxRuntime defaults not applied: %#v", cfg.AnthropicSRT)
+	}
+	settings := ".crabbox/srt-settings.json"
+	debug := true
+	applyFileConfig(&cfg, fileConfig{
+		Provider: "anthropic-sandbox-runtime",
+		AnthropicSRT: &fileAnthropicSRTConfig{
+			CLIPath:  "/opt/srt",
+			Settings: &settings,
+			Debug:    &debug,
+		},
+	})
+	if cfg.Provider != "anthropic-sandbox-runtime" || cfg.AnthropicSRT.CLIPath != "/opt/srt" || cfg.AnthropicSRT.Settings != settings || !cfg.AnthropicSRT.Debug {
+		t.Fatalf("file anthropicSandboxRuntime config not applied: %#v", cfg.AnthropicSRT)
+	}
+
+	t.Setenv("CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_CLI", "/usr/local/bin/srt")
+	t.Setenv("CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_SETTINGS", ".crabbox/env-srt-settings.json")
+	t.Setenv("CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_DEBUG", "false")
+	if err := applyEnv(&cfg); err != nil {
+		t.Fatalf("applyEnv err=%v", err)
+	}
+	if cfg.AnthropicSRT.CLIPath != "/usr/local/bin/srt" || cfg.AnthropicSRT.Settings != ".crabbox/env-srt-settings.json" || cfg.AnthropicSRT.Debug {
+		t.Fatalf("env anthropicSandboxRuntime config not applied: %#v", cfg.AnthropicSRT)
+	}
+}
+
+func TestAnthropicSandboxRuntimeFileConfigCanClearSettings(t *testing.T) {
+	clearConfigEnv(t)
+	cfg := baseConfig()
+	cfg.AnthropicSRT.Settings = ".crabbox/inherited-srt-settings.json"
+
+	var file fileConfig
+	if err := yaml.Unmarshal([]byte(`
+anthropicSandboxRuntime:
+  settings: ""
+`), &file); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyFileConfig(&cfg, file); err != nil {
+		t.Fatalf("applyFileConfig err=%v", err)
+	}
+	if cfg.AnthropicSRT.Settings != "" {
+		t.Fatalf("settings=%q want cleared", cfg.AnthropicSRT.Settings)
 	}
 }
 

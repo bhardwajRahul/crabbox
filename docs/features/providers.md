@@ -102,9 +102,10 @@ sprites          Sprites microVMs through sprite proxy    Linux
 
 ## Delegated-run providers
 
-These run the command inside a managed sandbox; Crabbox does not lease or SSH
-into a box. Local sync options (`--no-sync`, rsync flags) are rejected — the
-provider owns sync. All are Linux-only.
+These run the command inside a sandbox/proof runner; Crabbox does not lease or
+SSH into a box. Local sync options (`--no-sync`, rsync flags) are rejected - the
+provider owns sync. Most are Linux-only. `anthropic-sandbox-runtime` is local
+to the current macOS or Linux host.
 
 ```text
 cloudflare              Cloudflare Containers (Worker runtime)
@@ -114,6 +115,7 @@ e2b                     E2B Firecracker sandboxes
 islo                    Islo sandboxes
 modal                   Modal Sandboxes
 opencomputer            OpenComputer Linux VMs
+anthropic-sandbox-runtime Anthropic Sandbox Runtime through the local srt CLI
 tensorlake              Tensorlake Firecracker sandboxes
 upstash-box             Upstash sandboxes
 blacksmith-testbox      Blacksmith CI test runner (proof/session)
@@ -157,6 +159,7 @@ railway                 Railway service status and stop controls
 - [Tenki](../providers/tenki.md): Tenki sandbox VM SSH leases through `tenki sandbox ssh-proxy`.
 - [Cloudflare](../providers/cloudflare.md): delegated Cloudflare Containers execution.
 - [Docker Sandbox](../providers/docker-sandbox.md): delegated Docker Sandbox execution through the standalone `sbx` CLI.
+- [Anthropic Sandbox Runtime](../providers/anthropic-sandbox-runtime.md): local one-shot delegated execution through `srt` on macOS/Linux.
 - [Islo](../providers/islo.md): delegated Islo sandbox execution.
 - [E2B](../providers/e2b.md): delegated E2B sandbox execution.
 - [Modal](../providers/modal.md): delegated Modal Sandbox execution.

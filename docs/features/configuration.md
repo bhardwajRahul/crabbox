@@ -290,6 +290,27 @@ port `8787`. Auth uses `az account get-access-token --resource
 https://dynamicsessions.io` unless `CRABBOX_AZURE_DYNAMIC_SESSIONS_TOKEN` is
 set.
 
+### Anthropic Sandbox Runtime
+
+```yaml
+provider: anthropic-sandbox-runtime
+anthropicSandboxRuntime:
+  cliPath: srt
+  settings: "" # empty means Anthropic Sandbox Runtime default ~/.srt-settings.json
+  debug: false
+```
+
+`anthropic-sandbox-runtime` is a local one-shot delegated-run provider. It
+shells out to Anthropic Sandbox Runtime with
+`srt [--debug] [--settings <path>] -c <command>`. Use
+`--anthropic-sandbox-runtime-cli`, `--anthropic-sandbox-runtime-settings`, and
+`--anthropic-sandbox-runtime-debug` for command-line overrides, or
+`CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_CLI`,
+`CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_SETTINGS`, and
+`CRABBOX_ANTHROPIC_SANDBOX_RUNTIME_DEBUG` for environment overrides. Crabbox
+validates the provider config keys; Anthropic Sandbox Runtime validates its own
+settings JSON and enforcement policy.
+
 ### Hetzner
 
 Hetzner credentials and image come from broker-side config. Repos do not need a

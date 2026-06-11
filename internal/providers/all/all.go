@@ -1,6 +1,7 @@
 package all
 
 import (
+	_ "github.com/openclaw/crabbox/internal/providers/anthropicsandboxruntime"
 	_ "github.com/openclaw/crabbox/internal/providers/applecontainer"
 	_ "github.com/openclaw/crabbox/internal/providers/applemachine"
 	_ "github.com/openclaw/crabbox/internal/providers/applevz"
