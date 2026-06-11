@@ -4,11 +4,13 @@
 
 ### Added
 
+- Added `provider: digitalocean` for direct Linux SSH leases backed by DigitalOcean Droplets, including flat-tag ownership, per-lease SSH keys, docs, and guarded live smoke coverage. Thanks @coygeek.
 - Added `provider: hyperv` for local Windows VM SSH leases through Microsoft Hyper-V, including differencing-disk provisioning, OpenSSH and MinGit bootstrap, password-less dev-image initialization, retained lease reuse, and cleanup. Thanks @anagnorisis2peripeteia.
 - Added an opt-in Islo userspace Tailscale plane with tailnet-aware pond peers, proxy-routed tailnet traffic, and URL-bridge fallback for leases without `--tailscale`. Thanks @zozo123.
 
 ### Fixed
 
+- Fixed DigitalOcean capability-tag persistence, provider config visibility and precedence, account-scoped ambiguous Droplet/SSH-key create recovery, retryable cleanup, and unnecessary monitoring-agent installation.
 - Fixed Namespace Devbox setup instructions to use the current browser workspace approval flow instead of obsolete token environment variables.
 
 ## 0.28.0 - 2026-06-11
