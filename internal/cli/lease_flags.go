@@ -383,6 +383,14 @@ func (a App) resolveNetworkLeaseTargetForRepo(ctx context.Context, cfg Config, i
 	return a.resolveNetworkLeaseTargetForRepoWithConfig(ctx, &cfg, id, printFallback, reclaim)
 }
 
+func (a App) resolveNetworkLoginTargetForRepo(ctx context.Context, cfg Config, id string, printFallback, reclaim bool) (Server, SSHTarget, string, error) {
+	repo, err := findRepo()
+	if err != nil {
+		return Server{}, SSHTarget{}, "", err
+	}
+	return a.resolveNetworkSSHTargetWithRepoConfig(ctx, &cfg, id, printFallback, repo, reclaim, true)
+}
+
 func (a App) resolveNetworkLeaseTargetForRepoWithConfig(ctx context.Context, cfg *Config, id string, printFallback, reclaim bool) (Server, SSHTarget, string, error) {
 	repo, err := findRepo()
 	if err != nil {
@@ -392,14 +400,27 @@ func (a App) resolveNetworkLeaseTargetForRepoWithConfig(ctx context.Context, cfg
 }
 
 func (a App) resolveNetworkLeaseTargetWithRepoConfig(ctx context.Context, cfg *Config, id string, printFallback bool, repo Repo, reclaim bool) (Server, SSHTarget, string, error) {
+	return a.resolveNetworkSSHTargetWithRepoConfig(ctx, cfg, id, printFallback, repo, reclaim, false)
+}
+
+func (a App) resolveNetworkSSHTargetWithRepoConfig(ctx context.Context, cfg *Config, id string, printFallback bool, repo Repo, reclaim, allowLoginOnly bool) (Server, SSHTarget, string, error) {
 	if cfg == nil {
 		return Server{}, SSHTarget{}, "", exit(2, "lease target config is required")
 	}
-	server, target, leaseID, err := a.resolveLeaseTargetForRepoWithConfig(ctx, cfg, id, repo, reclaim)
+	req := ResolveRequest{Repo: repo, ID: id, Reclaim: reclaim}
+	var server Server
+	var target SSHTarget
+	var leaseID string
+	var err error
+	if allowLoginOnly {
+		server, target, leaseID, err = a.resolveLoginTargetWithRequestConfig(ctx, cfg, req)
+	} else {
+		server, target, leaseID, err = a.resolveLeaseTargetWithRequestConfig(ctx, cfg, req)
+	}
 	if err != nil {
 		return Server{}, SSHTarget{}, "", err
 	}
-	resolved, err := resolveNetworkTarget(ctx, *cfg, server, target)
+	resolved, err := resolveSSHTargetNetwork(ctx, *cfg, server, target, allowLoginOnly)
 	if err != nil {
 		return Server{}, SSHTarget{}, "", err
 	}
@@ -419,6 +440,13 @@ func (a App) resolveNetworkLeaseTargetWithRepoConfig(ctx context.Context, cfg *C
 		fmt.Fprintf(a.Stderr, "network fallback %s\n", resolved.FallbackReason)
 	}
 	return server, target, leaseID, nil
+}
+
+func resolveSSHTargetNetwork(ctx context.Context, cfg Config, server Server, target SSHTarget, allowLoginOnly bool) (resolvedNetworkTarget, error) {
+	if allowLoginOnly && target.SSHConfigProxy && providerCapabilities(cfg.Provider).TailscaleEgress {
+		return resolvedNetworkTarget{Target: target, Network: NetworkPublic}, nil
+	}
+	return resolveNetworkTarget(ctx, cfg, server, target)
 }
 
 func resolvedLeaseClaimSnapshot(leaseID string, server Server) (leaseClaim, bool, error) {
