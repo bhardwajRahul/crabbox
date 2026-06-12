@@ -17,8 +17,10 @@ import (
 type Config struct {
 	Profile                       string
 	Provider                      string
+	providerExplicit              bool
 	TargetOS                      string
 	targetExplicit                bool
+	targetFlagExplicit            bool
 	Architecture                  string
 	architectureExplicit          bool
 	OSImage                       string
@@ -26,6 +28,7 @@ type Config struct {
 	osImageProviderDefaults       string
 	WindowsMode                   string
 	explicitWindowsMode           string
+	windowsModeFlagExplicit       bool
 	Desktop                       bool
 	DesktopEnv                    string
 	Browser                       bool
@@ -247,13 +250,14 @@ type KubeVirtConfig struct {
 }
 
 type ExternalConfig struct {
-	Command     string
-	Args        []string
-	Config      map[string]any
-	Lifecycle   ExternalLifecycleConfig
-	Connection  ExternalConnectionConfig
-	WorkRoot    string
-	RoutingFile string
+	Command       string
+	Args          []string
+	Config        map[string]any
+	Lifecycle     ExternalLifecycleConfig
+	Connection    ExternalConnectionConfig
+	WorkRoot      string
+	RoutingFile   string
+	routingLoaded bool
 }
 
 type ExternalLifecycleConfig struct {
