@@ -12,6 +12,7 @@
 - Added a delegated Freestyle provider that runs commands in Freestyle VMs through the Freestyle REST API, with env-only authentication, archive sync, and automatic VM cleanup. Thanks @zozo123.
 - Added `provider: hyperv` for local Windows VM SSH leases through Microsoft Hyper-V, including differencing-disk provisioning, OpenSSH and MinGit bootstrap, password-less dev-image initialization, retained lease reuse, and cleanup. Thanks @anagnorisis2peripeteia.
 - Added an opt-in Islo userspace Tailscale plane with tailnet-aware pond peers, proxy-routed tailnet traffic, and URL-bridge fallback for leases without `--tailscale`. Thanks @zozo123.
+- Added `provider: xcpng` for SSH leases on XCP-ng pools through the XenAPI control plane, including template cloning, fresh ISO installs, retained lease reuse, cleanup, diagnostics, and guarded live E2E coverage. Thanks @coygeek.
 
 ### Fixed
 
@@ -19,6 +20,7 @@
 - Fixed Apple VZ release artifacts to target macOS 13, bounded guest serial logs without blocking noisy VMs, escaped terminal controls in diagnostics, and preserved retained lease state when helper inventory lookup fails.
 - Fixed DigitalOcean capability-tag persistence, provider config visibility and precedence, account-scoped ambiguous Droplet/SSH-key create recovery, retryable cleanup, and unnecessary monitoring-agent installation.
 - Fixed Namespace Devbox setup instructions to use the current browser workspace approval flow instead of obsolete token environment variables.
+- Fixed XCP-ng XenAPI integer encoding, trusted endpoint configuration, template validation, HVM config-drive attachment, deterministic guest-network selection, retained-lease IP fallback, YAML-safe usernames, collision-resistant ISO runs, required networking for fresh ISO VMs, Windows 11 disk and vTPM requirements, bounded guest-network discovery, failure-recoverable VM ownership, copied-disk and local-key cleanup, generated Windows answer media, pre-boot answer attachment, and bounded ISO E2E cleanup.
 
 ## 0.28.0 - 2026-06-11
 

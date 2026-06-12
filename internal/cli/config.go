@@ -38,6 +38,7 @@ type Config struct {
 	ServerTypeExplicit            bool
 	Coordinator                   string
 	BrokerMode                    BrokerMode
+	brokerProvider                string
 	BrokerAutoWebVNC              bool
 	CoordToken                    string
 	CoordAdminToken               string
@@ -94,6 +95,7 @@ type Config struct {
 	digitalOceanImageExplicit     bool
 	Incus                         IncusConfig
 	Proxmox                       ProxmoxConfig
+	XCPNg                         XCPNgConfig
 	Parallels                     ParallelsConfig
 	parallelsTemplateApplied      bool
 	SSHUser                       string
@@ -527,6 +529,22 @@ type ProxmoxConfig struct {
 	InsecureTLS bool
 }
 
+type XCPNgConfig struct {
+	APIURL       string
+	Username     string
+	Password     string
+	Template     string
+	TemplateUUID string
+	SR           string
+	SRUUID       string
+	Network      string
+	NetworkUUID  string
+	Host         string
+	User         string
+	WorkRoot     string
+	InsecureTLS  bool
+}
+
 type IncusConfig struct {
 	Remote            string
 	Project           string
@@ -936,6 +954,10 @@ func defaultConfig() Config {
 }
 
 func loadConfig() (Config, error) {
+	return loadConfigWithOverrides("", "")
+}
+
+func loadConfigWithOverrides(coordinator, provider string) (Config, error) {
 	cfg := baseConfig()
 	for _, path := range configPaths() {
 		freestyleAPIURL := cfg.Freestyle.APIURL
@@ -948,6 +970,13 @@ func loadConfig() (Config, error) {
 	}
 	if err := applyEnv(&cfg); err != nil {
 		return Config{}, err
+	}
+	if coordinator = strings.TrimSpace(coordinator); coordinator != "" {
+		cfg.Coordinator = coordinator
+	}
+	if provider = strings.TrimSpace(provider); provider != "" {
+		cfg.Provider = provider
+		cfg.brokerProvider = ""
 	}
 	if err := normalizeBrokerConfig(&cfg); err != nil {
 		return Config{}, err
@@ -973,20 +1002,28 @@ func loadConfig() (Config, error) {
 }
 
 func normalizeBrokerConfig(cfg *Config) error {
-	mode := BrokerMode(strings.ToLower(strings.TrimSpace(string(cfg.BrokerMode))))
+	mode, err := normalizeBrokerMode(string(cfg.BrokerMode))
+	if err != nil {
+		return err
+	}
+	cfg.BrokerMode = mode
+	if mode == BrokerModeRegistered && strings.TrimSpace(cfg.Coordinator) == "" {
+		return exit(2, "broker.mode=registered requires broker.url or coordinator")
+	}
+	return nil
+}
+
+func normalizeBrokerMode(value string) (BrokerMode, error) {
+	mode := BrokerMode(strings.ToLower(strings.TrimSpace(value)))
 	if mode == "" {
 		mode = BrokerModeManaged
 	}
 	switch mode {
 	case BrokerModeManaged, BrokerModeRegistered:
-		cfg.BrokerMode = mode
+		return mode, nil
 	default:
-		return exit(2, "broker.mode must be managed or registered")
+		return "", exit(2, "broker.mode must be managed or registered")
 	}
-	if mode == BrokerModeRegistered && strings.TrimSpace(cfg.Coordinator) == "" {
-		return exit(2, "broker.mode=registered requires broker.url or coordinator")
-	}
-	return nil
 }
 
 func canonicalizeConfigProvider(cfg *Config) {
@@ -1146,6 +1183,15 @@ func applyProviderConfigDefaults(cfg *Config) error {
 		return nil
 	}
 	if cfg.Provider != "proxmox" {
+		if cfg.Provider == "xcp-ng" {
+			if cfg.XCPNg.User != "" {
+				cfg.SSHUser = cfg.XCPNg.User
+			}
+			if cfg.XCPNg.WorkRoot != "" {
+				cfg.WorkRoot = cfg.XCPNg.WorkRoot
+			}
+			return nil
+		}
 		if cfg.Provider != "parallels" {
 			return nil
 		}
@@ -1547,6 +1593,10 @@ func baseConfig() Config {
 			WorkRoot:  defaultPOSIXWorkRoot,
 			FullClone: true,
 		},
+		XCPNg: XCPNgConfig{
+			User:     "crabbox",
+			WorkRoot: defaultPOSIXWorkRoot,
+		},
 		Parallels: ParallelsConfig{
 			CloneMode:      "linked",
 			User:           "crabbox",
@@ -1649,6 +1699,7 @@ type fileConfig struct {
 	GCP                  *fileGCPConfig                     `yaml:"gcp,omitempty"`
 	Incus                *fileIncusConfig                   `yaml:"incus,omitempty"`
 	Proxmox              *fileProxmoxConfig                 `yaml:"proxmox,omitempty"`
+	XCPNg                *fileXCPNgConfig                   `yaml:"xcpNg,omitempty"`
 	Parallels            *fileParallelsConfig               `yaml:"parallels,omitempty"`
 	SSH                  *fileSSHConfig                     `yaml:"ssh,omitempty"`
 	Sync                 *fileSyncConfig                    `yaml:"sync,omitempty"`
@@ -1807,6 +1858,22 @@ type fileProxmoxConfig struct {
 	WorkRoot    string `yaml:"workRoot,omitempty"`
 	FullClone   *bool  `yaml:"fullClone,omitempty"`
 	InsecureTLS *bool  `yaml:"insecureTLS,omitempty"`
+}
+
+type fileXCPNgConfig struct {
+	APIURL       string `yaml:"apiUrl,omitempty"`
+	Username     string `yaml:"username,omitempty"`
+	Password     string `yaml:"password,omitempty"`
+	Template     string `yaml:"template,omitempty"`
+	TemplateUUID string `yaml:"templateUuid,omitempty"`
+	SR           string `yaml:"sr,omitempty"`
+	SRUUID       string `yaml:"srUuid,omitempty"`
+	Network      string `yaml:"network,omitempty"`
+	NetworkUUID  string `yaml:"networkUuid,omitempty"`
+	Host         string `yaml:"host,omitempty"`
+	User         string `yaml:"user,omitempty"`
+	WorkRoot     string `yaml:"workRoot,omitempty"`
+	InsecureTLS  *bool  `yaml:"insecureTLS,omitempty"`
 }
 
 type fileParallelsConfig struct {
@@ -2528,15 +2595,28 @@ func applyConfigFile(cfg *Config, path string) error {
 	if err != nil {
 		return err
 	}
-	return applyFileConfig(cfg, file)
+	return applyFileConfigWithTrust(cfg, file, trustedConfigPath(path))
 }
 
 func applyFileConfig(cfg *Config, file fileConfig) error {
+	return applyFileConfigWithTrust(cfg, file, true)
+}
+
+func trustedConfigPath(path string) bool {
+	if explicit := strings.TrimSpace(os.Getenv("CRABBOX_CONFIG")); explicit != "" {
+		return filepath.Clean(path) == filepath.Clean(explicit)
+	}
+	userPath := userConfigPath()
+	return userPath != "" && filepath.Clean(path) == filepath.Clean(userPath)
+}
+
+func applyFileConfigWithTrust(cfg *Config, file fileConfig, trusted bool) error {
 	if file.Profile != "" {
 		cfg.Profile = file.Profile
 	}
 	if file.Provider != "" {
 		cfg.Provider = file.Provider
+		cfg.brokerProvider = ""
 	}
 	if file.Target != "" {
 		cfg.TargetOS = file.Target
@@ -2611,6 +2691,7 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 		}
 		if file.Broker.Provider != "" {
 			cfg.Provider = file.Broker.Provider
+			cfg.brokerProvider = file.Broker.Provider
 		}
 		if file.Broker.Access != nil {
 			if file.Broker.Access.ClientID != "" {
@@ -2868,6 +2949,67 @@ func applyFileConfig(cfg *Config, file fileConfig) error {
 		}
 		if file.Proxmox.InsecureTLS != nil {
 			cfg.Proxmox.InsecureTLS = *file.Proxmox.InsecureTLS
+		}
+	}
+	if file.XCPNg != nil {
+		// Project config is repository-controlled. Do not let it redirect
+		// inherited user or environment credentials to another XAPI endpoint.
+		if trusted && file.XCPNg.APIURL != "" {
+			cfg.XCPNg.APIURL = file.XCPNg.APIURL
+		}
+		if file.XCPNg.Username != "" {
+			cfg.XCPNg.Username = file.XCPNg.Username
+		}
+		if file.XCPNg.Password != "" {
+			cfg.XCPNg.Password = file.XCPNg.Password
+		}
+		if file.XCPNg.Template != "" {
+			cfg.XCPNg.Template = file.XCPNg.Template
+			if file.XCPNg.TemplateUUID == "" {
+				cfg.XCPNg.TemplateUUID = ""
+			}
+		}
+		if file.XCPNg.TemplateUUID != "" {
+			cfg.XCPNg.TemplateUUID = file.XCPNg.TemplateUUID
+			if file.XCPNg.Template == "" {
+				cfg.XCPNg.Template = ""
+			}
+		}
+		if file.XCPNg.SR != "" {
+			cfg.XCPNg.SR = file.XCPNg.SR
+			if file.XCPNg.SRUUID == "" {
+				cfg.XCPNg.SRUUID = ""
+			}
+		}
+		if file.XCPNg.SRUUID != "" {
+			cfg.XCPNg.SRUUID = file.XCPNg.SRUUID
+			if file.XCPNg.SR == "" {
+				cfg.XCPNg.SR = ""
+			}
+		}
+		if file.XCPNg.Network != "" {
+			cfg.XCPNg.Network = file.XCPNg.Network
+			if file.XCPNg.NetworkUUID == "" {
+				cfg.XCPNg.NetworkUUID = ""
+			}
+		}
+		if file.XCPNg.NetworkUUID != "" {
+			cfg.XCPNg.NetworkUUID = file.XCPNg.NetworkUUID
+			if file.XCPNg.Network == "" {
+				cfg.XCPNg.Network = ""
+			}
+		}
+		if file.XCPNg.Host != "" {
+			cfg.XCPNg.Host = file.XCPNg.Host
+		}
+		if file.XCPNg.User != "" {
+			cfg.XCPNg.User = file.XCPNg.User
+		}
+		if file.XCPNg.WorkRoot != "" {
+			cfg.XCPNg.WorkRoot = file.XCPNg.WorkRoot
+		}
+		if trusted && file.XCPNg.InsecureTLS != nil {
+			cfg.XCPNg.InsecureTLS = *file.XCPNg.InsecureTLS
 		}
 	}
 	if file.Parallels != nil {
@@ -4118,7 +4260,10 @@ func applyLeaseDuration(target *time.Duration, value string) {
 
 func applyEnv(cfg *Config) error {
 	cfg.Profile = getenv("CRABBOX_PROFILE", cfg.Profile)
-	cfg.Provider = getenv("CRABBOX_PROVIDER", cfg.Provider)
+	if provider := os.Getenv("CRABBOX_PROVIDER"); provider != "" {
+		cfg.Provider = provider
+		cfg.brokerProvider = ""
+	}
 	if t := os.Getenv("CRABBOX_TARGET"); t != "" {
 		cfg.TargetOS = t
 		cfg.targetExplicit = true
@@ -4306,6 +4451,54 @@ func applyEnv(cfg *Config) error {
 	}
 	if value, ok := getenvBool("CRABBOX_PROXMOX_INSECURE_TLS"); ok {
 		cfg.Proxmox.InsecureTLS = value
+	}
+	cfg.XCPNg.APIURL = getenv("CRABBOX_XCP_NG_API_URL", cfg.XCPNg.APIURL)
+	cfg.XCPNg.Username = getenv("CRABBOX_XCP_NG_USERNAME", cfg.XCPNg.Username)
+	cfg.XCPNg.Password = getenv("CRABBOX_XCP_NG_PASSWORD", cfg.XCPNg.Password)
+	xcpNgTemplate, xcpNgTemplateUUID := os.Getenv("CRABBOX_XCP_NG_TEMPLATE"), os.Getenv("CRABBOX_XCP_NG_TEMPLATE_UUID")
+	if xcpNgTemplate != "" {
+		cfg.XCPNg.Template = xcpNgTemplate
+		if xcpNgTemplateUUID == "" {
+			cfg.XCPNg.TemplateUUID = ""
+		}
+	}
+	if xcpNgTemplateUUID != "" {
+		cfg.XCPNg.TemplateUUID = xcpNgTemplateUUID
+		if xcpNgTemplate == "" {
+			cfg.XCPNg.Template = ""
+		}
+	}
+	xcpNgSR, xcpNgSRUUID := os.Getenv("CRABBOX_XCP_NG_SR"), os.Getenv("CRABBOX_XCP_NG_SR_UUID")
+	if xcpNgSR != "" {
+		cfg.XCPNg.SR = xcpNgSR
+		if xcpNgSRUUID == "" {
+			cfg.XCPNg.SRUUID = ""
+		}
+	}
+	if xcpNgSRUUID != "" {
+		cfg.XCPNg.SRUUID = xcpNgSRUUID
+		if xcpNgSR == "" {
+			cfg.XCPNg.SR = ""
+		}
+	}
+	xcpNgNetwork, xcpNgNetworkUUID := os.Getenv("CRABBOX_XCP_NG_NETWORK"), os.Getenv("CRABBOX_XCP_NG_NETWORK_UUID")
+	if xcpNgNetwork != "" {
+		cfg.XCPNg.Network = xcpNgNetwork
+		if xcpNgNetworkUUID == "" {
+			cfg.XCPNg.NetworkUUID = ""
+		}
+	}
+	if xcpNgNetworkUUID != "" {
+		cfg.XCPNg.NetworkUUID = xcpNgNetworkUUID
+		if xcpNgNetwork == "" {
+			cfg.XCPNg.Network = ""
+		}
+	}
+	cfg.XCPNg.Host = getenv("CRABBOX_XCP_NG_HOST", cfg.XCPNg.Host)
+	cfg.XCPNg.User = getenv("CRABBOX_XCP_NG_USER", cfg.XCPNg.User)
+	cfg.XCPNg.WorkRoot = getenv("CRABBOX_XCP_NG_WORK_ROOT", cfg.XCPNg.WorkRoot)
+	if value, ok := getenvBool("CRABBOX_XCP_NG_INSECURE_TLS"); ok {
+		cfg.XCPNg.InsecureTLS = value
 	}
 	cfg.Parallels.Source = getenv("CRABBOX_PARALLELS_SOURCE", cfg.Parallels.Source)
 	cfg.Parallels.SourceID = getenv("CRABBOX_PARALLELS_SOURCE_ID", cfg.Parallels.SourceID)
