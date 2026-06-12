@@ -102,6 +102,7 @@ the built-in adapter needs a separate local smoke contract.
 | [Modal](modal.md) — `modal` | Linux |
 | [Microsoft Execution Containers](mxc.md) — `mxc` (`execution-container`) | Windows |
 | [OpenComputer](opencomputer.md) — `opencomputer` (`oc`, `open-computer`) | Linux |
+| [OpenSandbox](opensandbox.md) — `opensandbox` | Linux |
 | [Railway](railway.md) — `railway` (`rail`, `railwayapp`) | Linux |
 | [Anthropic Sandbox Runtime](anthropic-sandbox-runtime.md) — `anthropic-sandbox-runtime` (`srt`) | macOS, Linux |
 | [Tensorlake](tensorlake.md) — `tensorlake` (`tl`, `tensorlake-sbx`) | Linux |
@@ -122,6 +123,9 @@ reports.
 - Docker Sandbox is a delegated-run provider driven by the standalone `sbx`
   CLI. It has no aliases, so `docker`, `container`, and `local-docker` remain
   Local Container aliases.
+- OpenSandbox is a delegated-run provider using the OpenSandbox Go SDK for
+  lifecycle, file upload, and execd command execution. It has no aliases in v1,
+  so `osb` remains reserved.
 - Anthropic Sandbox Runtime is a local one-shot delegated-run provider driven
   by the standalone `srt` CLI. It has no SSH lease, no persistent lifecycle,
   and no remote sync surface.

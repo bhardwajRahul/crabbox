@@ -164,6 +164,7 @@ hardware for macOS VM workflows.
 | [Modal](docs/providers/modal.md) — `modal` | Linux | Modal Sandbox through the local Python client. |
 | [Microsoft Execution Containers](docs/providers/mxc.md) — `mxc` (`execution-container`) | Windows | Policy-driven local Windows process containment. |
 | [OpenComputer](docs/providers/opencomputer.md) — `opencomputer` (`oc`, `open-computer`) | Linux | OpenComputer Linux VMs through the OpenComputer REST API. |
+| [OpenSandbox](docs/providers/opensandbox.md) — `opensandbox` | Linux | OpenSandbox delegated containers through the OpenSandbox Go SDK. |
 | [Railway](docs/providers/railway.md) — `railway` (`rail`, `railwayapp`) | Linux | Redeploy and stream an existing Railway service. |
 | [Anthropic Sandbox Runtime](docs/providers/anthropic-sandbox-runtime.md) — `anthropic-sandbox-runtime` (`srt`) | macOS, Linux | Local one-shot sandboxing through Anthropic's `srt` CLI. |
 | [Tensorlake](docs/providers/tensorlake.md) — `tensorlake` (`tl`, `tensorlake-sbx`) | Linux | Tensorlake Firecracker sandbox via the Tensorlake CLI. |
