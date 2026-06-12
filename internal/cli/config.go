@@ -655,6 +655,7 @@ type LocalContainerConfig struct {
 	Memory             string
 	Network            string
 	DockerSocket       bool
+	Volumes            []string
 	CheckpointMetadata map[string]string `yaml:"-" json:"-"`
 }
 
@@ -3796,6 +3797,10 @@ func applyFileConfigWithTrust(cfg *Config, file fileConfig, trusted bool) error 
 		if file.LocalContainer.DockerSocket != nil {
 			cfg.LocalContainer.DockerSocket = *file.LocalContainer.DockerSocket
 		}
+		// NOTE: localContainer.volumes is intentionally NOT loaded from
+		// repo-local config files. Bind mounts expose host paths and must
+		// be an explicit CLI action (--local-container-volume), not
+		// something an untrusted checkout can request via .crabbox.yaml.
 	}
 	if file.AppleContainer != nil {
 		if file.AppleContainer.CLIPath != "" {

@@ -36,6 +36,10 @@ type ProviderRoutingFlagProvider interface {
 	RoutingFlagNames() []string
 }
 
+type ProviderCreationOnlyFlagProvider interface {
+	CreationOnlyFlagNames() []string
+}
+
 type LeaseClaimEndpointPreparer interface {
 	PrepareLeaseClaimEndpoint(existing LeaseClaim, provider, slug string, server Server, allowProviderMetadata bool) (Server, error)
 }
@@ -145,6 +149,10 @@ type ReleaseLeaseReporter interface {
 	ReleaseLeaseMessage(lease LeaseTarget) string
 }
 
+type CheckpointForkWorkdirValidator interface {
+	ValidateCheckpointForkWorkdir(ctx context.Context, lease LeaseTarget, workdir string) error
+}
+
 type NativeCheckpointCapability struct {
 	Kind              string
 	Direct            bool
@@ -246,6 +254,10 @@ type NativeCheckpointForkRequest struct {
 
 type NativeCheckpointForkProvider interface {
 	ApplyNativeCheckpointForkConfig(req NativeCheckpointForkRequest) error
+}
+
+type NativeCheckpointForkFlagProvider interface {
+	ApplyNativeCheckpointForkFlags(cfg *Config, fs *flag.FlagSet, values any) error
 }
 
 type JSONListBackend interface {

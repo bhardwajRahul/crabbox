@@ -1282,12 +1282,15 @@ func (testLocalContainerProvider) Name() string { return "local-container" }
 func (testLocalContainerProvider) Aliases() []string {
 	return []string{"docker", "container", "local-docker"}
 }
+func (testLocalContainerProvider) CreationOnlyFlagNames() []string {
+	return []string{"local-container-volume"}
+}
 func (testLocalContainerProvider) Spec() ProviderSpec {
 	return ProviderSpec{
 		Name:        "local-container",
 		Kind:        ProviderKindSSHLease,
 		Targets:     []TargetSpec{{OS: targetLinux}},
-		Features:    FeatureSet{FeatureSSH, FeatureCrabboxSync, FeatureCleanup, FeatureDesktop, FeatureBrowser, FeatureCacheVolume, FeatureCheckpoint},
+		Features:    FeatureSet{FeatureSSH, FeatureCrabboxSync, FeatureCleanup, FeatureDesktop, FeatureBrowser, FeatureCacheVolume, FeatureCheckpoint, FeatureFork},
 		Coordinator: CoordinatorNever,
 	}
 }
@@ -1301,9 +1304,15 @@ type testLocalContainerFlagValues struct {
 	Memory       *string
 	Network      *string
 	DockerSocket *bool
+	Volumes      *[]string
 }
 
 func (testLocalContainerProvider) RegisterFlags(fs *flag.FlagSet, defaults Config) any {
+	volumes := append([]string(nil), defaults.LocalContainer.Volumes...)
+	fs.Func("local-container-volume", "container volume", func(value string) error {
+		volumes = append(volumes, value)
+		return nil
+	})
 	return testLocalContainerFlagValues{
 		Runtime:      fs.String("local-container-runtime", defaults.LocalContainer.Runtime, "Docker-compatible CLI"),
 		Image:        fs.String("local-container-image", defaults.LocalContainer.Image, "container image"),
@@ -1313,6 +1322,7 @@ func (testLocalContainerProvider) RegisterFlags(fs *flag.FlagSet, defaults Confi
 		Memory:       fs.String("local-container-memory", defaults.LocalContainer.Memory, "container memory"),
 		Network:      fs.String("local-container-network", defaults.LocalContainer.Network, "container network"),
 		DockerSocket: fs.Bool("local-container-docker-socket", defaults.LocalContainer.DockerSocket, "container Docker socket"),
+		Volumes:      &volumes,
 	}
 }
 func (testLocalContainerProvider) ApplyFlags(cfg *Config, fs *flag.FlagSet, values any) error {
@@ -1347,6 +1357,9 @@ func (testLocalContainerProvider) ApplyFlags(cfg *Config, fs *flag.FlagSet, valu
 	if flagWasSet(fs, "local-container-docker-socket") {
 		cfg.LocalContainer.DockerSocket = *v.DockerSocket
 	}
+	if v.Volumes != nil && len(*v.Volumes) > 0 {
+		cfg.LocalContainer.Volumes = append([]string(nil), (*v.Volumes)...)
+	}
 	if cfg.Provider == "docker" || cfg.Provider == "container" || cfg.Provider == "local-docker" {
 		cfg.Provider = "local-container"
 	}
@@ -1360,6 +1373,25 @@ func (testLocalContainerProvider) NativeCheckpointCapability(req NativeCheckpoin
 		return NativeCheckpointCapability{}, false
 	}
 	return NativeCheckpointCapability{Kind: checkpointKindDockerCommit, Direct: true}, true
+}
+func (testLocalContainerProvider) ApplyNativeCheckpointForkConfig(req NativeCheckpointForkRequest) error {
+	if req.Record.Kind != checkpointKindDockerCommit {
+		return exit(2, "provider=local-container does not support checkpoint kind=%s", req.Record.Kind)
+	}
+	req.Config.LocalContainer.Image = req.Record.ImageID
+	req.Config.LocalContainer.Runtime = req.Record.Metadata["runtime"]
+	req.Config.LocalContainer.User = req.Record.Metadata["container_user"]
+	req.Config.LocalContainer.WorkRoot = req.Record.Metadata["container_work_root"]
+	req.Config.SSHUser = req.Config.LocalContainer.User
+	req.Config.WorkRoot = req.Config.LocalContainer.WorkRoot
+	return nil
+}
+func (testLocalContainerProvider) ApplyNativeCheckpointForkFlags(cfg *Config, _ *flag.FlagSet, values any) error {
+	v, ok := values.(testLocalContainerFlagValues)
+	if ok && v.Volumes != nil {
+		cfg.LocalContainer.Volumes = append([]string(nil), (*v.Volumes)...)
+	}
+	return nil
 }
 
 type testAppleVZProvider struct{}
