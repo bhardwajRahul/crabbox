@@ -45,7 +45,7 @@ export function cloudInit(config: LeaseConfig): string {
     .map((port) => `      Port ${port}`)
     .join("\n");
   const readyChecks = optionalReadyChecks(config);
-  const sshHostKeyFiles = optionalSSHHostKeyFiles(config);
+  const sshHostKeys = optionalSSHHostKeys(config);
   const writeFiles = optionalWriteFiles(config);
   const bootstrap = optionalBootstrap(config);
   return `#cloud-config
@@ -58,13 +58,13 @@ users:
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
     ssh_authorized_keys:
       - ${config.sshPublicKey}
+${sshHostKeys}
 write_files:
   - path: /etc/ssh/sshd_config.d/99-crabbox-port.conf
     permissions: '0644'
     content: |
 ${portLines}
       PasswordAuthentication no
-${sshHostKeyFiles}
   - path: /etc/systemd/system/crabbox-workspace-ready.service
     permissions: '0644'
     content: |
@@ -665,20 +665,19 @@ function optionalReadyChecks(config: LeaseConfig): string {
   return lines.join("\n");
 }
 
-function optionalSSHHostKeyFiles(config: LeaseConfig): string {
+function optionalSSHHostKeys(config: LeaseConfig): string {
   if (!config.sshHostPrivateKey || !config.sshHostPublicKey) {
     return "";
   }
-  return `  - path: /etc/ssh/ssh_host_ed25519_key
-    owner: root:root
-    permissions: '0600'
-    encoding: b64
-    content: ${btoa(config.sshHostPrivateKey)}
-  - path: /etc/ssh/ssh_host_ed25519_key.pub
-    owner: root:root
-    permissions: '0644'
-    encoding: b64
-    content: ${btoa(config.sshHostPublicKey)}
+  const privateKey = config.sshHostPrivateKey
+    .trimEnd()
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
+  return `ssh_keys:
+  ed25519_private: |
+${privateKey}
+  ed25519_public: ${config.sshHostPublicKey.trim()}
 `;
 }
 

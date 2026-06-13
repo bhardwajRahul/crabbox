@@ -70,10 +70,10 @@ describe("cloud-init bootstrap", () => {
       sshHostPublicKey: "ssh-ed25519 public-host-key",
     });
 
-    expect(got).toContain("path: /etc/ssh/ssh_host_ed25519_key");
-    expect(got).toContain(`content: ${btoa("private-host-key")}`);
-    expect(got).toContain("path: /etc/ssh/ssh_host_ed25519_key.pub");
-    expect(got).toContain(`content: ${btoa("ssh-ed25519 public-host-key")}`);
+    expect(got).toContain("ssh_keys:");
+    expect(got).toContain("  ed25519_private: |\n    private-host-key");
+    expect(got).toContain("  ed25519_public: ssh-ed25519 public-host-key");
+    expect(got).not.toContain("path: /etc/ssh/ssh_host_ed25519_key");
   });
 
   it("uses retrying package installation in runcmd", () => {
