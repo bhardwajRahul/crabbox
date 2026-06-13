@@ -151,6 +151,9 @@ describe("NodeCoordinatorRuntime", () => {
     expect(terminal).toContain("if (length === 0) return");
     expect(terminal).toContain("lastObservedHostKey = fingerprint");
     expect(terminal).toContain("return expectedHostKey === fingerprint");
+    expect(terminal).toContain('cipher: ["aes128-ctr", "aes192-ctr", "aes256-ctr"]');
+    expect(terminal).toContain('"hmac-sha2-256-etm@openssh.com"');
+    expect(terminal).toContain('"hmac-sha2-512"');
     expect(terminal).toContain("workspaceTerminalSSHReadyTimeoutMs");
     expect(terminal).toContain("for (const port of terminalPorts)");
     expect(terminal).toContain("await new Promise<void>((resolve) => setTimeout(resolve, 2_000))");

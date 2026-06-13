@@ -23,7 +23,16 @@ declare module "ssh2" {
       readyTimeout: number;
       keepaliveInterval: number;
       keepaliveCountMax: number;
-      algorithms: { serverHostKey: ["ssh-ed25519"] };
+      algorithms: {
+        serverHostKey: ["ssh-ed25519"];
+        cipher: ["aes128-ctr", "aes192-ctr", "aes256-ctr"];
+        hmac: [
+          "hmac-sha2-256-etm@openssh.com",
+          "hmac-sha2-512-etm@openssh.com",
+          "hmac-sha2-256",
+          "hmac-sha2-512",
+        ];
+      };
       hostHash: "sha256";
       hostVerifier: (fingerprint: string) => boolean;
     }): this;

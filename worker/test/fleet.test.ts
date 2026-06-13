@@ -1429,7 +1429,10 @@ describe("fleet lease identity and idle", () => {
     expect(terminal).toContain("workspaceTerminalAcknowledgement(value)");
     expect(terminal).toContain("bytes > unacknowledgedOutputBytes");
     expect(terminal).toContain("workspaceTerminalSocketBufferedBytes(socket)");
-    expect(terminal).toContain('algorithms: { serverHostKey: ["ssh-ed25519"] }');
+    expect(terminal).toContain('serverHostKey: ["ssh-ed25519"]');
+    expect(terminal).toContain('cipher: ["aes128-ctr", "aes192-ctr", "aes256-ctr"]');
+    expect(terminal).toContain('"hmac-sha2-256-etm@openssh.com"');
+    expect(terminal).toContain('"hmac-sha2-512"');
     expect(terminal).toContain("workspace SSH host key mismatch expected=");
     expect(source).toContain("value.length > workspaceTerminalMaxBufferedBytes");
   });

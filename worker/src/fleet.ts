@@ -2518,7 +2518,16 @@ export class FleetCoordinator {
                   readyTimeout: 10_000,
                   keepaliveInterval: 15_000,
                   keepaliveCountMax: 3,
-                  algorithms: { serverHostKey: ["ssh-ed25519"] },
+                  algorithms: {
+                    serverHostKey: ["ssh-ed25519"],
+                    cipher: ["aes128-ctr", "aes192-ctr", "aes256-ctr"],
+                    hmac: [
+                      "hmac-sha2-256-etm@openssh.com",
+                      "hmac-sha2-512-etm@openssh.com",
+                      "hmac-sha2-256",
+                      "hmac-sha2-512",
+                    ],
+                  },
                   hostHash: "sha256",
                   hostVerifier: (fingerprint: string) => {
                     lastObservedHostKey = fingerprint;
