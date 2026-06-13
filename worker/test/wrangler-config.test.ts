@@ -33,6 +33,7 @@ describe("wrangler config", () => {
 
   it("routes deployed and preview workspaces through the verified AWS backend", () => {
     expect(configStringValues("CRABBOX_WORKSPACE_PROVIDER")).toEqual(["aws", "aws"]);
+    expect(configStringValues("CRABBOX_AWS_SSH_CIDRS")).toEqual([]);
   });
 });
 

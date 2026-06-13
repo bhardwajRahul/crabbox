@@ -421,6 +421,7 @@ export interface LeaseNetworkState {
   sshSourceCIDRs?: string[];
   sshSourceCIDRsComplete?: boolean;
   awsSecurityGroupID?: string;
+  awsSecurityGroupName?: string;
   awsSubnetID?: string;
 }
 

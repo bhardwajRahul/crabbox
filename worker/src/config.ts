@@ -13,6 +13,8 @@ export const awsMacOSInstanceTypeCandidates = [
   "mac1.metal",
 ];
 
+export const workspaceProviderKeyPrefix = "crabbox-workspace-";
+
 export interface LeaseConfig {
   provider: Provider;
   target: TargetOS;

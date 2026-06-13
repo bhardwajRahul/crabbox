@@ -380,23 +380,27 @@ describe("fleet lease identity and idle", () => {
   });
 
   it("reserves the shared workspace provider key from ordinary leases", async () => {
-    const fleet = testFleet(undefined, { hetzner: fakeProvider() });
-    const response = await fleet.fetch(
-      request("POST", "/v1/leases", {
-        headers: {
-          "x-crabbox-owner": "alice@example.com",
-          "x-crabbox-org": "example-org",
-        },
-        body: {
-          provider: "hetzner",
-          providerKey: "crabbox-workspace-deadbeef0000",
-          sshPublicKey: "ssh-ed25519 ordinary-test",
-        },
+    await Promise.all(
+      (["hetzner", "aws", "azure", "gcp"] as const).map(async (provider) => {
+        const fleet = testFleet(undefined, { [provider]: fakeProvider(undefined, { provider }) });
+        const response = await fleet.fetch(
+          request("POST", "/v1/leases", {
+            headers: {
+              "x-crabbox-owner": "alice@example.com",
+              "x-crabbox-org": "example-org",
+            },
+            body: {
+              provider,
+              providerKey: "crabbox-workspace-deadbeef0000",
+              sshPublicKey: "ssh-ed25519 ordinary-test",
+            },
+          }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: "reserved_provider_key" });
       }),
     );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: "reserved_provider_key" });
   });
 
   it("adapts workspaces onto owner-scoped lease lifecycle", async () => {
@@ -584,12 +588,14 @@ describe("fleet lease identity and idle", () => {
       (["hetzner", "aws", "azure", "gcp"] as const).map(async (provider) => {
         const storage = new MemoryStorage();
         let createdProvider = "";
+        let createdAWSSSHCIDRs: string[] = [];
         const fleet = testFleet(
           storage,
           {
             [provider]: fakeProvider(
               (config) => {
                 createdProvider = config.provider;
+                createdAWSSSHCIDRs = config.awsSSHCIDRs;
               },
               { provider },
             ),
@@ -619,6 +625,7 @@ describe("fleet lease identity and idle", () => {
         const created = (await create.json()) as { providerResourceId: string };
         await fleet.alarm();
         expect(createdProvider).toBe(provider);
+        expect(createdAWSSSHCIDRs).toEqual(provider === "aws" ? ["0.0.0.0/0"] : []);
         expect(storage.value<LeaseRecord>(`lease:${created.providerResourceId}`)?.provider).toBe(
           provider,
         );
@@ -5933,7 +5940,10 @@ describe("fleet lease identity and idle", () => {
     const active = testLease({
       id: "cbx_000000000001",
       provider: "aws",
-      network: { sshSourceCIDRs: ["198.51.100.44/32"] },
+      network: {
+        awsSecurityGroupName: "crabbox-runners",
+        sshSourceCIDRs: ["198.51.100.44/32"],
+      },
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
@@ -5943,6 +5953,7 @@ describe("fleet lease identity and idle", () => {
     });
 
     expect(prepared.config.awsSSHCIDRs).toEqual(["198.51.100.44/32", "203.0.113.7/32"]);
+    expect(prepared.lease.network?.awsSecurityGroupName).toBe("crabbox-runners");
     expect(prepared.provisioning).toMatchObject({
       sshIngressReconcile: "additive",
       publishAccessBeforeProvisioning: true,
@@ -6242,6 +6253,84 @@ describe("fleet lease identity and idle", () => {
     expect(revokedCIDRs).not.toContain("198.51.100.20/32");
   });
 
+  it("prunes runner ingress while a distinct managed workspace group is active", async () => {
+    const revokedRules: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const fetchRequest = input instanceof Request ? input : new Request(input, init);
+        const params = new URLSearchParams(await fetchRequest.clone().text());
+        const action = params.get("Action") ?? "";
+        if (action === "DescribeVpcs") {
+          return new Response(
+            "<DescribeVpcsResponse><vpcSet><item><vpcId>vpc-default</vpcId></item></vpcSet></DescribeVpcsResponse>",
+          );
+        }
+        if (action === "DescribeSecurityGroups") {
+          const groupName = params.get("Filter.1.Value.1") ?? "";
+          const groupID = groupName === "crabbox-workspaces" ? "sg-workspaces" : "sg-runners";
+          const ingress =
+            groupName === "crabbox-runners"
+              ? "<ipPermissions><item><ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort><ipRanges><item><cidrIp>198.51.100.10/32</cidrIp><description>Crabbox SSH</description></item><item><cidrIp>198.51.100.20/32</cidrIp><description>Crabbox SSH</description></item></ipRanges></item></ipPermissions>"
+              : "<ipPermissions />";
+          return new Response(
+            `<DescribeSecurityGroupsResponse><securityGroupInfo><item><groupId>${groupID}</groupId><groupName>${groupName}</groupName>${ingress}</item></securityGroupInfo></DescribeSecurityGroupsResponse>`,
+          );
+        }
+        if (action === "RevokeSecurityGroupIngress") {
+          revokedRules.push(
+            `${params.get("GroupId")}:${params.get("IpPermissions.1.IpRanges.1.CidrIp")}`,
+          );
+        }
+        return new Response("<Response />");
+      }),
+    );
+    const provider = new AWSProvider(
+      { AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "secret" } as Env,
+      "eu-west-1",
+      new MemoryStorage(),
+    );
+    const anchor = testLease({
+      id: "cbx_abcdef123456",
+      provider: "aws",
+      state: "released",
+      region: "eu-west-1",
+      sshPort: "22",
+      network: { awsSecurityGroupName: "crabbox-runners" },
+    });
+    const runner = testLease({
+      id: "cbx_abcdef123457",
+      provider: "aws",
+      region: "eu-west-1",
+      sshPort: "22",
+      network: {
+        awsSecurityGroupName: "crabbox-runners",
+        sshSourceCIDRs: ["198.51.100.20/32"],
+        sshSourceCIDRsComplete: true,
+      },
+    });
+    const workspace = testLease({
+      id: "cbx_abcdef123458",
+      provider: "aws",
+      providerKey: "crabbox-workspace-0123456789ab",
+      region: "eu-west-1",
+      sshPort: "22",
+      network: {
+        awsSecurityGroupName: "crabbox-workspaces",
+        sshSourceCIDRs: ["0.0.0.0/0"],
+        sshSourceCIDRsComplete: true,
+      },
+    });
+
+    await provider.reconcileLeaseAccess(anchor, {
+      requestSourceCIDRs: [],
+      activeLeases: [runner, workspace],
+    });
+
+    expect(revokedRules).toContain("sg-runners:198.51.100.10/32");
+    expect(revokedRules).not.toContain("sg-runners:198.51.100.20/32");
+  });
+
   it("reconciles distinct SSH port sets that share an AWS security group", async () => {
     const authorizedRules: string[] = [];
     vi.stubGlobal(
@@ -6507,6 +6596,85 @@ describe("fleet lease identity and idle", () => {
     await fleet.alarm();
 
     expect(reconciled.toSorted()).toEqual(["eu-west-1:sg-west", "us-east-1:sg-east"]);
+    expect(storage.value("aws-ingress-reconcile:pending")).toBeUndefined();
+  });
+
+  it("keeps managed AWS group names distinct in pending reconciliation", async () => {
+    const storage = new MemoryStorage();
+    const reconciled: string[] = [];
+    const fleet = testFleet(storage, {
+      aws: fakeProvider(
+        (config) => {
+          if (config.providerKey === "runner-a") {
+            throw new Error("first managed group failed");
+          }
+        },
+        {
+          provider: "aws",
+          region: "eu-west-1",
+          onPrepareLeaseCreate(config, lease, context) {
+            return {
+              config,
+              lease: {
+                ...lease,
+                network: {
+                  ...lease.network,
+                  awsSecurityGroupName: `managed-${config.providerKey}`,
+                  sshSourceCIDRs: context.requestSourceCIDRs,
+                },
+              },
+              provisioning: {
+                sshIngressReconcile: "additive",
+                publishAccessBeforeProvisioning: true,
+              },
+            };
+          },
+          onReconcileLeaseAccess(lease) {
+            reconciled.push(lease.network?.awsSecurityGroupName ?? "");
+          },
+        },
+      ),
+    });
+    const create = (leaseID: string, providerKey: string) =>
+      fleet.fetch(
+        request("POST", "/v1/leases", {
+          headers: { "cf-connecting-ip": "198.51.100.10" },
+          body: {
+            leaseID,
+            provider: "aws",
+            awsRegion: "eu-west-1",
+            providerKey,
+            sshPublicKey: "ssh-ed25519 test",
+          },
+        }),
+      );
+
+    expect((await create("cbx_abcdef123456", "runner-a")).status).toBe(500);
+    expect((await create("cbx_abcdef123457", "runner-b")).status).toBe(201);
+    expect(
+      storage
+        .value<{ targets: Array<{ anchor: LeaseRecord }> }>("aws-ingress-reconcile:pending")
+        ?.targets.map((target) => ({
+          id: target.anchor.id,
+          name: target.anchor.network?.awsSecurityGroupName,
+          region: target.anchor.region,
+        })),
+    ).toEqual([
+      {
+        id: "cbx_abcdef123456",
+        name: "managed-runner-a",
+        region: "eu-west-1",
+      },
+      {
+        id: "cbx_abcdef123457",
+        name: "managed-runner-b",
+        region: "eu-west-1",
+      },
+    ]);
+
+    await fleet.alarm();
+
+    expect(reconciled.toSorted()).toEqual(["managed-runner-a", "managed-runner-b"]);
     expect(storage.value("aws-ingress-reconcile:pending")).toBeUndefined();
   });
 

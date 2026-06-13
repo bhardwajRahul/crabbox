@@ -4,6 +4,8 @@ import { artifactUploadResponse, type ArtifactUploadRequest } from "./artifacts"
 import { isAdminRequest, sha256Hex } from "./auth";
 import {
   EC2SpotClient,
+  awsConfiguredSecurityGroupID,
+  awsManagedSecurityGroupName,
   awsLaunchCandidates,
   awsProvisioningErrorCategory,
   awsRegionCandidates,
@@ -18,6 +20,7 @@ import {
   azureLocationFor,
   leaseConfig,
   validCIDRs,
+  workspaceProviderKeyPrefix,
   type LeaseConfig,
   type LeaseConfigDefaults,
 } from "./config";
@@ -33,7 +36,6 @@ import {
   hetznerProvisioningFailureMayHaveResource,
   hetznerProvisioningFailureRetryable,
   sshPublicKeyIdentity,
-  workspaceProviderKeyPrefix,
 } from "./hetzner";
 import { errorMessage, json, pathParts, readJson, requestOwner } from "./http";
 import { githubAuthRoute, githubPortalLogin, githubPortalLogout } from "./oauth";
@@ -1187,11 +1189,7 @@ export class FleetCoordinator {
         sshHostPublicKey: hostKeys.publicKey,
       };
     }
-    if (
-      !workspaceID &&
-      config.provider === "hetzner" &&
-      config.providerKey.startsWith(workspaceProviderKeyPrefix)
-    ) {
+    if (!workspaceID && config.providerKey.startsWith(workspaceProviderKeyPrefix)) {
       return json(
         {
           error: "reserved_provider_key",
@@ -8655,6 +8653,7 @@ async function workspaceLeaseRequest(
       idleTimeoutSeconds: remainingSeconds,
       keep: false,
       sshPublicKey,
+      ...(workspace.provider === "aws" ? { awsSSHCIDRs: ["0.0.0.0/0"] } : {}),
     } satisfies LeaseRequest),
   });
 }
@@ -10943,6 +10942,7 @@ function awsIngressReconcileTargetKey(lease: LeaseRecord): string {
   return [
     lease.region ?? "",
     lease.network?.awsSecurityGroupID ?? "",
+    lease.network?.awsSecurityGroupName ?? "",
     lease.network?.awsSubnetID ?? "",
     lease.sshPort,
     ...(lease.sshFallbackPorts ?? []).toSorted(),
@@ -10955,15 +10955,26 @@ function awsIngressAccessTargetKey(
   ports: string[],
   env: Env,
 ): string {
+  const workspaceManaged = lease.providerKey.startsWith(workspaceProviderKeyPrefix);
   const securityGroupID =
-    lease.network?.awsSecurityGroupID || env.CRABBOX_AWS_SECURITY_GROUP_ID || "";
+    lease.network?.awsSecurityGroupID ||
+    (workspaceManaged ? "" : env.CRABBOX_AWS_SECURITY_GROUP_ID || "");
   const subnetID = lease.network?.awsSubnetID || env.CRABBOX_AWS_SUBNET_ID || "";
-  const group = securityGroupID ? `sg:${securityGroupID}` : `auto:${subnetID}`;
+  const securityGroupName = lease.network?.awsSecurityGroupName;
+  const group = securityGroupID
+    ? `sg:${securityGroupID}`
+    : securityGroupName
+      ? `managed:${subnetID}:${securityGroupName}`
+      : `auto:${subnetID}`;
   return [region, group, ...ports.toSorted()].join("\u0000");
 }
 
 function awsIngressGroupMetadataUnknown(lease: LeaseRecord, env: Env): boolean {
-  return !lease.network?.awsSecurityGroupID && !env.CRABBOX_AWS_SECURITY_GROUP_ID;
+  return (
+    !lease.network?.awsSecurityGroupID &&
+    !lease.network?.awsSecurityGroupName &&
+    (lease.providerKey.startsWith(workspaceProviderKeyPrefix) || !env.CRABBOX_AWS_SECURITY_GROUP_ID)
+  );
 }
 
 function awsIngressPortScopeKey(region: string, port: string): string {
@@ -11663,11 +11674,14 @@ export class AWSProvider implements CloudProvider {
       sourceCIDRs,
       sourceCIDRs.length > 0 || globalCIDRs.length > 0,
     );
+    const configuredSecurityGroupID = awsConfiguredSecurityGroupID(config, this.env);
     const nextLease: LeaseRecord = {
       ...nextLeaseWithSources,
       network: {
         ...nextLeaseWithSources.network,
-        ...(config.awsSGID ? { awsSecurityGroupID: config.awsSGID } : {}),
+        ...(configuredSecurityGroupID
+          ? { awsSecurityGroupID: configuredSecurityGroupID }
+          : { awsSecurityGroupName: awsManagedSecurityGroupName(config) }),
         ...(config.awsSubnetID ? { awsSubnetID: config.awsSubnetID } : {}),
       },
     };

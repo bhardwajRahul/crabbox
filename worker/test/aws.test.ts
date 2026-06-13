@@ -11,6 +11,7 @@ import {
   awsLaunchCandidates,
   awsMacHostIDFromDescribeHosts,
   awsMacHostOfferingsFromDescribeInstanceTypeOfferings,
+  awsManagedSecurityGroupName,
   awsProvisioningErrorCategory,
   awsQuotaCodeForMarket,
   awsQuotaPreflightAttempt,
@@ -36,6 +37,15 @@ afterEach(() => {
 });
 
 describe("aws provider", () => {
+  it("separates managed workspace and ordinary runner security groups", () => {
+    expect(awsManagedSecurityGroupName({ providerKey: "crabbox-steipete" })).toBe(
+      "crabbox-runners",
+    );
+    expect(awsManagedSecurityGroupName({ providerKey: "crabbox-workspace-0123456789ab" })).toBe(
+      "crabbox-workspaces",
+    );
+  });
+
   it("uses the EC2 query parameter names for security group creation", () => {
     const params = createSecurityGroupParams("crabbox-runners", "vpc-123");
 
@@ -52,6 +62,68 @@ describe("aws provider", () => {
       "TagSpecification.1.Tag.3.Value": "crabbox",
     });
     expect(params).not.toHaveProperty("Description");
+  });
+
+  it("keeps workspace ingress off the configured runner security group", async () => {
+    let describedGroupID = "";
+    let describedGroupName = "";
+    let authorizedCIDR = "";
+    let revokedWorld = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const params = new URLSearchParams(await request.clone().text());
+        const action = params.get("Action") ?? "";
+        if (action === "DescribeVpcs") {
+          return ec2XMLResponse(
+            "<DescribeVpcsResponse><vpcSet><item><vpcId>vpc-default</vpcId></item></vpcSet></DescribeVpcsResponse>",
+          );
+        }
+        if (action === "DescribeSecurityGroups") {
+          describedGroupID = params.get("GroupId.1") ?? "";
+          describedGroupName = params.get("Filter.1.Value.1") ?? "";
+          return ec2XMLResponse(
+            "<DescribeSecurityGroupsResponse><securityGroupInfo><item><groupId>sg-workspaces</groupId><groupName>crabbox-workspaces</groupName><ipPermissions /></item></securityGroupInfo></DescribeSecurityGroupsResponse>",
+          );
+        }
+        if (action === "RevokeSecurityGroupIngress") {
+          revokedWorld ||= params.get("IpPermissions.1.IpRanges.1.CidrIp") === "0.0.0.0/0";
+          return ec2XMLResponse("<RevokeSecurityGroupIngressResponse />");
+        }
+        if (action === "AuthorizeSecurityGroupIngress") {
+          authorizedCIDR =
+            params.get("IpPermissions.1.IpRanges.1.CidrIp") ?? params.get("CidrIp") ?? "";
+          return ec2XMLResponse("<AuthorizeSecurityGroupIngressResponse />");
+        }
+        return ec2XMLResponse(
+          `<Response><Errors><Error><Code>Unexpected</Code><Message>${action}</Message></Error></Errors></Response>`,
+          500,
+        );
+      }),
+    );
+    const client = new EC2SpotClient(
+      {
+        AWS_ACCESS_KEY_ID: "test",
+        AWS_SECRET_ACCESS_KEY: "secret",
+        CRABBOX_AWS_SECURITY_GROUP_ID: "sg-runners",
+      } as never,
+      "eu-west-1",
+    );
+
+    await client.refreshSSHIngress(
+      leaseConfig({
+        provider: "aws",
+        providerKey: "crabbox-workspace-0123456789ab",
+        awsSSHCIDRs: ["0.0.0.0/0"],
+        sshPublicKey: "ssh-ed25519 test",
+      }),
+    );
+
+    expect(describedGroupID).toBe("");
+    expect(describedGroupName).toBe("crabbox-workspaces");
+    expect(authorizedCIDR).toBe("0.0.0.0/0");
+    expect(revokedWorld).toBe(false);
   });
 
   it("recovers when another create wins the shared security group race", async () => {

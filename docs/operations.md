@@ -236,6 +236,11 @@ CRABBOX_AWS_ORPHAN_SWEEP_GRACE_SECONDS    optional; default 900
 CRABBOX_AWS_MAC_HOST_SWEEP_RELEASE optional; set 1 to release stale pending EC2 Mac hosts during orphan sweep
 ```
 
+AWS workspace bridges use a dedicated `crabbox-workspaces` security group, separate
+from ordinary runner ingress. Workers TCP egress has no published allowlist, so
+that group accepts key-only SSH from `0.0.0.0/0`; workspace keys are deployment
+specific, host keys are pinned, and leases expire automatically.
+
 Workspace leases currently use their hard TTL for provider expiry because the
 adapter does not yet receive a trustworthy activity signal. Workspace TTLs must
 be at least 1,800 seconds so a durable claim and ambiguity-recovery window both
