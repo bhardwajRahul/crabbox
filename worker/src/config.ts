@@ -46,6 +46,7 @@ export interface LeaseConfig {
   image: string;
   awsRegion: string;
   awsAMI: string;
+  awsUseStockImage?: boolean;
   awsPromotedAMIs: Record<string, string>;
   awsSnapshot: string;
   awsSGID: string;
@@ -267,6 +268,7 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
     image: input.image ?? linuxOSImage?.hetznerImage ?? "ubuntu-24.04",
     awsRegion: input.awsRegion ?? "eu-west-1",
     awsAMI: input.awsAMI ?? "",
+    awsUseStockImage: false,
     awsPromotedAMIs: {},
     awsSnapshot: input.awsSnapshot ?? "",
     awsSGID: input.awsSGID ?? "",

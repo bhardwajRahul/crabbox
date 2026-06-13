@@ -1185,6 +1185,7 @@ export class FleetCoordinator {
       }
       config = {
         ...config,
+        awsUseStockImage: config.provider === "aws",
         sshHostPrivateKey: hostKeys.privateKey,
         sshHostPublicKey: hostKeys.publicKey,
       };
@@ -11654,7 +11655,12 @@ export class AWSProvider implements CloudProvider {
   async prepareLeaseConfig(
     config: ReturnType<typeof leaseConfig>,
   ): Promise<ReturnType<typeof leaseConfig>> {
-    if (config.awsAMI || config.awsSnapshot) {
+    if (
+      config.awsAMI ||
+      config.awsSnapshot ||
+      config.awsUseStockImage ||
+      config.providerKey.startsWith(workspaceProviderKeyPrefix)
+    ) {
       return config;
     }
     if (config.target === "macos") {

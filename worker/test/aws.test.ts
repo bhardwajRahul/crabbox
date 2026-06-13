@@ -1217,6 +1217,7 @@ describe("aws provider", () => {
 
   it("sends compressed Linux cloud-init user data to RunInstances", async () => {
     let userData = "";
+    let runImage = "";
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1250,6 +1251,7 @@ describe("aws provider", () => {
         }
         if (action === "RunInstances") {
           userData = params.get("UserData") ?? "";
+          runImage = params.get("ImageId") ?? "";
           return ec2XMLResponse(`<?xml version="1.0" encoding="UTF-8"?>
 <RunInstancesResponse>
   <instancesSet>
@@ -1275,23 +1277,28 @@ describe("aws provider", () => {
         AWS_SECRET_ACCESS_KEY: "secret",
         CRABBOX_AWS_SECURITY_GROUP_ID: "sg-123",
         CRABBOX_AWS_SSH_CIDRS: "203.0.113.7/32",
+        CRABBOX_AWS_AMI: "ami-custom",
       } as never,
       "us-east-1",
     );
     await client.createServerWithFallback(
-      leaseConfig({
-        provider: "aws",
-        target: "linux",
-        class: "standard",
-        desktop: true,
-        browser: true,
-        sshPublicKey: `ssh-rsa ${"a".repeat(724)}`,
-      }),
+      {
+        ...leaseConfig({
+          provider: "aws",
+          target: "linux",
+          class: "standard",
+          desktop: true,
+          browser: true,
+          sshPublicKey: `ssh-rsa ${"a".repeat(724)}`,
+        }),
+        awsUseStockImage: true,
+      },
       "cbx_abcdef123456",
       "violet-prawn",
       "alice@example.com",
     );
 
+    expect(runImage).toBe("ami-linux");
     expect(atob(userData).length).toBeLessThan(16 * 1024);
     expect(await gunzipBase64(userData)).toContain("crabbox-configure-desktop-theme");
   });

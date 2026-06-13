@@ -4,7 +4,12 @@ import { Script, createContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EC2SpotClient } from "../src/aws";
-import { awsPromotedAMIConfigKey, leaseConfig, type LeaseConfig } from "../src/config";
+import {
+  awsPromotedAMIConfigKey,
+  leaseConfig,
+  workspaceProviderKeyPrefix,
+  type LeaseConfig,
+} from "../src/config";
 import {
   AWSProvider,
   FleetDurableObject,
@@ -587,8 +592,21 @@ describe("fleet lease identity and idle", () => {
     await Promise.all(
       (["hetzner", "aws", "azure", "gcp"] as const).map(async (provider) => {
         const storage = new MemoryStorage();
+        if (provider === "aws") {
+          storage.seed("image:aws:promoted:linux:x86_64:ubuntu26.04:eu-west-1", {
+            id: "ami-promoted",
+            name: "crabbox-promoted",
+            state: "available",
+            region: "eu-west-1",
+            target: "linux",
+            architecture: "x86_64",
+            os: "ubuntu:26.04",
+            promotedAt: "2026-06-13T00:00:00Z",
+          });
+        }
         let createdProvider = "";
         let createdAWSSSHCIDRs: string[] = [];
+        let createdAWSAMI = "";
         const fleet = testFleet(
           storage,
           {
@@ -596,6 +614,7 @@ describe("fleet lease identity and idle", () => {
               (config) => {
                 createdProvider = config.provider;
                 createdAWSSSHCIDRs = config.awsSSHCIDRs;
+                createdAWSAMI = config.awsAMI;
               },
               { provider },
             ),
@@ -626,6 +645,7 @@ describe("fleet lease identity and idle", () => {
         await fleet.alarm();
         expect(createdProvider).toBe(provider);
         expect(createdAWSSSHCIDRs).toEqual(provider === "aws" ? ["0.0.0.0/0"] : []);
+        expect(createdAWSAMI).toBe("");
         expect(storage.value<LeaseRecord>(`lease:${created.providerResourceId}`)?.provider).toBe(
           provider,
         );
@@ -12923,7 +12943,13 @@ function fakeProvider(
       if (prepared) {
         return prepared;
       }
-      if ((result.provider ?? config.provider) !== "aws" || config.awsAMI || config.awsSnapshot) {
+      if (
+        (result.provider ?? config.provider) !== "aws" ||
+        config.awsAMI ||
+        config.awsSnapshot ||
+        config.awsUseStockImage ||
+        config.providerKey.startsWith(workspaceProviderKeyPrefix)
+      ) {
         return config;
       }
       if (config.target === "macos") {

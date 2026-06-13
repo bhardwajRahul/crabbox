@@ -1145,7 +1145,7 @@ export class EC2SpotClient {
   }
 
   private async resolveAMI(config: LeaseConfig): Promise<string> {
-    if (config.awsAMI || this.env.CRABBOX_AWS_AMI) {
+    if (!config.awsUseStockImage && (config.awsAMI || this.env.CRABBOX_AWS_AMI)) {
       return config.awsAMI || this.env.CRABBOX_AWS_AMI || "";
     }
     if (config.target === "windows") {
