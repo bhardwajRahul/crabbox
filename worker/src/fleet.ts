@@ -176,6 +176,9 @@ const workspaceMinimumTTLSeconds =
   (workspaceProvisionClaimMs + workspaceProvisionRecoveryGraceMs) / 1000;
 const workspaceMaxRecordsPerOwner = 100;
 const workspaceTerminalRetentionMs = 24 * 60 * 60_000;
+const workspacePrewarmOwner = "crabbox-internal-prewarm";
+const workspacePrewarmReplacementLeadMs = 5 * 60_000;
+const workspacePrewarmRetryDelayMs = 5 * 60_000;
 const workspaceTerminalMaxBufferedBytes = 1024 * 1024;
 const workspaceTerminalMaxBufferedFrames = 1024;
 const workspaceTerminalMaxPerWorkspace = 4;
@@ -340,6 +343,7 @@ interface WorkspaceRecord {
   idleTimeoutSeconds: number;
   createdAt: string;
   updatedAt: string;
+  prewarm?: boolean;
   sshHostKeySha256?: string;
   provisionClaim?: string;
   provisionClaimExpiresAt?: string;
@@ -1325,7 +1329,9 @@ export class FleetCoordinator {
   async alarm(): Promise<void> {
     await this.expireLeases();
     await this.reconcileRuntimeAdapterDeletes();
+    await this.maintainWorkspacePrewarm();
     await this.provisionPendingWorkspace();
+    await this.maintainWorkspacePrewarm();
     await this.pruneTerminalWorkspaces();
     await this.runAzureDeferredCleanups();
     await this.runAWSOrphanSweepIfDue("alarm");
@@ -1888,6 +1894,9 @@ export class FleetCoordinator {
       if (!existing) {
         return undefined;
       }
+      if (existing.prewarm) {
+        return notFound();
+      }
       await this.state.storage.put(workspaceLeaseReservationKey(existing.leaseID), true);
       const conflict = workspaceConflictResponse(
         existing,
@@ -1933,6 +1942,9 @@ export class FleetCoordinator {
     const reservation = await this.state.runExclusive(async () => {
       const current = await this.state.storage.get<WorkspaceRecord>(key);
       if (current) {
+        if (current.prewarm) {
+          return { response: notFound() };
+        }
         await this.state.storage.put(workspaceLeaseReservationKey(current.leaseID), true);
         const conflict = workspaceConflictResponse(
           current,
@@ -1950,7 +1962,7 @@ export class FleetCoordinator {
       }
       const workspaces = await this.state.storage.list<WorkspaceRecord>({ prefix: "workspace:" });
       const ownerWorkspaceCount = [...workspaces.values()].filter(
-        (candidate) => candidate.owner === owner && candidate.org === org,
+        (candidate) => !candidate.prewarm && candidate.owner === owner && candidate.org === org,
       ).length;
       if (ownerWorkspaceCount >= workspaceMaxRecordsPerOwner) {
         return {
@@ -1962,6 +1974,24 @@ export class FleetCoordinator {
             { status: 429 },
           ),
         };
+      }
+      const prewarmed = await this.adoptPrewarmedWorkspace({
+        id,
+        owner,
+        org,
+        profile,
+        repo,
+        branch,
+        command,
+        provider,
+        class: machineClass,
+        desktop,
+        ttlSeconds,
+        idleTimeoutSeconds,
+        workspaces,
+      });
+      if (prewarmed) {
+        return prewarmed;
       }
       const leaseID = await this.allocateWorkspaceLeaseID();
       const nowISO = new Date().toISOString();
@@ -1989,11 +2019,211 @@ export class FleetCoordinator {
     if ("response" in reservation) {
       return reservation.response;
     }
-    if (!reservation.lease && !reservation.record.releaseRequestedAt && !reservation.record.error) {
-      await this.state.runExclusive(() => this.scheduleAlarm());
-    }
+    await this.maintainWorkspacePrewarm();
+    await this.state.runExclusive(() => this.scheduleAlarm());
     return json(workspaceResponse(reservation.record, reservation.lease, this.env), {
       status: workspaceHTTPStatus(reservation.record, reservation.lease),
+    });
+  }
+
+  private async adoptPrewarmedWorkspace(input: {
+    id: string;
+    owner: string;
+    org: string;
+    profile: string;
+    repo: string;
+    branch: string;
+    command: string;
+    provider: Provider;
+    class: string;
+    desktop: boolean;
+    ttlSeconds: number;
+    idleTimeoutSeconds: number;
+    workspaces: Map<string, WorkspaceRecord>;
+  }): Promise<{ record: WorkspaceRecord; lease: LeaseRecord } | undefined> {
+    if (workspacePrewarmCount(this.env.CRABBOX_WORKSPACE_PREWARM_COUNT) === 0) {
+      return undefined;
+    }
+    const leases = await this.state.storage.list<LeaseRecord>({ prefix: "lease:" });
+    const now = new Date();
+    const candidate = [...input.workspaces.entries()]
+      .filter(([, workspace]) => {
+        const lease = leases.get(leaseKey(workspace.leaseID));
+        return (
+          workspace.prewarm === true &&
+          workspace.org === input.org &&
+          workspacePrewarmMatches(workspace, input) &&
+          workspaceStatus(workspace, lease) === "ready" &&
+          Boolean(workspace.sshHostKeySha256) &&
+          Date.parse(lease?.expiresAt ?? "") > now.getTime() + workspacePrewarmReplacementLeadMs
+        );
+      })
+      .toSorted((a, b) => Date.parse(a[1].createdAt) - Date.parse(b[1].createdAt))[0];
+    if (!candidate) {
+      return undefined;
+    }
+    const [candidateKey, prewarm] = candidate;
+    const lease = structuredClone(leases.get(leaseKey(prewarm.leaseID)));
+    if (!lease || !workspaceOwnsLease(prewarm, lease)) {
+      return undefined;
+    }
+    const expiresAt = new Date(now.getTime() + input.ttlSeconds * 1000);
+    const createdAt = Date.parse(lease.createdAt);
+    const adoptedTTLSeconds = Math.max(1, Math.ceil((expiresAt.getTime() - createdAt) / 1000));
+    lease.workspaceID = input.id;
+    lease.owner = input.owner;
+    lease.org = input.org;
+    lease.profile = input.profile;
+    lease.ttlSeconds = adoptedTTLSeconds;
+    lease.idleTimeoutSeconds = adoptedTTLSeconds;
+    lease.lastTouchedAt = now.toISOString();
+    lease.updatedAt = now.toISOString();
+    lease.expiresAt = expiresAt.toISOString();
+    delete lease.share;
+    const cost = leaseCost(
+      this.env,
+      input.provider,
+      lease.serverType,
+      adoptedTTLSeconds,
+      lease.estimatedHourlyUSD,
+    );
+    lease.estimatedHourlyUSD = cost.hourlyUSD;
+    lease.maxEstimatedUSD = cost.maxUSD;
+    const otherLeases = [...leases.values()].filter(
+      (candidateLease) => candidateLease.id !== lease.id,
+    );
+    if (enforceCostLimits(otherLeases, lease, costLimits(this.env), now)) {
+      return undefined;
+    }
+    const nowISO = now.toISOString();
+    const record: WorkspaceRecord = {
+      id: input.id,
+      leaseID: lease.id,
+      owner: input.owner,
+      org: input.org,
+      profile: input.profile,
+      repo: input.repo,
+      branch: input.branch,
+      command: input.command,
+      provider: input.provider,
+      class: input.class,
+      desktop: input.desktop,
+      ttlSeconds: input.ttlSeconds,
+      idleTimeoutSeconds: input.idleTimeoutSeconds,
+      createdAt: nowISO,
+      updatedAt: nowISO,
+      sshHostKeySha256: prewarm.sshHostKeySha256!,
+    };
+    await this.putLease(lease);
+    await this.state.storage.put(workspaceKey(record.owner, record.org, record.id), record);
+    await this.state.storage.delete(candidateKey);
+    return { record, lease };
+  }
+
+  private async maintainWorkspacePrewarm(): Promise<void> {
+    const count = workspacePrewarmCount(this.env.CRABBOX_WORKSPACE_PREWARM_COUNT);
+    await this.state.runExclusive(async () => {
+      const workspaces = await this.state.storage.list<WorkspaceRecord>({ prefix: "workspace:" });
+      const leases = await this.state.storage.list<LeaseRecord>({ prefix: "lease:" });
+      const now = Date.now();
+      const templates = new Map<string, WorkspaceRecord>();
+      for (const workspace of workspaces.values()) {
+        if (workspace.prewarm) continue;
+        const status = workspaceStatus(workspace, leases.get(leaseKey(workspace.leaseID)));
+        if (status !== "provisioning" && status !== "ready") continue;
+        const shape = workspacePrewarmShape(workspace);
+        const current = templates.get(shape);
+        if (!current || Date.parse(workspace.createdAt) > Date.parse(current.createdAt)) {
+          templates.set(shape, workspace);
+        }
+      }
+      let changed = false;
+      const usableByShape = new Map<string, WorkspaceRecord[]>();
+      const failedByShape = new Map<string, WorkspaceRecord[]>();
+      const releaseUpdates: Array<[string, WorkspaceRecord]> = [];
+      for (const [key, workspace] of workspaces) {
+        if (!workspace.prewarm) continue;
+        const lease = leases.get(leaseKey(workspace.leaseID));
+        const shape = workspacePrewarmShape(workspace);
+        const template = templates.get(shape);
+        const status = workspaceStatus(workspace, lease);
+        const expiresSoon =
+          status === "ready" &&
+          Date.parse(lease?.expiresAt ?? "") <= now + workspacePrewarmReplacementLeadMs;
+        const usable =
+          count > 0 &&
+          template &&
+          workspacePrewarmMatches(workspace, template) &&
+          (status === "provisioning" || status === "ready") &&
+          !expiresSoon;
+        if (usable) {
+          const current = usableByShape.get(shape) ?? [];
+          current.push(workspace);
+          usableByShape.set(shape, current);
+          continue;
+        }
+        if (
+          (status === "failed" || workspace.error || lease?.state === "failed") &&
+          template &&
+          workspacePrewarmMatches(workspace, template)
+        ) {
+          const current = failedByShape.get(shape) ?? [];
+          current.push(workspace);
+          failedByShape.set(shape, current);
+        }
+        if (!workspace.releaseRequestedAt) {
+          workspace.releaseRequestedAt = new Date(now).toISOString();
+          workspace.updatedAt = workspace.releaseRequestedAt;
+          delete workspace.reconcileAfter;
+          releaseUpdates.push([key, workspace]);
+          changed = true;
+        }
+      }
+      await Promise.all(
+        releaseUpdates.map(([key, workspace]) => this.state.storage.put(key, workspace)),
+      );
+      if (count > 0) {
+        for (const [shape, template] of templates) {
+          const usable = usableByShape.get(shape) ?? [];
+          const recentFailure = (failedByShape.get(shape) ?? []).some(
+            (workspace) => Date.parse(workspace.updatedAt) > now - workspacePrewarmRetryDelayMs,
+          );
+          if (recentFailure) continue;
+          for (let index = usable.length; index < count; index += 1) {
+            const id = newWorkspacePrewarmID();
+            // oxlint-disable-next-line eslint/no-await-in-loop -- each ID must be reserved before allocating the next spare.
+            const leaseID = await this.allocateWorkspaceLeaseID();
+            const nowISO = new Date(now).toISOString();
+            const record: WorkspaceRecord = {
+              id,
+              leaseID,
+              owner: workspacePrewarmOwner,
+              org: template.org,
+              profile: template.profile,
+              repo: "",
+              branch: "main",
+              command: "exec bash -l",
+              provider: template.provider,
+              class: template.class,
+              desktop: template.desktop,
+              ttlSeconds: template.ttlSeconds,
+              idleTimeoutSeconds: template.idleTimeoutSeconds,
+              createdAt: nowISO,
+              updatedAt: nowISO,
+              prewarm: true,
+            };
+            // oxlint-disable-next-line eslint/no-await-in-loop -- preserve serialized ID allocation and reservation.
+            await Promise.all([
+              this.state.storage.put(workspaceKey(record.owner, record.org, record.id), record),
+              this.state.storage.put(workspaceLeaseReservationKey(record.leaseID), true),
+            ]);
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        await this.scheduleAlarm();
+      }
     });
   }
 
@@ -2424,7 +2654,7 @@ export class FleetCoordinator {
     if (method === "GET" && action === undefined) {
       return await this.state.runExclusive(async () => {
         const record = await this.state.storage.get<WorkspaceRecord>(key);
-        if (!record) {
+        if (!record || record.prewarm) {
           return notFound();
         }
         const lease = await this.getLease(record.leaseID);
@@ -2433,7 +2663,7 @@ export class FleetCoordinator {
     }
     if (method === "POST" && action === "connections" && connection === "desktop") {
       const record = await this.state.storage.get<WorkspaceRecord>(key);
-      if (!record) {
+      if (!record || record.prewarm) {
         return notFound();
       }
       return json(
@@ -2447,7 +2677,7 @@ export class FleetCoordinator {
     if (method === "DELETE" && action === undefined) {
       const release = await this.state.runExclusive(async () => {
         const record = await this.state.storage.get<WorkspaceRecord>(key);
-        if (!record) {
+        if (!record || record.prewarm) {
           return { response: notFound() };
         }
         const lease = await this.getLease(record.leaseID);
@@ -2508,6 +2738,7 @@ export class FleetCoordinator {
       const workspace = await this.state.storage.get<WorkspaceRecord>(key);
       if (
         !workspace ||
+        workspace.prewarm ||
         workspace.id !== workspaceID ||
         workspace.owner !== owner ||
         workspace.org !== org
@@ -8289,6 +8520,40 @@ export class FleetCoordinator {
     if (workspaceRetentionAlarm !== undefined) {
       alarmTimes.push(workspaceRetentionAlarm);
     }
+    if (workspacePrewarmCount(this.env.CRABBOX_WORKSPACE_PREWARM_COUNT) > 0) {
+      const activeWorkspaceOrgs = new Set(
+        [...workspaces.values()]
+          .filter((workspace) => !workspace.prewarm)
+          .filter((workspace) => {
+            const status = workspaceStatus(workspace, leasesByID.get(workspace.leaseID));
+            return status === "provisioning" || status === "ready";
+          })
+          .map((workspace) => workspace.org),
+      );
+      const workspacePrewarmAlarm = [...workspaces.values()]
+        .filter((workspace) => workspace.prewarm && !workspace.releaseRequestedAt)
+        .map((workspace) => leasesByID.get(workspace.leaseID))
+        .filter((lease): lease is LeaseRecord => lease?.state === "active")
+        .map((lease) => Date.parse(lease.expiresAt) - workspacePrewarmReplacementLeadMs)
+        .filter((time) => time > now)
+        .toSorted((left, right) => left - right)[0];
+      if (workspacePrewarmAlarm !== undefined) {
+        alarmTimes.push(workspacePrewarmAlarm);
+      }
+      const workspacePrewarmRetryAlarm = [...workspaces.values()]
+        .filter(
+          (workspace) =>
+            workspace.prewarm &&
+            activeWorkspaceOrgs.has(workspace.org) &&
+            Boolean(workspace.error || leasesByID.get(workspace.leaseID)?.state === "failed"),
+        )
+        .map((workspace) => Date.parse(workspace.updatedAt) + workspacePrewarmRetryDelayMs)
+        .filter(Number.isFinite)
+        .toSorted((left, right) => left - right)[0];
+      if (workspacePrewarmRetryAlarm !== undefined) {
+        alarmTimes.push(Math.max(now + 1, workspacePrewarmRetryAlarm));
+      }
+    }
     const orphanSweepAlarm = await this.nextAWSOrphanSweepAlarmTime();
     if (orphanSweepAlarm !== undefined) {
       alarmTimes.push(orphanSweepAlarm);
@@ -10208,6 +10473,10 @@ function validWorkspaceID(value: string | undefined): value is string {
   );
 }
 
+function newWorkspacePrewarmID(): string {
+  return `prewarm-${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+}
+
 function workspaceManagedLeaseResponse(): Response {
   return json(
     {
@@ -10330,6 +10599,36 @@ function workspaceCommand(value: string | undefined): string | undefined {
 function workspaceClass(configured: string | undefined): string {
   const machineClass = configured?.trim() || "standard";
   return ["standard", "fast", "large", "beast"].includes(machineClass) ? machineClass : "standard";
+}
+
+function workspacePrewarmCount(value: string | undefined): number {
+  const parsed = Number.parseInt(value?.trim() ?? "", 10);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 4)) : 0;
+}
+
+function workspacePrewarmMatches(
+  workspace: WorkspaceRecord,
+  target: Pick<WorkspaceRecord, "org" | "profile" | "provider" | "class" | "desktop">,
+): boolean {
+  return (
+    workspace.org === target.org &&
+    workspace.profile === target.profile &&
+    workspace.provider === target.provider &&
+    workspace.class === target.class &&
+    workspace.desktop === target.desktop
+  );
+}
+
+function workspacePrewarmShape(
+  workspace: Pick<WorkspaceRecord, "org" | "profile" | "provider" | "class" | "desktop">,
+): string {
+  return JSON.stringify([
+    workspace.org,
+    workspace.profile,
+    workspace.provider,
+    workspace.class,
+    workspace.desktop,
+  ]);
 }
 
 function workspaceSeconds(value: number | undefined, fallback: number): number | undefined {

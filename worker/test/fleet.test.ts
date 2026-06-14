@@ -2774,6 +2774,177 @@ describe("fleet lease identity and idle", () => {
     expect(providerReleases).toBe(1);
   });
 
+  it("keeps an organization-wide workspace spare while demand is active", async () => {
+    type StoredWorkspace = {
+      id: string;
+      leaseID: string;
+      prewarm?: boolean;
+      releaseRequestedAt?: string;
+    };
+    const storage = new MemoryStorage();
+    let providerCreates = 0;
+    let providerReleases = 0;
+    const fleet = testFleet(
+      storage,
+      {
+        hetzner: fakeProvider(
+          () => {
+            providerCreates += 1;
+          },
+          {},
+          async () => {
+            providerReleases += 1;
+          },
+        ),
+      },
+      {
+        CRABBOX_WORKSPACE_PREWARM_COUNT: "1",
+        CRABBOX_WORKSPACE_SSH_PUBLIC_KEY: "ssh-ed25519 workspace-test",
+      },
+    );
+    const aliceHeaders = {
+      "x-crabbox-owner": "alice@example.com",
+      "x-crabbox-org": "example-org",
+    };
+    const bobHeaders = {
+      "x-crabbox-owner": "bob@example.com",
+      "x-crabbox-org": "example-org",
+    };
+    const workspaceBody = {
+      runtime: "crabbox",
+      ttlSeconds: 1800,
+      idleTimeoutSeconds: 360,
+      capabilities: { desktop: false },
+    };
+
+    const aliceCreate = await fleet.fetch(
+      request("POST", "/v1/workspaces", {
+        headers: aliceHeaders,
+        body: { ...workspaceBody, id: "fleet-prewarm-alice" },
+      }),
+    );
+    expect(aliceCreate.status).toBe(202);
+    await fleet.alarm();
+    expect(providerCreates).toBe(2);
+
+    const workspacesAfterWarmup = await storage.list<StoredWorkspace>({
+      prefix: "workspace:",
+    });
+    const warm = [...workspacesAfterWarmup.values()].find((workspace) => workspace.prewarm);
+    expect(warm).toBeDefined();
+    const warmLeaseID = warm!.leaseID;
+    const warmLease = storage.value<LeaseRecord>(`lease:${warmLeaseID}`)!;
+    expect(storage.alarm()).toBe(Date.parse(warmLease.expiresAt) - 5 * 60_000);
+    const hidden = await fleet.fetch(
+      request("GET", `/v1/workspaces/${warm!.id}`, {
+        headers: {
+          "x-crabbox-owner": "crabbox-internal-prewarm",
+          "x-crabbox-org": "example-org",
+        },
+      }),
+    );
+    expect(hidden.status).toBe(404);
+
+    const bobCreate = await fleet.fetch(
+      request("POST", "/v1/workspaces", {
+        headers: bobHeaders,
+        body: { ...workspaceBody, id: "fleet-prewarm-bob" },
+      }),
+    );
+    expect(bobCreate.status).toBe(200);
+    await expect(bobCreate.json()).resolves.toMatchObject({
+      providerResourceId: warmLeaseID,
+      status: "ready",
+    });
+    expect(providerCreates).toBe(2);
+    expect(storage.value<LeaseRecord>(`lease:${warmLeaseID}`)).toMatchObject({
+      owner: "bob@example.com",
+      org: "example-org",
+      workspaceID: "fleet-prewarm-bob",
+    });
+
+    await fleet.alarm();
+    expect(providerCreates).toBe(3);
+    const replenished = [
+      ...(await storage.list<StoredWorkspace>({ prefix: "workspace:" })).values(),
+    ].filter((workspace) => workspace.prewarm && !workspace.releaseRequestedAt);
+    expect(replenished).toHaveLength(1);
+
+    await fleet.fetch(
+      request("DELETE", "/v1/workspaces/fleet-prewarm-alice", { headers: aliceHeaders }),
+    );
+    await fleet.fetch(
+      request("DELETE", "/v1/workspaces/fleet-prewarm-bob", { headers: bobHeaders }),
+    );
+    await fleet.alarm();
+    expect(providerReleases).toBe(3);
+    const activeSpares = [
+      ...(await storage.list<StoredWorkspace>({ prefix: "workspace:" })).values(),
+    ].filter((workspace) => workspace.prewarm && !workspace.releaseRequestedAt);
+    expect(activeSpares).toHaveLength(0);
+  });
+
+  it("keeps separate workspace spares for active profiles in one organization", async () => {
+    type StoredWorkspace = {
+      id: string;
+      profile: string;
+      prewarm?: boolean;
+      releaseRequestedAt?: string;
+    };
+    const storage = new MemoryStorage();
+    let providerCreates = 0;
+    const fleet = testFleet(
+      storage,
+      {
+        hetzner: fakeProvider(() => {
+          providerCreates += 1;
+        }),
+      },
+      {
+        CRABBOX_WORKSPACE_PREWARM_COUNT: "1",
+        CRABBOX_WORKSPACE_SSH_PUBLIC_KEY: "ssh-ed25519 workspace-test",
+      },
+    );
+    const headers = {
+      "x-crabbox-owner": "alice@example.com",
+      "x-crabbox-org": "example-org",
+    };
+    const body = {
+      runtime: "crabbox",
+      ttlSeconds: 1800,
+      idleTimeoutSeconds: 360,
+      capabilities: { desktop: false },
+    };
+
+    const defaultCreate = await fleet.fetch(
+      request("POST", "/v1/workspaces", {
+        headers,
+        body: { ...body, id: "fleet-prewarm-default", profile: "default" },
+      }),
+    );
+    expect(defaultCreate.status).toBe(202);
+    await fleet.alarm();
+
+    const buildCreate = await fleet.fetch(
+      request("POST", "/v1/workspaces", {
+        headers,
+        body: { ...body, id: "fleet-prewarm-build", profile: "build" },
+      }),
+    );
+    expect(buildCreate.status).toBe(202);
+    await fleet.alarm();
+    expect(providerCreates).toBe(4);
+
+    const activeSpares = [
+      ...(await storage.list<StoredWorkspace>({ prefix: "workspace:" })).values(),
+    ].filter((workspace) => workspace.prewarm && !workspace.releaseRequestedAt);
+    expect(activeSpares).toHaveLength(2);
+    expect(activeSpares.map((workspace) => workspace.profile).toSorted()).toEqual([
+      "build",
+      "default",
+    ]);
+  });
+
   it("routes workspaces through each configured brokered provider", async () => {
     await Promise.all(
       (["hetzner", "aws", "azure", "gcp"] as const).map(async (provider) => {
