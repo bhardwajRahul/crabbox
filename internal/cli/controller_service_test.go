@@ -1326,7 +1326,6 @@ func TestControllerDeleteCancelsActiveWarmup(t *testing.T) {
 	runner.blockWarmup = make(chan struct{})
 	service, cancel := testControllerService(t, runner, 1)
 	defer cancel()
-	service.opts.CreateTimeout = 100 * time.Millisecond
 	created := controllerHTTP(service, http.MethodPost, "/v1/workspaces", "test-token", controllerWorkspaceRequest{ID: "active-cancel-box"})
 	if created.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d", created.Code)
@@ -1336,6 +1335,7 @@ func TestControllerDeleteCancelsActiveWarmup(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("warmup did not start")
 	}
+	ageControllerCreateRecoveryWindow(t, service, "active-cancel-box")
 	deleted := controllerHTTP(service, http.MethodDelete, "/v1/workspaces/active-cancel-box", "test-token", nil)
 	if deleted.Code != http.StatusAccepted {
 		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
@@ -1359,7 +1359,6 @@ func TestControllerExpiryTransitionCancelsActiveWarmup(t *testing.T) {
 	runner.blockWarmup = make(chan struct{})
 	service, cancel := testControllerService(t, runner, 1)
 	defer cancel()
-	service.opts.CreateTimeout = 100 * time.Millisecond
 	created := controllerHTTP(service, http.MethodPost, "/v1/workspaces", "test-token", controllerWorkspaceRequest{ID: "active-expiry-box"})
 	if created.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d", created.Code)
@@ -1369,6 +1368,7 @@ func TestControllerExpiryTransitionCancelsActiveWarmup(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("warmup did not start")
 	}
+	ageControllerCreateRecoveryWindow(t, service, "active-expiry-box")
 	if err := service.updateRecord("active-expiry-box", func(record *controllerWorkspaceRecord) bool {
 		record.Status = "stopping"
 		record.StatusAfterCleanup = "expired"
@@ -3482,6 +3482,17 @@ func waitControllerWorkspaceStatus(t *testing.T, service *controllerService, id,
 	record, _ := service.workspace(id)
 	t.Fatalf("workspace %s status=%q want=%q message=%q", id, record.Status, want, record.Message)
 	return controllerWorkspaceRecord{}
+}
+
+func ageControllerCreateRecoveryWindow(t *testing.T, service *controllerService, id string) {
+	t.Helper()
+	preparedAt := service.now().UTC().Add(-service.opts.CreateTimeout - time.Second).Format(time.RFC3339Nano)
+	if err := service.updateRecord(id, func(record *controllerWorkspaceRecord) bool {
+		record.CreatePreparedAt = preparedAt
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitControllerWorkspaceInactive(t *testing.T, service *controllerService, id string) {

@@ -330,22 +330,24 @@ type execRecord struct {
 // fakeAPI is an httptest-backed OpenComputer API. It records every request and
 // lets tests script exec/run replies by call order.
 type fakeAPI struct {
-	mu            sync.Mutex
-	server        *httptest.Server
-	requests      []recordedRequest
-	execs         []execRecord
-	execReply     []execRunResult // popped in order; last/zero reused when empty
-	sandboxID     string
-	metadata      map[string]string
-	tags          map[string]string
-	listState     string
-	listStatus    int
-	getStatusCode int // when non-zero, GET /api/sandboxes/:id returns this code
-	blockGet      bool
-	blockDelete   bool
-	deleteStatus  int
-	uploadStatus  int
-	blockUpload   bool
+	mu             sync.Mutex
+	server         *httptest.Server
+	requests       []recordedRequest
+	execs          []execRecord
+	execReply      []execRunResult // popped in order; last/zero reused when empty
+	sandboxID      string
+	metadata       map[string]string
+	tags           map[string]string
+	listState      string
+	listStatus     int
+	getStatusCode  int // when non-zero, GET /api/sandboxes/:id returns this code
+	blockGet       bool
+	blockDelete    bool
+	deleteStatus   int
+	uploadStatus   int
+	blockUpload    bool
+	uploadStarted  chan struct{}
+	uploadCanceled chan struct{}
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -416,7 +418,13 @@ func (f *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"tags": tags})
 	case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/files"):
 		if f.blockUpload {
+			if f.uploadStarted != nil {
+				close(f.uploadStarted)
+			}
 			<-r.Context().Done()
+			if f.uploadCanceled != nil {
+				close(f.uploadCanceled)
+			}
 			return
 		}
 		if f.uploadStatus != 0 {
@@ -685,18 +693,41 @@ func TestRunPerformsArchiveSyncViaFileAPI(t *testing.T) {
 func TestSyncHonorsConfiguredTimeout(t *testing.T) {
 	f := newFakeAPI(t)
 	f.blockUpload = true
+	f.uploadStarted = make(chan struct{})
+	f.uploadCanceled = make(chan struct{})
 	backend := newAPIBackend(t, f)
-	backend.cfg.Sync.Timeout = 50 * time.Millisecond
-	started := time.Now()
+	backend.cfg.Sync.Timeout = 500 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repoRoot := newGitRepo(t)
+	result := make(chan error, 1)
+	go func() {
+		_, err := backend.Run(ctx, RunRequest{
+			Repo: Repo{Name: "carbbox", Root: repoRoot}, Command: []string{"true"}, Keep: true,
+		})
+		result <- err
+	}()
 
-	_, err := backend.Run(context.Background(), RunRequest{
-		Repo: Repo{Name: "carbbox", Root: newGitRepo(t)}, Command: []string{"true"}, Keep: true,
-	})
+	select {
+	case <-f.uploadStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("upload did not start")
+	}
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("sync timeout did not bound upload")
+	}
 	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("Run err=%v, want sync timeout", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("Run took %s, sync timeout should bound upload", elapsed)
+	select {
+	case <-f.uploadCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed-out upload request context was not canceled")
 	}
 	var sawRemoteCleanup bool
 	for _, exec := range f.allExecs() {
