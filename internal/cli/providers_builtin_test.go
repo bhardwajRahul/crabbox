@@ -36,6 +36,7 @@ func init() {
 	RegisterProvider(testModalProvider{})
 	RegisterProvider(testCloudflareProvider{})
 	RegisterProvider(testCloudflareDynamicWorkersProvider{})
+	RegisterProvider(testAgentSandboxProvider{})
 	RegisterProvider(testSpritesProvider{})
 	RegisterProvider(testLocalContainerProvider{})
 	RegisterProvider(testAppleVZProvider{})
@@ -1438,6 +1439,79 @@ type testCloudflareDynamicWorkersBackend struct {
 
 func (testCloudflareDynamicWorkersBackend) Cleanup(context.Context, CleanupRequest) error {
 	return nil
+}
+
+type testAgentSandboxProvider struct{}
+
+func (testAgentSandboxProvider) Name() string      { return "agent-sandbox" }
+func (testAgentSandboxProvider) Aliases() []string { return nil }
+func (testAgentSandboxProvider) Spec() ProviderSpec {
+	return ProviderSpec{
+		Name:        "agent-sandbox",
+		Kind:        ProviderKindDelegatedRun,
+		Targets:     []TargetSpec{{OS: targetLinux}},
+		Features:    FeatureSet{FeatureArchiveSync, FeatureCleanup},
+		Coordinator: CoordinatorNever,
+	}
+}
+func (testAgentSandboxProvider) RegisterFlags(fs *flag.FlagSet, defaults Config) any {
+	return struct {
+		Kubeconfig      *string
+		Context         *string
+		Namespace       *string
+		WarmPool        *string
+		Container       *string
+		ExecTimeoutSecs *int
+	}{
+		Kubeconfig:      fs.String("agent-sandbox-kubeconfig", defaults.AgentSandbox.Kubeconfig, ""),
+		Context:         fs.String("agent-sandbox-context", defaults.AgentSandbox.Context, ""),
+		Namespace:       fs.String("agent-sandbox-namespace", defaults.AgentSandbox.Namespace, ""),
+		WarmPool:        fs.String("agent-sandbox-warm-pool", defaults.AgentSandbox.WarmPool, ""),
+		Container:       fs.String("agent-sandbox-container", defaults.AgentSandbox.Container, ""),
+		ExecTimeoutSecs: fs.Int("agent-sandbox-exec-timeout-secs", defaults.AgentSandbox.ExecTimeoutSecs, ""),
+	}
+}
+func (testAgentSandboxProvider) ApplyFlags(cfg *Config, fs *flag.FlagSet, values any) error {
+	v, ok := values.(struct {
+		Kubeconfig      *string
+		Context         *string
+		Namespace       *string
+		WarmPool        *string
+		Container       *string
+		ExecTimeoutSecs *int
+	})
+	if !ok {
+		return nil
+	}
+	if flagWasSet(fs, "agent-sandbox-kubeconfig") {
+		cfg.AgentSandbox.Kubeconfig = expandUserPath(*v.Kubeconfig)
+	}
+	if flagWasSet(fs, "agent-sandbox-context") {
+		cfg.AgentSandbox.Context = *v.Context
+	}
+	if flagWasSet(fs, "agent-sandbox-namespace") {
+		cfg.AgentSandbox.Namespace = *v.Namespace
+	}
+	if flagWasSet(fs, "agent-sandbox-warm-pool") {
+		cfg.AgentSandbox.WarmPool = *v.WarmPool
+	}
+	if flagWasSet(fs, "agent-sandbox-container") {
+		cfg.AgentSandbox.Container = *v.Container
+	}
+	if flagWasSet(fs, "agent-sandbox-exec-timeout-secs") {
+		cfg.AgentSandbox.ExecTimeoutSecs = *v.ExecTimeoutSecs
+	}
+	return nil
+}
+func (p testAgentSandboxProvider) Configure(cfg Config, rt Runtime) (Backend, error) {
+	return testDoctorDelegatedBackend{testDelegatedBackend{spec: p.Spec()}}, nil
+}
+func (p testAgentSandboxProvider) ConfigureDoctor(cfg Config, rt Runtime) (DoctorBackend, error) {
+	backend, err := p.Configure(cfg, rt)
+	if err != nil {
+		return nil, err
+	}
+	return backend.(DoctorBackend), nil
 }
 
 type testSpritesProvider struct{}

@@ -12,12 +12,14 @@
 - Added `provider: ovh` for direct OVHcloud Public Cloud Linux SSH leases with signed API authentication, local claim-backed ownership, guarded recovery, and live lifecycle coverage. Thanks @coygeek.
 - Added `provider: codesandbox` for delegated CodeSandbox Linux environments with archive sync, retained lifecycle, pause/resume, preview URLs, exact SDK pinning, truthful running-state checks, command exit propagation, and live lifecycle coverage; archive-sync orchestration is now shared across CodeSandbox, OpenComputer, OpenSandbox, Superserve, and Vercel Sandbox. Thanks @coygeek.
 - Added `provider: cloudflare-dynamic-workers` for authenticated Worker-runtime module execution through Cloudflare Dynamic Workers, including blocked-by-default egress, stable caching, durable run metadata, lifecycle commands, and isolated live smoke coverage. Thanks @coygeek.
+- Added `provider: agent-sandbox` for delegated Linux runs through Agent Sandbox `v0.5.0rc1` `v1beta1` warm pools, using the operator's `kubectl` for dependency-light discovery, lifecycle, archive sync, exec, guarded ownership cleanup, and live smoke coverage. Thanks @coygeek.
 - Added `provider: vercel-sandbox` for delegated Linux microVM runs through the official Vercel Sandbox SDK, including archive sync, streamed output, retained-session resume, ownership-guarded lifecycle operations, and guarded live smoke coverage. Thanks @coygeek.
 - Added generic Job evidence fields plus bounded Islo single-file `--require-artifact` and `--download` support, with provider capability gating and secret-safe archive upload errors. Thanks @zozo123.
 - Added owner-scoped outbound runtime-adapter relays so registered workspaces can be created and deleted through a provider-neutral lifecycle API without exposing the provider control plane, including confirmed Delete actions in the portal.
 
 ### Fixed
 
+- Hardened Agent Sandbox repository-config workload and workdir selection, mount-safe replacement sync, pinned pod-container execution, absolute and multi-file kubeconfig handling, controller-enforced TTL expiry with retained exact-claim cleanup, warm-pool/lifecycle/downstream identity validation, one-shot cleanup arming, cleanup dry-run identity checks, root-rechecked missing-claim handling, downstream-missing claim retention, recoverable ambiguous-create reconciliation, terminal status detection, retained activity bookkeeping, local claim removal reporting, and UID-pinned recovery leases when failed-readiness cleanup cannot reach Kubernetes; thanks @coygeek.
 - Added an explicit `webvnc local --security-type vnc` mode that forces standard VNC password authentication when a server advertises account authentication first.
 - Fixed coordinator hibernation recovery to preserve unambiguous live bridges while rejecting duplicate or stale restored endpoints.
 - Fixed portable Node coordinator startup when the production bundle loads the external CommonJS `ssh2` dependency.

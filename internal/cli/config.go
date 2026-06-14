@@ -131,6 +131,7 @@ type Config struct {
 	Actions                       ActionsConfig
 	Blacksmith                    BlacksmithConfig
 	KubeVirt                      KubeVirtConfig
+	AgentSandbox                  AgentSandboxConfig
 	deleteOnReleaseExplicit       map[string]bool
 	External                      ExternalConfig
 	Namespace                     NamespaceConfig
@@ -286,6 +287,21 @@ type KubeVirtConfig struct {
 	SSHPort         string
 	WorkRoot        string
 	DeleteOnRelease bool
+}
+
+type AgentSandboxConfig struct {
+	Kubectl             string
+	Kubeconfig          string
+	Context             string
+	Namespace           string
+	WarmPool            string
+	Container           string
+	Workdir             string
+	SandboxReadyTimeout time.Duration
+	PodReadyTimeout     time.Duration
+	ExecTimeoutSecs     int
+	DeleteOnRelease     bool
+	ForgetMissing       bool
 }
 
 type ExternalConfig struct {
@@ -2011,6 +2027,15 @@ func baseConfig() Config {
 			WorkRoot:        "/home/crabbox/crabbox",
 			DeleteOnRelease: true,
 		},
+		AgentSandbox: AgentSandboxConfig{
+			Kubectl:             "kubectl",
+			Namespace:           "default",
+			Workdir:             "/workspace/crabbox",
+			SandboxReadyTimeout: 180 * time.Second,
+			PodReadyTimeout:     180 * time.Second,
+			ExecTimeoutSecs:     600,
+			DeleteOnRelease:     true,
+		},
 		External: ExternalConfig{
 			WorkRoot: defaultPOSIXWorkRoot,
 		},
@@ -2315,6 +2340,7 @@ type fileConfig struct {
 	Actions                  *fileActionsConfig                  `yaml:"actions,omitempty"`
 	Blacksmith               *fileBlacksmithConfig               `yaml:"blacksmith,omitempty"`
 	KubeVirt                 *fileKubeVirtConfig                 `yaml:"kubevirt,omitempty"`
+	AgentSandbox             *fileAgentSandboxConfig             `yaml:"agentSandbox,omitempty"`
 	External                 *fileExternalConfig                 `yaml:"external,omitempty"`
 	Namespace                *fileNamespaceConfig                `yaml:"namespace,omitempty"`
 	NamespaceInstance        *fileNamespaceInstanceConfig        `yaml:"namespaceInstance,omitempty"`
@@ -2628,6 +2654,21 @@ type fileKubeVirtConfig struct {
 	SSHPort         string `yaml:"sshPort,omitempty"`
 	WorkRoot        string `yaml:"workRoot,omitempty"`
 	DeleteOnRelease *bool  `yaml:"deleteOnRelease,omitempty"`
+}
+
+type fileAgentSandboxConfig struct {
+	Kubectl             string `yaml:"kubectl,omitempty"`
+	Kubeconfig          string `yaml:"kubeconfig,omitempty"`
+	Context             string `yaml:"context,omitempty"`
+	Namespace           string `yaml:"namespace,omitempty"`
+	WarmPool            string `yaml:"warmPool,omitempty"`
+	Container           string `yaml:"container,omitempty"`
+	Workdir             string `yaml:"workdir,omitempty"`
+	SandboxReadyTimeout string `yaml:"sandboxReadyTimeout,omitempty"`
+	PodReadyTimeout     string `yaml:"podReadyTimeout,omitempty"`
+	ExecTimeoutSecs     *int   `yaml:"execTimeoutSecs,omitempty"`
+	DeleteOnRelease     *bool  `yaml:"deleteOnRelease,omitempty"`
+	ForgetMissing       *bool  `yaml:"forgetMissing,omitempty"`
 }
 
 type fileExternalConfig struct {
@@ -4166,6 +4207,48 @@ func applyFileConfigWithTrust(cfg *Config, file fileConfig, trusted bool) error 
 		if file.KubeVirt.DeleteOnRelease != nil {
 			cfg.KubeVirt.DeleteOnRelease = *file.KubeVirt.DeleteOnRelease
 			MarkDeleteOnReleaseExplicit(cfg, "kubevirt")
+		}
+	}
+	if file.AgentSandbox != nil {
+		if trusted && file.AgentSandbox.Kubectl != "" {
+			cfg.AgentSandbox.Kubectl = file.AgentSandbox.Kubectl
+		}
+		if trusted && file.AgentSandbox.Kubeconfig != "" {
+			cfg.AgentSandbox.Kubeconfig = expandUserPath(file.AgentSandbox.Kubeconfig)
+		}
+		if trusted && file.AgentSandbox.Context != "" {
+			cfg.AgentSandbox.Context = file.AgentSandbox.Context
+		}
+		if trusted && file.AgentSandbox.Namespace != "" {
+			cfg.AgentSandbox.Namespace = file.AgentSandbox.Namespace
+		}
+		if trusted && file.AgentSandbox.WarmPool != "" {
+			cfg.AgentSandbox.WarmPool = file.AgentSandbox.WarmPool
+		}
+		if trusted && file.AgentSandbox.Container != "" {
+			cfg.AgentSandbox.Container = file.AgentSandbox.Container
+		}
+		if trusted && file.AgentSandbox.Workdir != "" {
+			cfg.AgentSandbox.Workdir = file.AgentSandbox.Workdir
+		}
+		if file.AgentSandbox.SandboxReadyTimeout != "" {
+			applyLeaseDuration(&cfg.AgentSandbox.SandboxReadyTimeout, file.AgentSandbox.SandboxReadyTimeout)
+		}
+		if file.AgentSandbox.PodReadyTimeout != "" {
+			applyLeaseDuration(&cfg.AgentSandbox.PodReadyTimeout, file.AgentSandbox.PodReadyTimeout)
+		}
+		if file.AgentSandbox.ExecTimeoutSecs != nil {
+			if *file.AgentSandbox.ExecTimeoutSecs < 0 {
+				return exit(2, "agentSandbox execTimeoutSecs must be non-negative")
+			}
+			cfg.AgentSandbox.ExecTimeoutSecs = *file.AgentSandbox.ExecTimeoutSecs
+		}
+		if file.AgentSandbox.DeleteOnRelease != nil {
+			cfg.AgentSandbox.DeleteOnRelease = *file.AgentSandbox.DeleteOnRelease
+			MarkDeleteOnReleaseExplicit(cfg, "agent-sandbox")
+		}
+		if file.AgentSandbox.ForgetMissing != nil {
+			cfg.AgentSandbox.ForgetMissing = *file.AgentSandbox.ForgetMissing
 		}
 	}
 	if file.External != nil {
@@ -5889,6 +5972,31 @@ func applyEnv(cfg *Config) error {
 	if value, ok := getenvBool("CRABBOX_KUBEVIRT_DELETE_ON_RELEASE"); ok {
 		cfg.KubeVirt.DeleteOnRelease = value
 		MarkDeleteOnReleaseExplicit(cfg, "kubevirt")
+	}
+	cfg.AgentSandbox.Kubectl = getenv("CRABBOX_AGENT_SANDBOX_KUBECTL", cfg.AgentSandbox.Kubectl)
+	cfg.AgentSandbox.Kubeconfig = expandUserPath(getenv("CRABBOX_AGENT_SANDBOX_KUBECONFIG", cfg.AgentSandbox.Kubeconfig))
+	cfg.AgentSandbox.Context = getenv("CRABBOX_AGENT_SANDBOX_CONTEXT", cfg.AgentSandbox.Context)
+	cfg.AgentSandbox.Namespace = getenv("CRABBOX_AGENT_SANDBOX_NAMESPACE", cfg.AgentSandbox.Namespace)
+	cfg.AgentSandbox.WarmPool = getenv("CRABBOX_AGENT_SANDBOX_WARM_POOL", cfg.AgentSandbox.WarmPool)
+	cfg.AgentSandbox.Container = getenv("CRABBOX_AGENT_SANDBOX_CONTAINER", cfg.AgentSandbox.Container)
+	cfg.AgentSandbox.Workdir = getenv("CRABBOX_AGENT_SANDBOX_WORKDIR", cfg.AgentSandbox.Workdir)
+	if timeout := os.Getenv("CRABBOX_AGENT_SANDBOX_SANDBOX_READY_TIMEOUT"); timeout != "" {
+		applyLeaseDuration(&cfg.AgentSandbox.SandboxReadyTimeout, timeout)
+	}
+	if timeout := os.Getenv("CRABBOX_AGENT_SANDBOX_POD_READY_TIMEOUT"); timeout != "" {
+		applyLeaseDuration(&cfg.AgentSandbox.PodReadyTimeout, timeout)
+	}
+	var agentSandboxEnvErr error
+	cfg.AgentSandbox.ExecTimeoutSecs, agentSandboxEnvErr = getenvNonNegativeInt("CRABBOX_AGENT_SANDBOX_EXEC_TIMEOUT_SECS", cfg.AgentSandbox.ExecTimeoutSecs)
+	if agentSandboxEnvErr != nil {
+		return agentSandboxEnvErr
+	}
+	if value, ok := getenvBool("CRABBOX_AGENT_SANDBOX_DELETE_ON_RELEASE"); ok {
+		cfg.AgentSandbox.DeleteOnRelease = value
+		MarkDeleteOnReleaseExplicit(cfg, "agent-sandbox")
+	}
+	if value, ok := getenvBool("CRABBOX_AGENT_SANDBOX_FORGET_MISSING"); ok {
+		cfg.AgentSandbox.ForgetMissing = value
 	}
 	cfg.External.Command = getenv("CRABBOX_EXTERNAL_COMMAND", cfg.External.Command)
 	if arg := os.Getenv("CRABBOX_EXTERNAL_ARG"); arg != "" {
