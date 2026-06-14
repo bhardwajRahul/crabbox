@@ -115,7 +115,8 @@ Pick whichever matches your intent:
   [Runtime adapter stack](features/runtime-adapter-stack.md),
   [Broker auth and routing](features/broker-auth-routing.md),
   [Coordinator](features/coordinator.md),
-  [Bring your own infrastructure](features/bring-your-own-infrastructure.md).
+  [Bring your own infrastructure](features/bring-your-own-infrastructure.md),
+  [Slurm academic sandboxes](features/slurm-academic-sandboxes.md).
 - **Deploy the coordinator:** [Infrastructure](infrastructure.md),
   [Portable coordinator](features/portable-coordinator.md),
   [Operations](operations.md), [Security](security.md).
@@ -139,6 +140,7 @@ Pick whichever matches your intent:
   [Provider authoring](features/provider-authoring.md),
   [Provider backends](provider-backends.md),
   [Capacity fallback](features/capacity-fallback.md),
+  [Slurm academic sandboxes](features/slurm-academic-sandboxes.md),
   [Network](features/network.md), [Tailscale](features/tailscale.md).
   Per-provider: [AWS](providers/aws.md), [Azure](providers/azure.md),
   [Azure Dynamic Sessions](providers/azure-dynamic-sessions.md),
