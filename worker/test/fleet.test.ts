@@ -12286,6 +12286,10 @@ describe("fleet lease identity and idle", () => {
     expect(pageBody).toContain("rfb.qualityLevel = 6");
     expect(pageBody).toContain("MetaLeft");
     expect(pageBody).toContain("ControlLeft");
+    expect(pageBody).toContain("window.crabboxDialog?.prompt(");
+    expect(pageBody).toContain("Clipboard access is unavailable.");
+    expect(pageBody).toContain('document.body.dataset.portalDialogOpen === "true"');
+    expect(pageBody).not.toContain("window.prompt(");
     expect(pageBody).toContain("position:sticky");
     expect(pageBody).toContain('data-provider="hetzner"');
     expect(pageBody).toContain('data-target="linux"');

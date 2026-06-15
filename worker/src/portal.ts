@@ -1171,7 +1171,7 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
       let desktopThemeTimer;
       const terminalStatusCodes = new Set([403, 404, 409, 410]);
       function focusVNC() {
-        if (!isController) return;
+        if (!isController || document.body.dataset.portalDialogOpen === "true") return;
         try {
           screen.focus({ preventScroll: true });
         } catch (_) {
@@ -1702,7 +1702,15 @@ export function portalVNC(lease: LeaseRecord, options: { canManage?: boolean } =
             return await navigator.clipboard.readText();
           } catch (_) {}
         }
-        return window.prompt("Text to paste") || "";
+        const text = await window.crabboxDialog?.prompt(
+          "Clipboard access is unavailable. Enter the text to send to the remote desktop.",
+          {
+            title: "Paste text",
+            label: "Text to paste",
+            confirmLabel: "paste",
+          },
+        );
+        return text || "";
       }
       function pasteModifier() {
         return target === "macos"
@@ -3051,6 +3059,23 @@ function html(
     .button:disabled { opacity:0.45; cursor:not-allowed; }
     .button.danger { border:1px solid color-mix(in srgb, var(--bad) 42%, var(--line)); background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--danger-fg); cursor:pointer; }
     .button[data-state="ok"] { border-color:color-mix(in srgb, var(--ok) 45%, var(--line)); color:var(--ok); background:color-mix(in srgb, var(--ok) 12%, transparent); }
+    .portal-dialog { width:min(460px, calc(100vw - 28px)); padding:0; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--fg); box-shadow:0 24px 90px rgba(0,0,0,0.58); overflow:hidden; }
+    .portal-dialog::backdrop { background:rgba(0,0,0,0.58); backdrop-filter:blur(2px); }
+    .portal-dialog[data-fallback-modal="true"] { position:fixed; top:50%; left:50%; z-index:101; display:block; max-height:calc(100dvh - 28px); margin:0; transform:translate(-50%,-50%); }
+    .portal-dialog-backdrop { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,0.58); backdrop-filter:blur(2px); }
+    .portal-dialog-backdrop[hidden] { display:none; }
+    body[data-portal-dialog-open="true"] { overflow:hidden; }
+    .portal-dialog-form { display:grid; }
+    .portal-dialog-head { padding:17px 18px 13px; border-bottom:1px solid var(--line); background:var(--panel-2); }
+    .portal-dialog-head small { display:block; margin-bottom:3px; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; }
+    .portal-dialog-head h2 { color:var(--fg); font-size:18px; letter-spacing:0; text-transform:none; }
+    .portal-dialog-body { display:grid; gap:13px; padding:16px 18px; }
+    .portal-dialog-message { color:var(--muted); line-height:1.55; white-space:pre-wrap; }
+    .portal-dialog-input { display:grid; gap:6px; color:var(--muted); font-size:12px; font-weight:700; }
+    .portal-dialog-input[hidden] { display:none; }
+    .portal-dialog-input textarea { width:100%; min-height:112px; resize:vertical; padding:10px 11px; border:1px solid var(--line); border-radius:8px; background:var(--inset); color:var(--fg); font:13px/1.45 var(--mono); }
+    .portal-dialog-input textarea:focus { outline:2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset:1px; border-color:color-mix(in srgb, var(--accent) 58%, var(--line)); }
+    .portal-dialog-actions { display:flex; justify-content:flex-end; gap:8px; padding:12px 18px 16px; border-top:1px solid var(--line); background:var(--panel-2); }
     .lease-link { display:block; min-width:0; text-decoration:none; overflow:hidden; text-overflow:ellipsis; }
     .lease-link strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .mono { font-family:var(--mono); }
@@ -3317,7 +3342,29 @@ function html(
     }
   </style>
 </head>
-<body>${body}<script nonce="${pageNonce}">${portalEnhancementsScript()}</script></body>
+<body>${body}
+  <div id="portal-dialog-backdrop" class="portal-dialog-backdrop" hidden></div>
+  <dialog id="portal-dialog" class="portal-dialog" aria-modal="true" aria-labelledby="portal-dialog-title" aria-describedby="portal-dialog-message">
+    <div class="portal-dialog-form">
+      <div class="portal-dialog-head">
+        <small id="portal-dialog-kind">Confirmation</small>
+        <h2 id="portal-dialog-title">Confirm action</h2>
+      </div>
+      <div class="portal-dialog-body">
+        <p id="portal-dialog-message" class="portal-dialog-message"></p>
+        <label id="portal-dialog-input-wrap" class="portal-dialog-input" hidden>
+          <span id="portal-dialog-input-label">Value</span>
+          <textarea id="portal-dialog-input"></textarea>
+        </label>
+      </div>
+      <div class="portal-dialog-actions">
+        <button id="portal-dialog-cancel" class="button secondary" type="button">cancel</button>
+        <button id="portal-dialog-confirm" class="button" type="button">confirm</button>
+      </div>
+    </div>
+  </dialog>
+  <script nonce="${pageNonce}">${portalEnhancementsScript()}</script>
+</body>
 </html>`,
     {
       status,
@@ -3384,17 +3431,147 @@ function portalEnhancementsScript(): string {
     if (systemDark.addEventListener) systemDark.addEventListener("change", onSystemChange);
     else if (systemDark.addListener) systemDark.addListener(onSystemChange);
   }
+  const portalDialog = document.getElementById("portal-dialog");
+  const portalDialogBackdrop = document.getElementById("portal-dialog-backdrop");
+  const portalDialogKind = document.getElementById("portal-dialog-kind");
+  const portalDialogTitle = document.getElementById("portal-dialog-title");
+  const portalDialogMessage = document.getElementById("portal-dialog-message");
+  const portalDialogInputWrap = document.getElementById("portal-dialog-input-wrap");
+  const portalDialogInputLabel = document.getElementById("portal-dialog-input-label");
+  const portalDialogInput = document.getElementById("portal-dialog-input");
+  const portalDialogCancel = document.getElementById("portal-dialog-cancel");
+  const portalDialogConfirm = document.getElementById("portal-dialog-confirm");
+  let portalDialogMode = "confirm";
+  let portalDialogResolve;
+  let portalDialogClosing = false;
+  function resolvePortalDialog(returnValue) {
+    const resolve = portalDialogResolve;
+    portalDialogResolve = undefined;
+    portalDialogClosing = false;
+    delete document.body.dataset.portalDialogOpen;
+    if (!resolve) return;
+    const accepted = returnValue === "confirm";
+    resolve(portalDialogMode === "prompt" ? (accepted ? portalDialogInput.value : null) : accepted);
+  }
+  function closePortalDialog(returnValue) {
+    if (!portalDialog?.hasAttribute("open")) return;
+    if (portalDialog.dataset.fallbackModal === "true") {
+      portalDialog.removeAttribute("open");
+      delete portalDialog.dataset.fallbackModal;
+      portalDialogBackdrop.hidden = true;
+      resolvePortalDialog(returnValue);
+      return;
+    }
+    portalDialogClosing = true;
+    portalDialog.close(returnValue);
+  }
+  function showPortalDialog(mode, message, options = {}) {
+    if (!portalDialog) return Promise.resolve(mode === "prompt" ? null : false);
+    if (portalDialogClosing || portalDialog.hasAttribute("open")) {
+      return Promise.resolve(mode === "prompt" ? null : false);
+    }
+    portalDialogMode = mode;
+    portalDialogKind.textContent = mode === "prompt" ? "Input required" : "Confirmation";
+    portalDialogTitle.textContent = options.title || (mode === "prompt" ? "Enter a value" : "Confirm action");
+    portalDialogMessage.textContent = message || "";
+    portalDialogInputWrap.hidden = mode !== "prompt";
+    portalDialogInputLabel.textContent = options.label || "Value";
+    portalDialogInput.value = options.value || "";
+    portalDialogCancel.textContent = options.cancelLabel || "cancel";
+    portalDialogConfirm.textContent = options.confirmLabel || (mode === "prompt" ? "continue" : "confirm");
+    portalDialogConfirm.classList.toggle("danger", options.danger === true);
+    portalDialog.returnValue = "";
+    document.body.dataset.portalDialogOpen = "true";
+    return new Promise((resolve) => {
+      portalDialogResolve = resolve;
+      if (portalDialog.showModal) {
+        portalDialog.showModal();
+      } else {
+        portalDialog.dataset.fallbackModal = "true";
+        portalDialog.setAttribute("open", "");
+        portalDialogBackdrop.hidden = false;
+      }
+      window.setTimeout(() => {
+        if (mode === "prompt") {
+          portalDialogInput.focus();
+          portalDialogInput.select();
+        } else {
+          portalDialogConfirm.focus();
+        }
+      }, 0);
+    });
+  }
+  portalDialog?.addEventListener("cancel", () => {
+    portalDialogClosing = true;
+    portalDialog.returnValue = "cancel";
+  });
+  portalDialog?.addEventListener("close", () => {
+    resolvePortalDialog(portalDialog.returnValue);
+  });
+  portalDialog?.addEventListener("keydown", (event) => {
+    if (portalDialog.dataset.fallbackModal !== "true") return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePortalDialog("cancel");
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(
+      portalDialog.querySelectorAll("button:not([disabled]), textarea:not([disabled])"),
+    ).filter((control) => !control.closest("[hidden]"));
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  portalDialogCancel?.addEventListener("click", () => closePortalDialog("cancel"));
+  portalDialogConfirm?.addEventListener("click", () => closePortalDialog("confirm"));
+  portalDialogBackdrop?.addEventListener("click", () => closePortalDialog("cancel"));
+  window.crabboxDialog = Object.freeze({
+    confirm(message, options) {
+      return showPortalDialog("confirm", message, options);
+    },
+    prompt(message, options) {
+      return showPortalDialog("prompt", message, options);
+    },
+  });
+  const confirmedForms = new WeakSet();
   document.querySelectorAll("form[data-confirm]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      const message = form.dataset.confirm || "";
-      if (message && !window.confirm(message)) {
-        event.preventDefault();
+    form.addEventListener("submit", async (event) => {
+      if (confirmedForms.delete(form)) {
+        if (event.submitter) {
+          event.submitter.disabled = true;
+          event.submitter.setAttribute("aria-busy", "true");
+        }
         return;
       }
-      if (event.submitter) {
-        event.submitter.disabled = true;
-        event.submitter.setAttribute("aria-busy", "true");
+      const message = form.dataset.confirm || "";
+      if (!message) return;
+      event.preventDefault();
+      const submitter = event.submitter;
+      const confirmed = await window.crabboxDialog.confirm(message, {
+        title: "Confirm lifecycle action",
+        confirmLabel:
+          submitter?.getAttribute("aria-label") || submitter?.textContent?.trim() || "confirm",
+        danger: true,
+      });
+      if (!confirmed) return;
+      if (typeof form.requestSubmit === "function") {
+        confirmedForms.add(form);
+        form.requestSubmit(submitter || undefined);
+        return;
       }
+      if (submitter) {
+        submitter.disabled = true;
+        submitter.setAttribute("aria-busy", "true");
+      }
+      HTMLFormElement.prototype.submit.call(form);
     });
   });
   function copyText(text, source) {
