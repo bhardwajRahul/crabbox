@@ -1629,6 +1629,15 @@ export class FleetCoordinator {
         { status: 403 },
       );
     }
+    if (!isAdminRequest(request) && (config.hostID || config.awsMacHostID)) {
+      return json(
+        {
+          error: "admin_required",
+          message: "provider host pinning requires admin-token auth",
+        },
+        { status: 403 },
+      );
+    }
     config =
       (await this.provider(
         config.provider,
@@ -4447,14 +4456,16 @@ export class FleetCoordinator {
   private async portalRoute(request: Request, parts: string[]): Promise<Response> {
     const method = request.method.toUpperCase();
     if (method === "GET" && parts.length === 1) {
-      const [leases, runners, macHosts] = await Promise.all([
-        this.portalLeases(request),
+      const [visibleLeases, runners, macHosts] = await Promise.all([
+        this.portalVisibleLeases(request),
         this.visibleExternalRunners(request),
         this.portalMacHosts(),
       ]);
       const admin = isAdminRequest(request);
+      const leases = this.filterLeases(visibleLeases, request);
+      const hostLeases = this.filterLeasesWithoutLimit(visibleLeases, request);
       const manageableLeaseIDs = new Set(
-        leases
+        hostLeases
           .filter((lease) => this.leaseManageableByRequest(lease, request, admin))
           .map((lease) => lease.id),
       );
@@ -4462,7 +4473,10 @@ export class FleetCoordinator {
         leases,
         runners,
         request,
-        this.attachPortalMacHostLeases(macHosts, leases),
+        this.attachPortalMacHostLeases(
+          this.portalMacHostsVisibleToRequest(macHosts, hostLeases, request),
+          hostLeases,
+        ),
         manageableLeaseIDs,
       );
     }
@@ -4609,10 +4623,14 @@ export class FleetCoordinator {
   }
 
   private async portalLeases(request: Request): Promise<LeaseRecord[]> {
+    return this.filterLeases(await this.portalVisibleLeases(request), request);
+  }
+
+  private async portalVisibleLeases(request: Request): Promise<LeaseRecord[]> {
     const leases = await this.leaseRecords();
     return isAdminRequest(request)
-      ? this.filterLeases(leases, request)
-      : this.filterLeasesForRequest(leases, request);
+      ? leases
+      : leases.filter((lease) => this.leaseVisibleToRequest(lease, request, false));
   }
 
   private async portalMacHosts(): Promise<PortalMacHostRecord[]> {
@@ -4655,6 +4673,23 @@ export class FleetCoordinator {
     });
   }
 
+  private portalMacHostsVisibleToRequest(
+    hosts: PortalMacHostRecord[],
+    leases: LeaseRecord[],
+    request: Request,
+  ): PortalMacHostRecord[] {
+    if (isAdminRequest(request)) {
+      return hosts;
+    }
+    const visibleHostIDs = new Set(
+      leases
+        .filter((lease) => lease.state === "active" && lease.target === "macos")
+        .map(leaseHostID)
+        .filter(Boolean),
+    );
+    return hosts.filter((host) => visibleHostIDs.has(host.id));
+  }
+
   private async resolvePortalMacHost(
     request: Request,
     provider: string,
@@ -4663,8 +4698,12 @@ export class FleetCoordinator {
     if (provider !== "aws") {
       return undefined;
     }
-    const [leases, hosts] = await Promise.all([this.portalLeases(request), this.portalMacHosts()]);
-    return this.attachPortalMacHostLeases(hosts, leases).find(
+    const [leases, hosts] = await Promise.all([
+      this.portalVisibleLeases(request),
+      this.portalMacHosts(),
+    ]);
+    const visibleHosts = this.portalMacHostsVisibleToRequest(hosts, leases, request);
+    return this.attachPortalMacHostLeases(visibleHosts, leases).find(
       (host) => host.provider === provider && host.id === hostID,
     );
   }
@@ -8654,18 +8693,22 @@ export class FleetCoordinator {
 
   private filterLeases(leases: LeaseRecord[], request: Request): LeaseRecord[] {
     const url = new URL(request.url);
+    const limit = clampLimit(url.searchParams.get("limit"), 100);
+    return this.filterLeasesWithoutLimit(leases, request).slice(0, limit);
+  }
+
+  private filterLeasesWithoutLimit(leases: LeaseRecord[], request: Request): LeaseRecord[] {
+    const url = new URL(request.url);
     const state = url.searchParams.get("state") ?? "";
     const provider = url.searchParams.get("provider") ?? "";
     const owner = url.searchParams.get("owner") ?? "";
     const org = url.searchParams.get("org") ?? "";
-    const limit = clampLimit(url.searchParams.get("limit"), 100);
     return leases
       .filter((lease) => !state || lease.state === state)
       .filter((lease) => !provider || lease.provider === provider)
       .filter((lease) => !owner || lease.owner === owner)
       .filter((lease) => !org || lease.org === org)
-      .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, limit);
+      .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   private async createRun(request: Request): Promise<Response> {
