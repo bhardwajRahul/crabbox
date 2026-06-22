@@ -160,9 +160,10 @@ exit $LASTEXITCODE`)
 		if err != nil {
 			fmt.Fprintf(stderr, "warning: Windows WSL2 bootstrap SSH command ended before completion; waiting for reboot/ready state: %v\n", err)
 		}
-		if err := waitForSSHReady(ctx, &bootstrapTarget, stderr, "windows openssh", 20*time.Minute); err != nil {
+		if err := waitForWindowsBootstrapSSHReady(ctx, &bootstrapTarget, stderr, 20*time.Minute); err != nil {
 			return err
 		}
+		target.Port = bootstrapTarget.Port
 		if probeSSHReady(ctx, target, 20*time.Second) {
 			return nil
 		}
