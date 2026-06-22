@@ -1029,6 +1029,20 @@ func TestRemotePruneSyncManifestUsesDeletedListBeforeOldManifestDiff(t *testing.
 	}
 }
 
+func TestRemotePruneSyncManifestForWSL2UsesShortCoreutils(t *testing.T) {
+	got := remotePruneSyncManifestForTarget(SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeWSL2}, "/work/repo")
+	for _, want := range []string{"sort -z", "comm -z -23", "delete_paths"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("WSL2 prune command missing %q in %q", want, got)
+		}
+	}
+	for _, notWant := range []string{"command -v python3", "command -v perl"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("WSL2 prune command should stay short, found %q in %q", notWant, got)
+		}
+	}
+}
+
 func TestRemoteSeedSyncManifestFromGitWritesInitialTrackedManifest(t *testing.T) {
 	workdir := t.TempDir()
 	run := func(args ...string) {
@@ -1059,6 +1073,18 @@ func TestRemoteSeedSyncManifestFromGitWritesInitialTrackedManifest(t *testing.T)
 }
 
 func TestRemotePruneSyncManifestPrunesManagedFiles(t *testing.T) {
+	testRemotePruneSyncManifestPrunesManagedFiles(t, remotePruneSyncManifest)
+}
+
+func TestRemotePruneSyncManifestCoreutilsPrunesManagedFiles(t *testing.T) {
+	if out, err := exec.Command("comm", "-z", os.DevNull, os.DevNull).CombinedOutput(); err != nil {
+		t.Skipf("comm -z unavailable on this host: %v\n%s", err, out)
+	}
+	testRemotePruneSyncManifestPrunesManagedFiles(t, remotePruneSyncManifestCoreutils)
+}
+
+func testRemotePruneSyncManifestPrunesManagedFiles(t *testing.T, command func(string) string) {
+	t.Helper()
 	workdir := t.TempDir()
 	mustWriteTestFile(t, filepath.Join(workdir, ".crabbox", "sync-manifest"), "keep.txt\x00kept-dir/keep.txt\x00stale.txt\x00old-empty/remove.txt\x00non-empty/remove.txt\x00")
 	mustWriteTestFile(t, filepath.Join(workdir, ".crabbox", "sync-manifest.new"), "keep.txt\x00kept-dir/keep.txt\x00")
@@ -1078,7 +1104,7 @@ func TestRemotePruneSyncManifestPrunesManagedFiles(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(workdir), "outside.txt")
 	mustWriteTestFile(t, outside, "outside")
 
-	cmd := exec.Command("bash", "-lc", remotePruneSyncManifest(workdir))
+	cmd := exec.Command("bash", "-lc", command(workdir))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("remote prune failed: %v\n%s", err, out)
 	}
@@ -1312,63 +1338,16 @@ func TestRemoteWriteSyncManifestsNew(t *testing.T) {
 	}
 }
 
-func TestRemoteWriteSyncManifestsNewFallsBackToPerlWithoutPython(t *testing.T) {
-	workdir := t.TempDir()
-	manifest := "keep.txt\x00"
-	deleted := "old.txt\x00"
-	input := fmt.Sprintf("%d\n", len(manifest)) + manifest + deleted
-
-	toolDir := t.TempDir()
-	mustWriteTestCommandWrapper(t, toolDir, "mkdir")
-	mustWriteTestBashNoProfileWrapper(t, toolDir)
-	perlMarker := filepath.Join(t.TempDir(), "perl-invoked")
-	mustWriteTestCommandWrapperWithMarker(t, toolDir, "perl", perlMarker)
-	bashPath, err := exec.LookPath("bash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(bashPath, "--noprofile", "--norc", "-c", remoteWriteSyncManifestsNew(workdir))
-	cmd.Env = append(os.Environ(), "PATH="+toolDir)
-	cmd.Stdin = strings.NewReader(input)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("write manifests perl fallback failed: %v\n%s", err, out)
-	}
-	if _, err := os.Stat(perlMarker); err != nil {
-		t.Fatalf("perl fallback was not invoked: %v", err)
-	}
-	metaDir := filepath.Join(workdir, ".crabbox")
-	gotManifest, err := os.ReadFile(filepath.Join(metaDir, "sync-manifest.new"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotManifest) != manifest {
-		t.Fatalf("unexpected manifest: %q", gotManifest)
-	}
-	gotDeleted, err := os.ReadFile(filepath.Join(metaDir, "sync-deleted.new"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotDeleted) != deleted {
-		t.Fatalf("unexpected deleted manifest: %q", gotDeleted)
-	}
-}
-
-func TestRemoteWriteSyncManifestsNewPerlReadsChunkedInput(t *testing.T) {
+func TestRemoteWriteSyncManifestsNewReadsChunkedInput(t *testing.T) {
 	workdir := t.TempDir()
 	manifest := strings.Repeat("manifest-entry\x00", 4096)
 	deleted := "old.txt\x00"
 
-	toolDir := t.TempDir()
-	mustWriteTestCommandWrapper(t, toolDir, "mkdir")
-	mustWriteTestBashNoProfileWrapper(t, toolDir)
-	perlMarker := filepath.Join(t.TempDir(), "perl-invoked")
-	mustWriteTestCommandWrapperWithMarker(t, toolDir, "perl", perlMarker)
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bashPath, "--noprofile", "--norc", "-c", remoteWriteSyncManifestsNew(workdir))
-	cmd.Env = append(os.Environ(), "PATH="+toolDir)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
@@ -1391,9 +1370,6 @@ func TestRemoteWriteSyncManifestsNewPerlReadsChunkedInput(t *testing.T) {
 	}
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("write chunked manifests failed: %v\n%s", err, output.String())
-	}
-	if _, err := os.Stat(perlMarker); err != nil {
-		t.Fatalf("perl fallback was not invoked: %v", err)
 	}
 	metaDir := filepath.Join(workdir, ".crabbox")
 	gotManifest, err := os.ReadFile(filepath.Join(metaDir, "sync-manifest.new"))

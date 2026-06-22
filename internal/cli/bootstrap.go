@@ -400,11 +400,12 @@ Acquire::https::Timeout "30";
 APT
 rm -rf /var/lib/apt/lists/*
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git rsync jq
+apt-get install -y --no-install-recommends ca-certificates curl git jq python3-minimal rsync
 cat >/usr/local/bin/crabbox-ready <<'READY'
 #!/usr/bin/env bash
 set -euo pipefail
 git --version >/dev/null
+python3 --version >/dev/null
 rsync --version >/dev/null
 curl --version >/dev/null
 jq --version >/dev/null

@@ -1192,7 +1192,7 @@ retrySync:
 		manifestData := manifest.NUL()
 		stepStart = time.Now()
 		manifestInput := fmt.Sprintf("%d\n", len(manifestData)) + string(manifestData) + string(manifest.DeletedNUL())
-		if err := runSSHInputQuiet(ctx, target, remoteWriteSyncManifestsNew(workdir), manifestInput); err != nil {
+		if err := runSSHInput(ctx, target, remoteWriteSyncManifestsNew(workdir), strings.NewReader(manifestInput), io.Discard, a.Stderr); err != nil {
 			return recordFailure(exit(7, "write sync manifests: %v", err))
 		}
 		timings.syncSteps.manifestWrite = time.Since(stepStart)
@@ -1205,7 +1205,7 @@ retrySync:
 				}
 			}
 			stepStart = time.Now()
-			if err := runSSHQuiet(ctx, target, remotePruneSyncManifest(workdir)); err != nil {
+			if err := runSSHQuiet(ctx, target, remotePruneSyncManifestForTarget(target, workdir)); err != nil {
 				return recordFailure(exit(6, "remote sync prune failed: %v", err))
 			}
 			timings.syncSteps.prune = time.Since(stepStart)

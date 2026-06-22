@@ -668,7 +668,7 @@ func TestAWSUserDataWindowsWSL2Profile(t *testing.T) {
 		`$wslSetup = "C:\ProgramData\crabbox\wsl\linux-setup.sh"`,
 		"WriteAllText($wslSetup",
 		"wsl.exe -d $wslDistro --user root --exec bash /mnt/c/ProgramData/crabbox/wsl/linux-setup.sh",
-		"apt-get install -y --no-install-recommends ca-certificates curl git rsync jq",
+		"apt-get install -y --no-install-recommends ca-certificates curl git jq python3-minimal rsync",
 		"cat >/usr/local/bin/crabbox-ready",
 		`wslpath -w '/work/crabbox'`,
 		`test -w '/work/crabbox'`,

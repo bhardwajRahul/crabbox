@@ -528,14 +528,14 @@ func (a App) syncLocalActionsWorkspace(ctx context.Context, cfg Config, repo Rep
 	}
 	manifestData := manifest.NUL()
 	manifestInput := fmt.Sprintf("%d\n", len(manifestData)) + string(manifestData) + string(manifest.DeletedNUL())
-	if err := runSSHInputQuiet(ctx, target, remoteWriteSyncManifestsNew(workdir), manifestInput); err != nil {
+	if err := runSSHInput(ctx, target, remoteWriteSyncManifestsNew(workdir), strings.NewReader(manifestInput), io.Discard, a.Stderr); err != nil {
 		return exit(7, "write sync manifests: %v", err)
 	}
 	if shouldPruneRemoteSync(cfg.Sync.Delete, false) {
 		if err := runSSHQuiet(ctx, target, remoteSeedSyncManifestFromGit(workdir)); err != nil {
 			return exit(6, "remote sync seed manifest failed: %v", err)
 		}
-		if err := runSSHQuiet(ctx, target, remotePruneSyncManifest(workdir)); err != nil {
+		if err := runSSHQuiet(ctx, target, remotePruneSyncManifestForTarget(target, workdir)); err != nil {
 			return exit(6, "remote sync prune failed: %v", err)
 		}
 	}

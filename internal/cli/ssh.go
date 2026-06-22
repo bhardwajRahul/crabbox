@@ -1250,45 +1250,14 @@ func remoteSyncInterpreterCommand(python, perl, args string) string {
 }
 
 func remoteWriteSyncManifestsNew(workdir string) string {
-	python := `import sys
-
-reader = getattr(sys.stdin, "buffer", sys.stdin)
-manifest_len = int(reader.readline())
-manifest = reader.read(manifest_len)
-deleted = reader.read()
-with open(sys.argv[1], "wb") as handle:
-    handle.write(manifest)
-with open(sys.argv[2], "wb") as handle:
-    handle.write(deleted)
+	script := "set -e\nmkdir -p " + shellQuote(workdir) + "\ncd " + shellQuote(workdir) + "\n" + remoteSyncMetaDirScript() + `mkdir -p "$meta_dir"
+IFS= read -r manifest_len
+case "$manifest_len" in
+  ''|*[!0-9]*) echo "invalid sync manifest length" >&2; exit 1 ;;
+esac
+dd bs=1 count="$manifest_len" of="$meta_dir/sync-manifest.new" status=none
+cat > "$meta_dir/sync-deleted.new"
 `
-	perl := `use strict;
-use warnings;
-
-my $len = <STDIN>;
-defined $len or die "missing manifest length\n";
-chomp $len;
-$len =~ /\A\d+\z/ or die "invalid manifest length\n";
-my $manifest = "";
-while (length($manifest) < $len) {
-    my $chunk = "";
-    my $read = read(STDIN, $chunk, $len - length($manifest));
-    defined $read or die "read manifest failed: $!\n";
-    $read > 0 or die "short manifest read\n";
-    $manifest .= $chunk;
-}
-local $/;
-my $deleted = <STDIN>;
-$deleted = "" unless defined $deleted;
-open my $manifest_fh, ">", $ARGV[0] or die "open manifest: $!\n";
-binmode $manifest_fh;
-print {$manifest_fh} $manifest or die "write manifest: $!\n";
-close $manifest_fh or die "close manifest: $!\n";
-open my $deleted_fh, ">", $ARGV[1] or die "open deleted: $!\n";
-binmode $deleted_fh;
-print {$deleted_fh} $deleted or die "write deleted: $!\n";
-close $deleted_fh or die "close deleted: $!\n";
-`
-	script := "mkdir -p " + shellQuote(workdir) + " && cd " + shellQuote(workdir) + " && " + remoteSyncMetaDirScript() + "mkdir -p \"$meta_dir\" && " + remoteSyncInterpreterCommand(python, perl, "\"$meta_dir/sync-manifest.new\" \"$meta_dir/sync-deleted.new\"")
 	return "bash -lc " + shellQuote(script)
 }
 
@@ -1357,6 +1326,43 @@ manifest_removed_paths() {
 }
 if [ -f "$deleted" ]; then delete_paths < "$deleted"; fi
 if [ -f "$old" ] && [ -f "$new" ]; then manifest_removed_paths | delete_paths; fi
+`
+	return "bash -lc " + shellQuote(script)
+}
+
+func remotePruneSyncManifestForTarget(target SSHTarget, workdir string) string {
+	if isWindowsWSL2Target(target) {
+		return remotePruneSyncManifestCoreutils(workdir)
+	}
+	return remotePruneSyncManifest(workdir)
+}
+
+func remotePruneSyncManifestCoreutils(workdir string) string {
+	script := "set -e -o pipefail\ncd " + shellQuote(workdir) + `
+` + remoteSyncMetaDirScript() + `
+old="$meta_dir/sync-manifest"
+new="$meta_dir/sync-manifest.new"
+deleted="$meta_dir/sync-deleted.new"
+delete_paths() {
+  while IFS= read -r -d '' rel; do
+    case "$rel" in ''|/*|../*|*/../*) continue ;; esac
+    rm -f -- "$rel"
+    dir=$(dirname -- "$rel")
+    while [ "$dir" != . ] && [ "$dir" != / ]; do
+      rmdir -- "$dir" 2>/dev/null || break
+      dir=$(dirname -- "$dir")
+    done
+  done
+}
+if [ -f "$deleted" ]; then delete_paths < "$deleted"; fi
+if [ -f "$old" ] && [ -f "$new" ]; then
+  old_sorted="$meta_dir/sync-manifest.old.sorted"
+  new_sorted="$meta_dir/sync-manifest.new.sorted"
+  LC_ALL=C sort -z "$old" > "$old_sorted"
+  LC_ALL=C sort -z "$new" > "$new_sorted"
+  comm -z -23 "$old_sorted" "$new_sorted" | delete_paths
+  rm -f "$old_sorted" "$new_sorted"
+fi
 `
 	return "bash -lc " + shellQuote(script)
 }
