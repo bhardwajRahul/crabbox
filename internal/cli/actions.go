@@ -2277,7 +2277,7 @@ func remoteReadActionsHydrationState(leaseID string) string {
 
 func remoteReadActionsHydrationStateForTarget(target SSHTarget, leaseID string) string {
 	if isWindowsNativeTarget(target) {
-		return powershellCommand(`$path = Join-Path $HOME ` + psQuote(windowsPathJoin(strings.Split(actionsHydrationStatePath(leaseID), "/")...)) + `
+		return powershellCommand(`$path = ` + psQuote(windowsActionsHydrationPath(actionsHydrationStatePath(leaseID))) + `
 if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path }
 exit 0
 `)
@@ -2357,13 +2357,13 @@ func remoteClearActionsHydrationState(leaseID string) string {
 func remoteClearActionsHydrationStateForTarget(target SSHTarget, leaseID string) string {
 	if isWindowsNativeTarget(target) {
 		paths := []string{
-			actionsHydrationStatePath(leaseID),
-			actionsHydrationEnvPath(leaseID),
-			actionsHydrationServicesPath(leaseID),
-			actionsHydrationStopPath(leaseID),
-			actionsHydrationLocalScriptPath(leaseID),
-			actionsHydrationLocalLogPath(leaseID),
-			actionsHydrationLocalExitPath(leaseID),
+			windowsActionsHydrationPath(actionsHydrationStatePath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationEnvPath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationServicesPath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationStopPath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationLocalScriptPath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationLocalLogPath(leaseID)),
+			windowsActionsHydrationPath(actionsHydrationLocalExitPath(leaseID)),
 		}
 		var b strings.Builder
 		b.WriteString(`$ErrorActionPreference = "SilentlyContinue"` + "\n")
@@ -2372,13 +2372,12 @@ func remoteClearActionsHydrationStateForTarget(target SSHTarget, leaseID string)
 			if i > 0 {
 				foreach += ", "
 			}
-			foreach += psQuote(windowsPathJoin(strings.Split(value, "/")...))
+			foreach += psQuote(value)
 		}
 		foreach += ")\n"
 		b.WriteString(foreach)
 		b.WriteString(`foreach ($rel in $paths) {
-  $path = Join-Path $HOME $rel
-  Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $rel -Force -ErrorAction SilentlyContinue
 }
 exit 0
 `)
@@ -2419,6 +2418,14 @@ func actionsHydrationDir() string {
 	return ".crabbox/actions"
 }
 
+func windowsActionsHydrationPath(value string) string {
+	return windowsPathJoin(windowsActionsHydrationRoot(), strings.TrimPrefix(value, actionsHydrationDir()+"/"))
+}
+
+func windowsActionsHydrationRoot() string {
+	return `C:\ProgramData\crabbox\actions`
+}
+
 func actionsRunURL(repo GitHubRepo, runID string) string {
 	if repo.Slug() == "" || runID == "" || strings.HasPrefix(runID, "local-") {
 		return ""
@@ -2433,9 +2440,9 @@ func remoteWriteActionsHydrationStop(leaseID string) string {
 func remoteWriteActionsHydrationStopForTarget(target SSHTarget, leaseID string) string {
 	if isWindowsNativeTarget(target) {
 		return powershellCommand(`$ErrorActionPreference = "Stop"
-$dir = Join-Path $HOME ` + psQuote(windowsPathJoin(strings.Split(actionsHydrationDir(), "/")...)) + `
+$dir = ` + psQuote(windowsActionsHydrationRoot()) + `
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-New-Item -ItemType File -Force -Path (Join-Path $HOME ` + psQuote(windowsPathJoin(strings.Split(actionsHydrationStopPath(leaseID), "/")...)) + `) | Out-Null
+New-Item -ItemType File -Force -Path ` + psQuote(windowsActionsHydrationPath(actionsHydrationStopPath(leaseID))) + ` | Out-Null
 exit 0
 `)
 	}

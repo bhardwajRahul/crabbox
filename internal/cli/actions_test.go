@@ -1156,7 +1156,7 @@ func TestRemoteWriteActionsHydrationStopMatchesWorkflowInput(t *testing.T) {
 	}
 }
 
-func TestWindowsActionsHydrationMarkerCommandsUsePowerShellHome(t *testing.T) {
+func TestWindowsActionsHydrationMarkerCommandsUseProgramData(t *testing.T) {
 	target := SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeNormal}
 	for name, command := range map[string]string{
 		"read":  remoteReadActionsHydrationStateForTarget(target, "cbx_123"),
@@ -1164,10 +1164,13 @@ func TestWindowsActionsHydrationMarkerCommandsUsePowerShellHome(t *testing.T) {
 		"stop":  remoteWriteActionsHydrationStopForTarget(target, "cbx_123"),
 	} {
 		decoded := decodePowerShellCommand(t, command)
-		for _, want := range []string{`$HOME`, `.crabbox\actions`, `cbx_123`} {
+		for _, want := range []string{`C:\ProgramData\crabbox\actions`, `cbx_123`} {
 			if !strings.Contains(decoded, want) {
 				t.Fatalf("%s command missing %q in:\n%s", name, want, decoded)
 			}
+		}
+		if strings.Contains(decoded, `$HOME`) {
+			t.Fatalf("%s command should not use profile-relative HOME paths:\n%s", name, decoded)
 		}
 	}
 }
