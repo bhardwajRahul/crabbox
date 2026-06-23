@@ -457,7 +457,7 @@ func runSSHInputQuiet(ctx context.Context, target SSHTarget, remote, input strin
 }
 
 func runSSHInput(ctx context.Context, target SSHTarget, remote string, input io.Reader, stdout, stderr io.Writer) error {
-	remote = wrapRemoteInputForTarget(target, remote)
+	remote = wrapRemoteForTarget(target, remote)
 	if input == nil {
 		input = strings.NewReader("")
 	}
@@ -484,7 +484,7 @@ func runSSHInput(ctx context.Context, target SSHTarget, remote string, input io.
 }
 
 func runSSHInputStream(ctx context.Context, target SSHTarget, remote string, input io.ReadSeeker, stdout, stderr io.Writer) error {
-	remote = wrapRemoteInputForTarget(target, remote)
+	remote = wrapRemoteForTarget(target, remote)
 	if input == nil {
 		input = strings.NewReader("")
 	}
@@ -761,13 +761,6 @@ func wrapRemoteForTarget(target SSHTarget, remote string) string {
 	return wrapRemoteForTargetWithWaitTimeout(target, remote, 0)
 }
 
-func wrapRemoteInputForTarget(target SSHTarget, remote string) string {
-	if isWindowsWSL2Target(target) {
-		return wsl2InputCommand(remote)
-	}
-	return wrapRemoteForTarget(target, remote)
-}
-
 func wrapRemoteForTargetWithWaitTimeout(target SSHTarget, remote string, waitTimeout time.Duration) string {
 	if isWindowsNativeTarget(target) {
 		if strings.HasPrefix(remote, "powershell.exe ") || strings.HasPrefix(remote, "powershell ") {
@@ -816,40 +809,6 @@ $scriptBytes = [Convert]::FromBase64String("` + encoded + `")
 $wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
 try {
   ` + invoke + `
-} finally {
-  Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-}
-exit $code`)
-}
-
-func wsl2InputCommand(remote string) string {
-	encoded := base64.StdEncoding.EncodeToString([]byte(remote))
-	return powershellCommand(`$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
-$dir = "C:\ProgramData\crabbox\commands"
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$name = "cmd-" + [Guid]::NewGuid().ToString("N") + ".sh"
-$path = Join-Path $dir $name
-$scriptBytes = [Convert]::FromBase64String("` + encoded + `")
-[System.IO.File]::WriteAllBytes($path, $scriptBytes)
-$wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
-try {
-  $psi = [System.Diagnostics.ProcessStartInfo]::new("wsl.exe")
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardInput = $true
-  $psi.Arguments = "--exec bash " + $wslPath
-  $process = [System.Diagnostics.Process]::Start($psi)
-  $stdinCopy = [Console]::OpenStandardInput().CopyToAsync($process.StandardInput.BaseStream)
-  $stdinClose = {
-    param($task)
-    try {
-      $process.StandardInput.Close()
-    } catch {
-    }
-  }.GetNewClosure()
-  $stdinCopy.ContinueWith([System.Action[System.Threading.Tasks.Task]]$stdinClose) | Out-Null
-  $process.WaitForExit()
-  $code = $process.ExitCode
 } finally {
   Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
 }

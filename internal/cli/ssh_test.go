@@ -328,23 +328,6 @@ func TestWSL2WrapRemoteCommandWithWaitTimeout(t *testing.T) {
 	}
 }
 
-func TestWSL2InputCommandForwardsStdinAsynchronously(t *testing.T) {
-	target := SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeWSL2}
-	got := wrapRemoteInputForTarget(target, `cat > out.txt`)
-	decoded := decodePowerShellCommand(t, got)
-	for _, want := range []string{
-		`$psi.RedirectStandardInput = $true`,
-		`$stdinCopy = [Console]::OpenStandardInput().CopyToAsync($process.StandardInput.BaseStream)`,
-		`$stdinCopy.ContinueWith([System.Action[System.Threading.Tasks.Task]]$stdinClose) | Out-Null`,
-		`$process.WaitForExit()`,
-		`$code = $process.ExitCode`,
-	} {
-		if !strings.Contains(decoded, want) {
-			t.Fatalf("WSL2 input command missing %q in %q", want, decoded)
-		}
-	}
-}
-
 func TestWSL2StdinScriptCommandWithWaitTimeoutReadsPayloadFromStdin(t *testing.T) {
 	got := wsl2StdinScriptCommandWithWaitTimeout(15 * time.Second)
 	decoded := decodePowerShellCommand(t, got)
