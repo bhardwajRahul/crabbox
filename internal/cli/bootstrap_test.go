@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteWindowsBootstrapSSHWarningIncludesDetail(t *testing.T) {
@@ -696,6 +697,7 @@ func TestAWSUserDataWindowsWSL2Profile(t *testing.T) {
 		"Assert-CrabboxFileSHA256 $wslRootfs",
 		"$wslRootfsMinBytes = 100 * 1024 * 1024",
 		`$wslRootfsDownload = "$wslRootfs.download"`,
+		"Remove-Item -Force -LiteralPath $setupCompletePath -ErrorAction SilentlyContinue",
 		"Remove-Item -Force -LiteralPath $wslRootfs",
 		"Remove-Item -Force -LiteralPath $wslRootfsDownload",
 		"curl.exe -fL --retry 8",
@@ -769,6 +771,47 @@ exit 0
 	}
 	if !strings.Contains(stderr.String(), "BOOTSTRAP_VISIBLE_OUTPUT") {
 		t.Fatalf("bootstrap output was not streamed:\n%s", stderr.String())
+	}
+}
+
+func TestWindowsWSL2BootstrapCompleteProbeUsesWindowsMarker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake ssh helper is only reliable on Unix hosts")
+	}
+	dir := t.TempDir()
+	logPath := installRecordingSSH(t, dir)
+	bootstrapTarget := SSHTarget{
+		User:        "crabbox",
+		Host:        "127.0.0.1",
+		Port:        "22",
+		TargetOS:    targetWindows,
+		WindowsMode: windowsModeNormal,
+	}
+	target := bootstrapTarget
+	target.WindowsMode = windowsModeWSL2
+
+	if !probeWindowsWSL2BootstrapComplete(context.Background(), bootstrapTarget, &target, 5*time.Second) {
+		t.Fatal("setup marker probe should pass with fake ssh")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := recordedSSHCommands(string(data))
+	if len(commands) != 1 {
+		t.Fatalf("ssh commands=%d want 1:\n%s", len(commands), data)
+	}
+	decoded := decodePowerShellCommand(t, commands[0])
+	for _, want := range []string{
+		`Test-Path -LiteralPath "C:\ProgramData\crabbox\setup-complete"`,
+		`setup-complete marker missing`,
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("setup marker probe missing %q in %q", want, decoded)
+		}
+	}
+	if strings.Contains(decoded, "wsl.exe") {
+		t.Fatalf("setup marker probe should not invoke WSL: %q", decoded)
 	}
 }
 

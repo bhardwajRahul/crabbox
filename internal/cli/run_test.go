@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -141,7 +142,11 @@ func installRecordingSSH(t *testing.T, dir string) string {
 cmd=""
 for arg do cmd="$arg"; done
 printf '%s\n---\n' "$cmd" >> "$CRABBOX_FAKE_SSH_LOG"
-cat >/dev/null || true
+if [ -n "${CRABBOX_FAKE_SSH_STDIN_LOG:-}" ]; then
+  /bin/cat >> "$CRABBOX_FAKE_SSH_STDIN_LOG" || true
+else
+  /bin/cat >/dev/null || true
+fi
 exit 0
 `
 	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
@@ -2212,6 +2217,73 @@ func TestPreflightToolsForTargetFiltersByOS(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("unsupported mac tools=%v", got)
 	}
+}
+
+func TestWindowsWSL2RemoteCapabilityPreflightUsesBoundedWrapper(t *testing.T) {
+	dir := t.TempDir()
+	logPath := installRecordingSSH(t, dir)
+	stdinLog := filepath.Join(dir, "ssh.stdin")
+	t.Setenv("CRABBOX_FAKE_SSH_STDIN_LOG", stdinLog)
+	cfg := defaultConfig()
+	cfg.Run.PreflightTools = []string{"node"}
+	target := SSHTarget{
+		User:        "crabbox",
+		Host:        "127.0.0.1",
+		Port:        "22",
+		TargetOS:    targetWindows,
+		WindowsMode: windowsModeWSL2,
+	}
+
+	var out bytes.Buffer
+	printRemoteCapabilityPreflight(context.Background(), &out, cfg, target, "cbx_123", `/work/repo`, nil, false, "", true, nil)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := recordedSSHCommands(string(data))
+	if len(commands) != 1 {
+		t.Fatalf("ssh commands=%d want 1:\n%s", len(commands), data)
+	}
+	decoded := decodePowerShellCommand(t, commands[0])
+	for _, want := range []string{
+		`[Console]::OpenStandardInput().CopyTo($script)`,
+		`$process.WaitForExit(15000)`,
+		`throw "WSL2 command timed out after 15s"`,
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("WSL2 preflight command missing %q in %q", want, decoded)
+		}
+	}
+	if strings.Contains(decoded, `preflight_cmd`) {
+		t.Fatalf("WSL2 preflight script should be sent over stdin, not embedded in command: %q", decoded)
+	}
+	payloadBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := string(payloadBytes)
+	if !strings.Contains(payload, `preflight_cmd '\''node'\'' '\''node'\'' node --version`) {
+		t.Fatalf("WSL2 preflight payload missing node probe in %q", payload)
+	}
+}
+
+func wsl2CommandPayload(t *testing.T, decoded string) string {
+	t.Helper()
+	start := strings.Index(decoded, `[Convert]::FromBase64String("`)
+	if start < 0 {
+		t.Fatalf("WSL2 command missing base64 payload: %q", decoded)
+	}
+	start += len(`[Convert]::FromBase64String("`)
+	end := strings.Index(decoded[start:], `")`)
+	if end < 0 {
+		t.Fatalf("WSL2 command has unterminated base64 payload: %q", decoded)
+	}
+	raw, err := base64.StdEncoding.DecodeString(decoded[start : start+end])
+	if err != nil {
+		t.Fatalf("WSL2 command payload is not base64: %v", err)
+	}
+	return string(raw)
 }
 
 func TestRemotePreflightNonePrintsWorkspaceOnly(t *testing.T) {

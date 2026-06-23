@@ -428,12 +428,36 @@ func runSSHCombinedOutput(ctx context.Context, target SSHTarget, remote string) 
 	return strings.TrimSpace(string(lastOut)), lastErr
 }
 
+func runWSL2ControlScriptCombinedOutput(ctx context.Context, target SSHTarget, remote string, waitTimeout time.Duration, connectTimeout, connectionAttempts string) (string, error) {
+	command := wsl2StdinScriptCommandWithWaitTimeout(waitTimeout)
+	var lastOut []byte
+	var lastErr error
+	for _, port := range sshPortCandidates(target.Port, target.FallbackPorts) {
+		probe := target
+		probe.Port = port
+		probe.FallbackPorts = []string{}
+		cmd := exec.CommandContext(ctx, "ssh", sshArgsWithOptions(probe, command, connectTimeout, connectionAttempts)...)
+		cmd.Stdin = strings.NewReader(remote)
+		var out synchronizedBuffer
+		err := runSSHCommand(cmd, &out, &out)
+		if err == nil {
+			return strings.TrimSpace(out.String()), nil
+		}
+		lastOut = out.Bytes()
+		lastErr = err
+		if !shouldRetrySSHPort(err) {
+			return strings.TrimSpace(string(lastOut)), err
+		}
+	}
+	return strings.TrimSpace(string(lastOut)), lastErr
+}
+
 func runSSHInputQuiet(ctx context.Context, target SSHTarget, remote, input string) error {
 	return runSSHInput(ctx, target, remote, strings.NewReader(input), io.Discard, io.Discard)
 }
 
 func runSSHInput(ctx context.Context, target SSHTarget, remote string, input io.Reader, stdout, stderr io.Writer) error {
-	remote = wrapRemoteForTarget(target, remote)
+	remote = wrapRemoteInputForTarget(target, remote)
 	if input == nil {
 		input = strings.NewReader("")
 	}
@@ -460,7 +484,7 @@ func runSSHInput(ctx context.Context, target SSHTarget, remote string, input io.
 }
 
 func runSSHInputStream(ctx context.Context, target SSHTarget, remote string, input io.ReadSeeker, stdout, stderr io.Writer) error {
-	remote = wrapRemoteForTarget(target, remote)
+	remote = wrapRemoteInputForTarget(target, remote)
 	if input == nil {
 		input = strings.NewReader("")
 	}
@@ -737,6 +761,13 @@ func wrapRemoteForTarget(target SSHTarget, remote string) string {
 	return wrapRemoteForTargetWithWaitTimeout(target, remote, 0)
 }
 
+func wrapRemoteInputForTarget(target SSHTarget, remote string) string {
+	if isWindowsWSL2Target(target) {
+		return wsl2InputCommand(remote)
+	}
+	return wrapRemoteForTarget(target, remote)
+}
+
 func wrapRemoteForTargetWithWaitTimeout(target SSHTarget, remote string, waitTimeout time.Duration) string {
 	if isWindowsNativeTarget(target) {
 		if strings.HasPrefix(remote, "powershell.exe ") || strings.HasPrefix(remote, "powershell ") {
@@ -785,6 +816,81 @@ $scriptBytes = [Convert]::FromBase64String("` + encoded + `")
 $wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
 try {
   ` + invoke + `
+} finally {
+  Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+}
+exit $code`)
+}
+
+func wsl2InputCommand(remote string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(remote))
+	return powershellCommand(`$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$dir = "C:\ProgramData\crabbox\commands"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$name = "cmd-" + [Guid]::NewGuid().ToString("N") + ".sh"
+$path = Join-Path $dir $name
+$scriptBytes = [Convert]::FromBase64String("` + encoded + `")
+[System.IO.File]::WriteAllBytes($path, $scriptBytes)
+$wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
+try {
+  $psi = [System.Diagnostics.ProcessStartInfo]::new("wsl.exe")
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true
+  $psi.Arguments = "--exec bash " + $wslPath
+  $process = [System.Diagnostics.Process]::Start($psi)
+  $stdinCopy = [Console]::OpenStandardInput().CopyToAsync($process.StandardInput.BaseStream)
+  $stdinClose = {
+    param($task)
+    try {
+      $process.StandardInput.Close()
+    } catch {
+    }
+  }.GetNewClosure()
+  $stdinCopy.ContinueWith([System.Action[System.Threading.Tasks.Task]]$stdinClose) | Out-Null
+  $process.WaitForExit()
+  $code = $process.ExitCode
+} finally {
+  Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+}
+exit $code`)
+}
+
+func wsl2StdinScriptCommandWithWaitTimeout(waitTimeout time.Duration) string {
+	wait := `$process.WaitForExit()
+  $code = $process.ExitCode`
+	if waitTimeout > 0 {
+		waitMS := int(waitTimeout / time.Millisecond)
+		wait = fmt.Sprintf(`if (-not $process.WaitForExit(%d)) {
+    try {
+      $process.Kill($true)
+    } catch {
+      $process.Kill()
+    }
+    $process.WaitForExit(5000) | Out-Null
+    throw "WSL2 command timed out after %s"
+  }
+  $code = $process.ExitCode`, waitMS, waitTimeout.Round(time.Second))
+	}
+	return powershellCommand(`$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$dir = "C:\ProgramData\crabbox\commands"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$name = "cmd-" + [Guid]::NewGuid().ToString("N") + ".sh"
+$path = Join-Path $dir $name
+try {
+  $script = [System.IO.File]::Open($path, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+  try {
+    [Console]::OpenStandardInput().CopyTo($script)
+  } finally {
+    $script.Close()
+  }
+  $wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
+  $psi = [System.Diagnostics.ProcessStartInfo]::new("wsl.exe")
+  $psi.UseShellExecute = $false
+  $psi.Arguments = "--exec bash " + $wslPath
+  $process = [System.Diagnostics.Process]::Start($psi)
+  ` + wait + `
 } finally {
   Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
 }

@@ -164,10 +164,10 @@ func bootstrapManagedWindowsWSL2(ctx context.Context, cfg Config, target *SSHTar
 			return err
 		}
 		target.Port = bootstrapTarget.Port
-		if probeWindowsWSL2Ready(ctx, bootstrapTarget, target, 20*time.Second) {
+		if probeWindowsWSL2BootstrapComplete(ctx, bootstrapTarget, target, 20*time.Second) {
 			return nil
 		}
-		fmt.Fprintln(stderr, "Windows WSL2 runtime probe did not become ready after bootstrap; retrying bootstrap")
+		fmt.Fprintln(stderr, "Windows WSL2 setup marker is not ready after bootstrap; retrying bootstrap")
 	}
 	return waitForSSHReady(ctx, target, stderr, "bootstrap", bootstrapWaitTimeout(cfg))
 }
@@ -200,13 +200,16 @@ func writeWindowsBootstrapSSHWarning(stderr io.Writer, phase string, err error, 
 	fmt.Fprintf(stderr, "warning: %s SSH command ended before completion; waiting for reboot/ready state: %v\n%s\n", phase, err, detail)
 }
 
-func probeWindowsWSL2Ready(ctx context.Context, bootstrapTarget SSHTarget, target *SSHTarget, timeout time.Duration) bool {
+func probeWindowsWSL2BootstrapComplete(ctx context.Context, bootstrapTarget SSHTarget, target *SSHTarget, timeout time.Duration) bool {
 	if target.Host == "" {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	remote := wsl2CommandWithWaitTimeout(sshReadyCommand(*target), minDuration(timeout, 15*time.Second))
+	remote := powershellCommand(`$ErrorActionPreference = "Stop"
+if (-not (Test-Path -LiteralPath "C:\ProgramData\crabbox\setup-complete")) {
+  throw "setup-complete marker missing"
+}`)
 	for _, port := range sshPortCandidates(bootstrapTarget.Port, bootstrapTarget.FallbackPorts) {
 		probe := bootstrapTarget
 		probe.Port = port

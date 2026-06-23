@@ -353,6 +353,7 @@ func windowsWSL2BootstrapPowerShell(cfg Config) string {
 	$wslSetup = "C:\ProgramData\crabbox\wsl\linux-setup.sh"
 	$wslFeaturesMarker = "C:\ProgramData\crabbox\wsl-features-rebooted"
 	$wslKernelMarker = "C:\ProgramData\crabbox\wsl-kernel-rebooted"
+	Remove-Item -Force -LiteralPath $setupCompletePath -ErrorAction SilentlyContinue
 	function Restart-CrabboxBootstrap($MarkerPath) {
 	  Set-Content -NoNewline -Encoding ASCII -Path $MarkerPath -Value (Get-Date).ToString("o")
 	  Restart-Computer -Force

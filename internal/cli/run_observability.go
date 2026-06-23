@@ -168,6 +168,8 @@ func printRemoteCapabilityPreflight(ctx context.Context, w io.Writer, cfg Config
 	var err error
 	if isWindowsNativeTarget(target) {
 		out, err = runWindowsRemoteCapabilityPreflight(ctx, target, workdir, env, envFiles, tools)
+	} else if isWindowsWSL2Target(target) {
+		out, err = runWSL2RemoteCapabilityPreflight(ctx, target, workdir, env, envFiles, tools)
 	} else {
 		out, err = runSSHCombinedOutput(ctx, target, remoteCapabilityPreflightCommand(workdir, env, envFiles, tools))
 	}
@@ -243,6 +245,12 @@ func probeMissingRemoteTools(ctx context.Context, target SSHTarget, tools []stri
 	command := remoteMissingToolsCommand(tools)
 	if isWindowsNativeTarget(target) {
 		command = windowsRemoteMissingToolsCommand(tools)
+	} else if isWindowsWSL2Target(target) {
+		out, err := runWSL2ControlCombinedOutput(ctx, target, command)
+		if err != nil {
+			return nil, err
+		}
+		return parseMissingRemoteToolsOutput(out), nil
 	}
 	out, err := runSSHCombinedOutput(ctx, target, command)
 	if err != nil {
@@ -267,6 +275,20 @@ func remoteMissingToolsCommand(tools []string) string {
 done
 `)
 	return "bash -lc " + shellQuote(b.String())
+}
+
+func runWSL2RemoteCapabilityPreflight(ctx context.Context, target SSHTarget, workdir string, env map[string]string, envFiles []string, tools []string) (string, error) {
+	return runWSL2ControlCombinedOutput(ctx, target, remoteCapabilityPreflightCommand(workdir, env, envFiles, tools))
+}
+
+func runWSL2ControlCombinedOutput(ctx context.Context, target SSHTarget, remote string) (string, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := runWSL2ControlScriptCombinedOutput(commandCtx, target, remote, 15*time.Second, "2", "1")
+	if commandCtx.Err() == context.DeadlineExceeded {
+		return out, exit(7, "WSL2 control SSH probe timed out after 30s")
+	}
+	return out, err
 }
 
 func windowsRemoteMissingToolsCommand(tools []string) string {
