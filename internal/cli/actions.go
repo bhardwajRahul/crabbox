@@ -2157,7 +2157,7 @@ func waitForActionsHydration(ctx context.Context, target SSHTarget, leaseID, exp
 }
 
 func readActionsHydrationState(ctx context.Context, target SSHTarget, leaseID string) (actionsHydrationState, error) {
-	out, err := runSSHOutput(ctx, target, remoteReadActionsHydrationStateForTarget(target, leaseID))
+	out, err := runActionsHydrationOutput(ctx, target, remoteReadActionsHydrationStateForTarget(target, leaseID))
 	if err != nil {
 		return actionsHydrationState{}, err
 	}
@@ -2180,7 +2180,7 @@ func waitForLocalActionsHydration(ctx context.Context, target SSHTarget, leaseID
 			}
 			return state, nil
 		}
-		status, statusErr := runSSHOutput(ctx, target, remoteLocalActionsHydrateStatus(leaseID, pid))
+		status, statusErr := runActionsHydrationOutput(ctx, target, remoteLocalActionsHydrateStatus(leaseID, pid))
 		if statusErr == nil && strings.HasPrefix(status, "exit=") {
 			if state, err := readActionsHydrationState(ctx, target, leaseID); err == nil && state.Workspace != "" {
 				if expectedJob != "" && state.Job != "" && state.Job != expectedJob {
@@ -2205,10 +2205,30 @@ func waitForLocalActionsHydration(ctx context.Context, target SSHTarget, leaseID
 }
 
 func ensureLocalActionsRunEnv(ctx context.Context, target SSHTarget, leaseID string, state actionsHydrationState) error {
-	if err := runSSHQuiet(ctx, target, remoteEnsureLocalActionsRunEnv(leaseID, state.EnvFile)); err != nil {
+	if err := runActionsHydrationQuiet(ctx, target, remoteEnsureLocalActionsRunEnv(leaseID, state.EnvFile)); err != nil {
 		return exit(7, "update local Actions env handoff on %s: %v", target.Host, err)
 	}
 	return nil
+}
+
+func runActionsHydrationOutput(ctx context.Context, target SSHTarget, remote string) (string, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := runSSHOutputWithRemoteWaitTimeout(commandCtx, target, remote, 15*time.Second, "2", "1")
+	if commandCtx.Err() == context.DeadlineExceeded {
+		return "", exit(7, "Actions hydration SSH probe timed out after 30s")
+	}
+	return out, err
+}
+
+func runActionsHydrationQuiet(ctx context.Context, target SSHTarget, remote string) error {
+	commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	err := runSSHQuietWithRemoteWaitTimeout(commandCtx, target, remote, 15*time.Second, "2", "1")
+	if commandCtx.Err() == context.DeadlineExceeded {
+		return exit(7, "Actions hydration SSH probe timed out after 30s")
+	}
+	return err
 }
 
 func clearActionsHydrationState(ctx context.Context, target SSHTarget, leaseID string) error {

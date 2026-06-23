@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -153,14 +154,9 @@ func bootstrapManagedWindowsWSL2(ctx context.Context, cfg Config, target *SSHTar
 			return err
 		}
 		fmt.Fprintf(stderr, "running Windows WSL2 bootstrap over SSH attempt=%d\n", attempt)
-		remote := powershellCommand(`$ErrorActionPreference = "Stop"
-$path = "C:\ProgramData\crabbox-bootstrap.ps1"
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
-$input | Set-Content -Encoding UTF8 -LiteralPath $path
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path
-exit $LASTEXITCODE`)
 		var bootstrapOutput bytes.Buffer
-		err := runSSHInput(ctx, bootstrapTarget, remote, strings.NewReader(windowsBootstrapPowerShell(cfg, publicKey)), &bootstrapOutput, &bootstrapOutput)
+		bootstrapWriter := &synchronizedFanoutWriter{writers: []io.Writer{stderr, &bootstrapOutput}}
+		err := runWindowsWSL2BootstrapAttempt(ctx, cfg, bootstrapTarget, publicKey, bootstrapWriter)
 		if err != nil {
 			writeWindowsBootstrapSSHWarning(stderr, "Windows WSL2 bootstrap", err, bootstrapOutput.String())
 		}
@@ -168,11 +164,31 @@ exit $LASTEXITCODE`)
 			return err
 		}
 		target.Port = bootstrapTarget.Port
-		if probeSSHReady(ctx, target, 20*time.Second) {
+		if probeWindowsWSL2Ready(ctx, bootstrapTarget, target, 20*time.Second) {
 			return nil
 		}
+		fmt.Fprintln(stderr, "Windows WSL2 runtime probe did not become ready after bootstrap; retrying bootstrap")
 	}
 	return waitForSSHReady(ctx, target, stderr, "bootstrap", bootstrapWaitTimeout(cfg))
+}
+
+type synchronizedFanoutWriter struct {
+	mu      sync.Mutex
+	writers []io.Writer
+}
+
+func (w *synchronizedFanoutWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, writer := range w.writers {
+		if writer == nil {
+			continue
+		}
+		if _, err := writer.Write(data); err != nil {
+			return 0, err
+		}
+	}
+	return len(data), nil
 }
 
 func writeWindowsBootstrapSSHWarning(stderr io.Writer, phase string, err error, output string) {
@@ -182,4 +198,39 @@ func writeWindowsBootstrapSSHWarning(stderr io.Writer, phase string, err error, 
 		return
 	}
 	fmt.Fprintf(stderr, "warning: %s SSH command ended before completion; waiting for reboot/ready state: %v\n%s\n", phase, err, detail)
+}
+
+func probeWindowsWSL2Ready(ctx context.Context, bootstrapTarget SSHTarget, target *SSHTarget, timeout time.Duration) bool {
+	if target.Host == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	remote := wsl2CommandWithWaitTimeout(sshReadyCommand(*target), minDuration(timeout, 15*time.Second))
+	for _, port := range sshPortCandidates(bootstrapTarget.Port, bootstrapTarget.FallbackPorts) {
+		probe := bootstrapTarget
+		probe.Port = port
+		probe.FallbackPorts = []string{}
+		if runSSHQuietWithOptions(ctx, probe, remote, "2", "1") == nil {
+			target.Port = probe.Port
+			return true
+		}
+	}
+	return false
+}
+
+func runWindowsWSL2BootstrapAttempt(ctx context.Context, cfg Config, bootstrapTarget SSHTarget, publicKey string, stderr io.Writer) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	remote := powershellCommand(`$ErrorActionPreference = "Stop"
+$path = "C:\ProgramData\crabbox-bootstrap.ps1"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+$input | Set-Content -Encoding UTF8 -LiteralPath $path
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path
+exit $LASTEXITCODE`)
+	err := runSSHInput(attemptCtx, bootstrapTarget, remote, strings.NewReader(windowsBootstrapPowerShell(cfg, publicKey)), stderr, stderr)
+	if attemptCtx.Err() == context.DeadlineExceeded {
+		return exit(7, "Windows WSL2 bootstrap command timed out after 20m0s")
+	}
+	return err
 }

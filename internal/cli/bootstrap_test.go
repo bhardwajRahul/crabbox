@@ -2,7 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -729,6 +733,42 @@ func TestAWSUserDataWindowsWSL2Profile(t *testing.T) {
 	}
 	if verifyIndex, importIndex := strings.LastIndex(got, "Assert-CrabboxFileSHA256 $wslRootfs"), strings.Index(got, "wsl.exe --import $wslDistro"); verifyIndex < 0 || importIndex < 0 || verifyIndex > importIndex {
 		t.Fatalf("windows WSL2 bootstrap must verify the rootfs before import")
+	}
+}
+
+func TestWindowsWSL2BootstrapAttemptStreamsOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake ssh helper is only reliable on Unix hosts")
+	}
+	dir := t.TempDir()
+	sshPath := filepath.Join(dir, "ssh")
+	script := `#!/bin/sh
+while IFS= read -r _; do :; done || true
+printf 'BOOTSTRAP_VISIBLE_OUTPUT\n'
+exit 0
+`
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cfg := baseConfig()
+	cfg.Provider = "azure"
+	cfg.TargetOS = targetWindows
+	cfg.WindowsMode = windowsModeWSL2
+	target := SSHTarget{
+		User:        "crabbox",
+		Host:        "127.0.0.1",
+		Port:        "22",
+		TargetOS:    targetWindows,
+		WindowsMode: windowsModeNormal,
+	}
+	var stderr bytes.Buffer
+	if err := runWindowsWSL2BootstrapAttempt(context.Background(), cfg, target, "ssh-ed25519 test", &stderr); err != nil {
+		t.Fatalf("bootstrap attempt error=%v\nstderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "BOOTSTRAP_VISIBLE_OUTPUT") {
+		t.Fatalf("bootstrap output was not streamed:\n%s", stderr.String())
 	}
 }
 

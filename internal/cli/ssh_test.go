@@ -306,6 +306,31 @@ func TestWSL2WrapsRemoteCommand(t *testing.T) {
 	}
 }
 
+func TestWSL2CommandWithWaitTimeoutBoundsRemoteProcess(t *testing.T) {
+	got := wsl2CommandWithWaitTimeout(`printf "ok\n"`, 15*time.Second)
+	decoded := decodePowerShellCommand(t, got)
+	for _, want := range []string{
+		`$process.WaitForExit(15000)`,
+		`$process.Kill($true)`,
+		`$process.Kill()`,
+		`throw "WSL2 command timed out after 15s"`,
+		`$code = $process.ExitCode`,
+	} {
+		if !strings.Contains(decoded, want) {
+			t.Fatalf("bounded WSL2 command missing %q in %q", want, decoded)
+		}
+	}
+}
+
+func TestWSL2WrapRemoteCommandWithWaitTimeout(t *testing.T) {
+	target := SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeWSL2}
+	got := wrapRemoteForTargetWithWaitTimeout(target, `printf "ok\n"`, 15*time.Second)
+	decoded := decodePowerShellCommand(t, got)
+	if !strings.Contains(decoded, `$process.WaitForExit(15000)`) {
+		t.Fatalf("bounded WSL2 wrapper missing timeout:\n%s", decoded)
+	}
+}
+
 func TestStaticLeaseBypassesCoordinatorAndUsesTargetServerType(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Provider = "ssh"

@@ -338,6 +338,26 @@ func runSSHQuietWithOptionsResolvePort(ctx context.Context, target *SSHTarget, r
 	return lastErr
 }
 
+func runSSHQuietWithRemoteWaitTimeout(ctx context.Context, target SSHTarget, remote string, waitTimeout time.Duration, connectTimeout, connectionAttempts string) error {
+	remote = wrapRemoteForTargetWithWaitTimeout(target, remote, waitTimeout)
+	var lastErr error
+	for _, port := range sshPortCandidates(target.Port, target.FallbackPorts) {
+		probe := target
+		probe.Port = port
+		probe.FallbackPorts = []string{}
+		cmd := exec.CommandContext(ctx, "ssh", sshArgsNoInputWithOptions(probe, remote, connectTimeout, connectionAttempts)...)
+		err := runSSHCommand(cmd, io.Discard, io.Discard)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !shouldRetrySSHPort(err) {
+			return err
+		}
+	}
+	return lastErr
+}
+
 func runSSHOutput(ctx context.Context, target SSHTarget, remote string) (string, error) {
 	remote = wrapRemoteForTarget(target, remote)
 	var lastOut []byte
@@ -346,6 +366,29 @@ func runSSHOutput(ctx context.Context, target SSHTarget, remote string) (string,
 		probe := target
 		probe.Port = port
 		cmd := exec.CommandContext(ctx, "ssh", sshArgsNoInput(probe, remote)...)
+		var out bytes.Buffer
+		err := runSSHCommand(cmd, &out, io.Discard)
+		if err == nil {
+			return strings.TrimSpace(out.String()), nil
+		}
+		lastOut = out.Bytes()
+		lastErr = err
+		if !shouldRetrySSHPort(err) {
+			return "", err
+		}
+	}
+	return strings.TrimSpace(string(lastOut)), lastErr
+}
+
+func runSSHOutputWithRemoteWaitTimeout(ctx context.Context, target SSHTarget, remote string, waitTimeout time.Duration, connectTimeout, connectionAttempts string) (string, error) {
+	remote = wrapRemoteForTargetWithWaitTimeout(target, remote, waitTimeout)
+	var lastOut []byte
+	var lastErr error
+	for _, port := range sshPortCandidates(target.Port, target.FallbackPorts) {
+		probe := target
+		probe.Port = port
+		probe.FallbackPorts = []string{}
+		cmd := exec.CommandContext(ctx, "ssh", sshArgsNoInputWithOptions(probe, remote, connectTimeout, connectionAttempts)...)
 		var out bytes.Buffer
 		err := runSSHCommand(cmd, &out, io.Discard)
 		if err == nil {
@@ -691,6 +734,10 @@ func rsync(ctx context.Context, target SSHTarget, src, dst string, excludes []st
 }
 
 func wrapRemoteForTarget(target SSHTarget, remote string) string {
+	return wrapRemoteForTargetWithWaitTimeout(target, remote, 0)
+}
+
+func wrapRemoteForTargetWithWaitTimeout(target SSHTarget, remote string, waitTimeout time.Duration) string {
 	if isWindowsNativeTarget(target) {
 		if strings.HasPrefix(remote, "powershell.exe ") || strings.HasPrefix(remote, "powershell ") {
 			return remote
@@ -698,13 +745,32 @@ func wrapRemoteForTarget(target SSHTarget, remote string) string {
 		return powershellCommand(remote)
 	}
 	if isWindowsWSL2Target(target) {
-		return wsl2Command(remote)
+		return wsl2CommandWithWaitTimeout(remote, waitTimeout)
 	}
 	return remote
 }
 
 func wsl2Command(remote string) string {
+	return wsl2CommandWithWaitTimeout(remote, 0)
+}
+
+func wsl2CommandWithWaitTimeout(remote string, waitTimeout time.Duration) string {
 	encoded := base64.StdEncoding.EncodeToString([]byte(remote))
+	wait := `$process.WaitForExit()
+  $code = $process.ExitCode`
+	if waitTimeout > 0 {
+		waitMS := int(waitTimeout / time.Millisecond)
+		wait = fmt.Sprintf(`if (-not $process.WaitForExit(%d)) {
+    try {
+      $process.Kill($true)
+    } catch {
+      $process.Kill()
+    }
+    $process.WaitForExit(5000) | Out-Null
+    throw "WSL2 command timed out after %s"
+  }
+  $code = $process.ExitCode`, waitMS, waitTimeout.Round(time.Second))
+	}
 	return powershellCommand(`$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $dir = "C:\ProgramData\crabbox\commands"
@@ -726,8 +792,7 @@ try {
   } finally {
     $process.StandardInput.Close()
   }
-  $process.WaitForExit()
-  $code = $process.ExitCode
+  ` + wait + `
 } finally {
   Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
 }
