@@ -955,6 +955,12 @@ func (a App) runCommandWithBenchmarkRecord(ctx context.Context, args []string, b
 		state, err := a.hydrateActionsLocally(ctx, cfg, repo, currentTarget, leaseID, cfg.Actions.Job, fields, 20*time.Minute, false, false)
 		if err != nil {
 			recorder.Event("actions.hydrate.failed", "hydrate", err.Error())
+			if *keepOnFailure {
+				if acquired && !*keep {
+					keepFailedLease = true
+				}
+				printKeepOnFailureSSHHint(a.Stderr, cfg, leaseID, server, currentTarget)
+			}
 			return err
 		}
 		workdir = state.Workspace

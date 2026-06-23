@@ -1579,6 +1579,70 @@ exit 0
 	}
 }
 
+func TestRunCommandKeepOnFailureKeepsLeaseAfterLocalActionsHydrationFailure(t *testing.T) {
+	clearConfigEnv(t)
+	dir := t.TempDir()
+	isolateRunTestUserDirs(t, dir)
+	sshPath := filepath.Join(dir, "ssh")
+	rsyncPath := filepath.Join(dir, "rsync")
+	logPath := filepath.Join(dir, "ssh.log")
+	configPath := filepath.Join(dir, ".crabbox.yaml")
+	if err := os.WriteFile(configPath, []byte(`actions:
+  workflow: .github/workflows/hydrate.yml
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+cmd=""
+for arg do
+  cmd="$arg"
+done
+printf '%s\n---\n' "$cmd" >> "$CRABBOX_FAKE_SSH_LOG"
+case "$cmd" in
+  *"nohup bash -c"*) printf '123\n'; exit 0 ;;
+  *"kill -0 '123'"*) printf 'exit=unknown\nno marker written\n'; exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rsyncPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	releases := 0
+	runEnvProfileTestReleaseHook = func() error {
+		releases++
+		return nil
+	}
+	t.Cleanup(func() { runEnvProfileTestReleaseHook = nil })
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CRABBOX_CONFIG", configPath)
+	t.Setenv("CRABBOX_FAKE_SSH_LOG", logPath)
+	t.Setenv("CRABBOX_FAKE_SSH_PORT", "22")
+	t.Setenv("CRABBOX_FAKE_SSH_PROXY", "1")
+
+	var stdout, stderr bytes.Buffer
+	err := (App{Stdout: &stdout, Stderr: &stderr}).runCommand(context.Background(), []string{
+		"--provider", "run-env-profile-test",
+		"--keep-on-failure",
+		"--", "pnpm", "test:docs",
+	})
+	var exitErr ExitError
+	if !AsExitError(err, &exitErr) || exitErr.Code != 7 {
+		t.Fatalf("error=%v, want exit 7\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(exitErr.Message, "local Actions hydration exited before writing marker") {
+		t.Fatalf("message missing local Actions hydration failure: %q", exitErr.Message)
+	}
+	if !strings.Contains(stderr.String(), "keep-on-failure: kept lease=cbx_env_profile_test") {
+		t.Fatalf("keep-on-failure hint missing:\n%s", stderr.String())
+	}
+	if releases != 0 {
+		t.Fatalf("local Actions hydration failure released kept lease %d time(s)\n%s", releases, stderr.String())
+	}
+}
+
 func TestRunCommandSyncOnlyIgnoresJSCommandRuntime(t *testing.T) {
 	dir := t.TempDir()
 	isolateRunTestUserDirs(t, dir)
