@@ -1206,8 +1206,22 @@ retrySync:
 		deletedData := manifest.DeletedNUL()
 		stepStart = time.Now()
 		manifestInput := syncManifestInputForTarget(target, manifestData, deletedData)
-		if err := runSSHInput(ctx, target, remoteWriteSyncManifestsNewForTarget(target, workdir), strings.NewReader(manifestInput), io.Discard, a.Stderr); err != nil {
-			return recordFailure(exit(7, "write sync manifests: %v", err))
+		manifestCtx := ctx
+		var cancelManifest context.CancelFunc
+		if cfg.Sync.Timeout > 0 {
+			manifestCtx, cancelManifest = context.WithTimeout(ctx, cfg.Sync.Timeout)
+		}
+		stopManifestHeartbeat := startSyncHeartbeat(a.Stderr, stepStart, 15*time.Second)
+		manifestErr := runSSHInput(manifestCtx, target, remoteWriteSyncManifestsNewForTarget(target, workdir), strings.NewReader(manifestInput), io.Discard, a.Stderr)
+		stopManifestHeartbeat()
+		if cancelManifest != nil {
+			cancelManifest()
+		}
+		if manifestCtx.Err() == context.DeadlineExceeded {
+			return recordFailure(exit(6, "write sync manifests timed out after %s", cfg.Sync.Timeout))
+		}
+		if manifestErr != nil {
+			return recordFailure(exit(7, "write sync manifests: %v", manifestErr))
 		}
 		timings.syncSteps.manifestWrite = time.Since(stepStart)
 		if shouldPruneRemoteSync(cfg.Sync.Delete, fullResyncRequested) {

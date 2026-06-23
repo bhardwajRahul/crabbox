@@ -754,6 +754,8 @@ func wsl2CommandWithWaitTimeout(remote string, waitTimeout time.Duration) string
 	encoded := base64.StdEncoding.EncodeToString([]byte(remote))
 	wait := `$process.WaitForExit()
   $code = $process.ExitCode`
+	invoke := `& wsl.exe --exec bash $wslPath
+  $code = $LASTEXITCODE`
 	if waitTimeout > 0 {
 		waitMS := int(waitTimeout / time.Millisecond)
 		wait = fmt.Sprintf(`if (-not $process.WaitForExit(%d)) {
@@ -766,6 +768,11 @@ func wsl2CommandWithWaitTimeout(remote string, waitTimeout time.Duration) string
     throw "WSL2 command timed out after %s"
   }
   $code = $process.ExitCode`, waitMS, waitTimeout.Round(time.Second))
+		invoke = `$psi = [System.Diagnostics.ProcessStartInfo]::new("wsl.exe")
+  $psi.UseShellExecute = $false
+  $psi.Arguments = "--exec bash " + $wslPath
+  $process = [System.Diagnostics.Process]::Start($psi)
+  ` + wait
 	}
 	return powershellCommand(`$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -777,18 +784,7 @@ $scriptBytes = [Convert]::FromBase64String("` + encoded + `")
 [System.IO.File]::WriteAllBytes($path, $scriptBytes)
 $wslPath = "/mnt/c/ProgramData/crabbox/commands/" + $name
 try {
-  $psi = [System.Diagnostics.ProcessStartInfo]::new("wsl.exe")
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardInput = $true
-  $psi.Arguments = "--exec bash " + $wslPath
-  $process = [System.Diagnostics.Process]::Start($psi)
-  try {
-    [Console]::OpenStandardInput().CopyTo($process.StandardInput.BaseStream)
-  } catch [System.IO.IOException] {
-  } finally {
-    $process.StandardInput.Close()
-  }
-  ` + wait + `
+  ` + invoke + `
 } finally {
   Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
 }
@@ -1324,7 +1320,9 @@ cat > "$meta_dir/sync-deleted.new"
 
 func syncManifestInputForTarget(target SSHTarget, manifestData, deletedData []byte) string {
 	if isWindowsWSL2Target(target) {
-		return fmt.Sprintf("%d\n%d\n", len(manifestData), len(deletedData)) + string(manifestData) + string(deletedData)
+		manifestEncoded := base64.StdEncoding.EncodeToString(manifestData)
+		deletedEncoded := base64.StdEncoding.EncodeToString(deletedData)
+		return fmt.Sprintf("%d\n%d\n", len(manifestEncoded), len(deletedEncoded)) + manifestEncoded + deletedEncoded
 	}
 	return fmt.Sprintf("%d\n", len(manifestData)) + string(manifestData) + string(deletedData)
 }
@@ -1337,7 +1335,8 @@ func remoteWriteSyncManifestsNewForTarget(target SSHTarget, workdir string) stri
 }
 
 func remoteWriteSyncManifestsNewPython(workdir string) string {
-	python := `import sys
+	python := `import base64
+import sys
 
 def read_len(name):
     line = sys.stdin.buffer.readline()
@@ -1348,12 +1347,14 @@ def read_len(name):
 
 manifest_len = read_len("sync manifest")
 deleted_len = read_len("sync deleted")
-manifest = sys.stdin.buffer.read(manifest_len)
-if len(manifest) != manifest_len:
-    raise SystemExit(f"short sync manifest: got {len(manifest)} want {manifest_len}")
-deleted = sys.stdin.buffer.read(deleted_len)
-if len(deleted) != deleted_len:
-    raise SystemExit(f"short sync deleted manifest: got {len(deleted)} want {deleted_len}")
+manifest_encoded = sys.stdin.buffer.read(manifest_len)
+if len(manifest_encoded) != manifest_len:
+    raise SystemExit(f"short sync manifest: got {len(manifest_encoded)} want {manifest_len}")
+deleted_encoded = sys.stdin.buffer.read(deleted_len)
+if len(deleted_encoded) != deleted_len:
+    raise SystemExit(f"short sync deleted manifest: got {len(deleted_encoded)} want {deleted_len}")
+manifest = base64.b64decode(manifest_encoded)
+deleted = base64.b64decode(deleted_encoded)
 
 with open(sys.argv[1], "wb") as handle:
     handle.write(manifest)

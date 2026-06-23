@@ -276,11 +276,8 @@ func TestWSL2WrapsRemoteCommand(t *testing.T) {
 	for _, want := range []string{
 		`[Convert]::FromBase64String("`,
 		`[System.IO.File]::WriteAllBytes($path, $scriptBytes)`,
-		`$psi.RedirectStandardInput = $true`,
-		`$psi.Arguments = "--exec bash " + $wslPath`,
-		`[Console]::OpenStandardInput().CopyTo($process.StandardInput.BaseStream)`,
-		`$process.WaitForExit()`,
-		`$code = $process.ExitCode`,
+		`& wsl.exe --exec bash $wslPath`,
+		`$code = $LASTEXITCODE`,
 		`exit $code`,
 	} {
 		if !strings.Contains(decoded, want) {
@@ -1385,7 +1382,9 @@ func TestSyncManifestInputForTargetFramesDeletedLengthForWSL2(t *testing.T) {
 	manifest := []byte("keep.txt\x00")
 	deleted := []byte("old.txt\x00")
 	got := syncManifestInputForTarget(SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeWSL2}, manifest, deleted)
-	want := fmt.Sprintf("%d\n%d\n", len(manifest), len(deleted)) + string(manifest) + string(deleted)
+	manifestEncoded := base64.StdEncoding.EncodeToString(manifest)
+	deletedEncoded := base64.StdEncoding.EncodeToString(deleted)
+	want := fmt.Sprintf("%d\n%d\n", len(manifestEncoded), len(deletedEncoded)) + manifestEncoded + deletedEncoded
 	if got != want {
 		t.Fatalf("WSL2 manifest input = %q, want %q", got, want)
 	}
@@ -1401,7 +1400,7 @@ func TestRemoteWriteSyncManifestsNewPython(t *testing.T) {
 	workdir := t.TempDir()
 	manifest := strings.Repeat("manifest-entry\x00", 4096)
 	deleted := "old.txt\x00"
-	input := fmt.Sprintf("%d\n%d\n", len(manifest), len(deleted)) + manifest + deleted
+	input := syncManifestInputForTarget(SSHTarget{TargetOS: targetWindows, WindowsMode: windowsModeWSL2}, []byte(manifest), []byte(deleted))
 	cmd := exec.Command("bash", "-lc", remoteWriteSyncManifestsNewPython(workdir))
 	cmd.Stdin = strings.NewReader(input)
 	if out, err := cmd.CombinedOutput(); err != nil {
