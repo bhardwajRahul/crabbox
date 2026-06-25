@@ -374,6 +374,23 @@ func TestLeaseCreateFlagsApplyExplicitSSHPort(t *testing.T) {
 	}
 }
 
+func TestNormalizeTargetConfigForcesAWSMacOSLaunchdSSHPort(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Provider = "aws"
+	cfg.TargetOS = targetMacOS
+	cfg.SSHPort = "2222"
+	cfg.SSHFallbackPorts = []string{"22", "2200"}
+
+	normalizeTargetConfig(&cfg)
+
+	if cfg.SSHPort != "22" {
+		t.Fatalf("SSHPort=%q, want launchd Remote Login port 22", cfg.SSHPort)
+	}
+	if cfg.SSHFallbackPorts != nil {
+		t.Fatalf("SSHFallbackPorts=%v, want nil", cfg.SSHFallbackPorts)
+	}
+}
+
 func TestLeaseCreateFlagsDoNotApplyPortableOSImageToAzureWindows(t *testing.T) {
 	defaults := baseConfig()
 	fs := newFlagSet("test", io.Discard)
