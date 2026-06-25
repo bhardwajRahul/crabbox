@@ -72,7 +72,7 @@ printf '%s\\n' "$output" >>"$CRABBOX_FAKE_GPG_LOG"
 	writeExecutable(
 		path.join(bin, "node"),
 		`#!/usr/bin/env bash
-printf 'v23.0.0\\n'
+printf 'v24.0.0\\n'
 `,
 	);
 	writeExecutable(
@@ -117,6 +117,11 @@ exit 1
 			"-c",
 			[
 				"set -euo pipefail",
+				// Model the broken image: matching Node, but no npm or corepack.
+				"command() {",
+					'  if [[ "$*" == "-v npm" || "$*" == "-v corepack" ]]; then return 1; fi',
+					'  builtin command "$@"',
+				"}",
 				"source scripts/install-linux-developer-tools.sh",
 				"add_nodesource",
 				"add_nodesource",

@@ -458,6 +458,8 @@ rg --version | Select-Object -First 1
 fd --version
 python --version
 node --version
+$nodeMajor = [int](node -p "process.versions.node.split('.')[0]")
+if ($nodeMajor -lt 24) { throw "Node.js 24 or newer is required, found major $nodeMajor" }
 npm --version
 corepack --version
 pnpm --version
@@ -481,6 +483,8 @@ command -v npm
 command -v corepack
 command -v pnpm
 command -v docker
+node --version
+node -e 'if (Number(process.versions.node.split(".")[0]) < 24) throw new Error(`Node.js 24 or newer is required, found ${process.version}`)'
 docker_group_member() {
   if id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
     return 0

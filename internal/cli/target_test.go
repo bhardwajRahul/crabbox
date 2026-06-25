@@ -358,6 +358,22 @@ func TestLeaseCreateFlagsRejectExeDevNonLinuxTarget(t *testing.T) {
 	}
 }
 
+func TestLeaseCreateFlagsApplyExplicitSSHPort(t *testing.T) {
+	defaults := baseConfig()
+	fs := newFlagSet("test", io.Discard)
+	values := registerLeaseCreateFlags(fs, defaults)
+	if err := parseFlags(fs, []string{"--provider", "parallels", "--target", "macos", "--ssh-port", "22"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaults
+	if err := applyLeaseCreateFlags(&cfg, fs, values); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SSHPort != "22" || !IsSSHPortExplicit(&cfg) {
+		t.Fatalf("ssh port=%q explicit=%t", cfg.SSHPort, IsSSHPortExplicit(&cfg))
+	}
+}
+
 func TestLeaseCreateFlagsDoNotApplyPortableOSImageToAzureWindows(t *testing.T) {
 	defaults := baseConfig()
 	fs := newFlagSet("test", io.Discard)

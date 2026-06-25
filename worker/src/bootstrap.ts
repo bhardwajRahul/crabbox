@@ -329,8 +329,6 @@ function windowsManagedCorePreludePowerShell(config: LeaseConfig): string {
 	$usernamePath = $windowsUsernamePath
 	$passwordMirrorPath = $windowsPasswordPath
 	$enforceKeyAuth = $false
-	$userVNCStartupPath = "C:\\ProgramData\\crabbox\\start-user-vnc.ps1"
-	$userVNCStartupCommandPath = Join-Path (Join-Path (Join-Path "C:\\Users" $user) "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup") "crabbox-user-vnc.cmd"
 	$tightVNCInstaller = "$env:TEMP\\tightvnc-2.8.85-gpl-setup-64bit.msi"
 	`;
   }
@@ -469,7 +467,7 @@ crabbox-ready
 
 function windowsDesktopBootstrapPowerShell(): string {
   return `
-	if (-not (Test-Path -LiteralPath "C:\\Program Files\\TightVNC\\tvnserver.exe")) {
+if (-not (Test-Path -LiteralPath "C:\\Program Files\\TightVNC\\tvnserver.exe")) {
 	  Retry { Invoke-WebRequest -Uri ${psQuote(tightVNCMSIURL)} -OutFile $tightVNCInstaller -UseBasicParsing }
 	  Assert-CrabboxFileSHA256 $tightVNCInstaller ${psQuote(tightVNCMSISHA256)}
 	  $vncPassword = Get-Content -Raw -Path $vncPasswordPath
@@ -486,43 +484,13 @@ function windowsDesktopBootstrapPowerShell(): string {
     "SET_ACCEPTHTTPCONNECTIONS=1", "VALUE_OF_ACCEPTHTTPCONNECTIONS=0"
   ) -Wait
 }
-$userVNCStartup = @'
-$ErrorActionPreference = "SilentlyContinue"
-$serverKey = "HKCU:\\Software\\TightVNC\\Server"
-$serviceKey = "HKLM:\\Software\\TightVNC\\Server"
-$serviceConfig = Get-ItemProperty -Path $serviceKey -ErrorAction SilentlyContinue
-function Set-TightVNCBinaryValue($Name) {
-  $hex = ""
-  if ($serviceConfig -and $serviceConfig.$Name) {
-    $bytes = [byte[]]$serviceConfig.$Name
-    if ($bytes -and $bytes.Length -gt 0) {
-      $hex = -join ($bytes | ForEach-Object { $_.ToString("X2") })
-    }
-  }
-  if ($hex) {
-    & reg.exe add "HKCU\\Software\\TightVNC\\Server" /v $Name /t REG_BINARY /d $hex /f | Out-Null
-  }
-}
-New-Item -Force -Path $serverKey | Out-Null
-New-ItemProperty -Force -Path $serverKey -Name UseVncAuthentication -PropertyType DWord -Value 1 | Out-Null
-Set-TightVNCBinaryValue "Password"
-New-ItemProperty -Force -Path $serverKey -Name UseControlAuthentication -PropertyType DWord -Value 1 | Out-Null
-Set-TightVNCBinaryValue "ControlPassword"
-New-ItemProperty -Force -Path $serverKey -Name AllowLoopback -PropertyType DWord -Value 1 | Out-Null
-New-ItemProperty -Force -Path $serverKey -Name AcceptHttpConnections -PropertyType DWord -Value 0 | Out-Null
-$exe = "C:\\Program Files\\TightVNC\\tvnserver.exe"
-Get-Process tvnserver -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq (Get-Process -Id $PID).SessionId } | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-Start-Process -FilePath $exe -ArgumentList "-run" -WindowStyle Minimized
-'@
-Set-Content -Encoding UTF8 -LiteralPath $userVNCStartupPath -Value $userVNCStartup
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $userVNCStartupCommandPath) | Out-Null
-Set-Content -Encoding ASCII -LiteralPath $userVNCStartupCommandPath -Value ('@echo off' + [Environment]::NewLine + 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $userVNCStartupPath + '"' + [Environment]::NewLine)
 $startupTask = "CrabboxUserVNC"
 cmd.exe /c "schtasks.exe /Delete /TN $startupTask /F 2>NUL" | Out-Null
-schtasks.exe /Create /TN $startupTask /SC ONLOGON /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $userVNCStartupPath" /RU $user /IT /F | Out-Null
-Get-Service -Name tvnserver -ErrorAction SilentlyContinue | Set-Service -StartupType Disabled
-Stop-Service -Name tvnserver -Force -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath "C:\\ProgramData\\crabbox\\start-user-vnc.ps1" -ErrorAction SilentlyContinue
+Remove-Item -Force -LiteralPath (Join-Path (Join-Path (Join-Path "C:\\Users" $user) "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup") "crabbox-user-vnc.cmd") -ErrorAction SilentlyContinue
+Get-Process tvnserver -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Service -Name tvnserver | Set-Service -StartupType Automatic
+Start-Service -Name tvnserver
 $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
 $oobe = "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE"
 if (-not (Test-Path -LiteralPath $oobe)) {

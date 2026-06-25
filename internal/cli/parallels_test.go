@@ -278,6 +278,21 @@ func TestParallelsEnsureGuestReadyInstallsPOSIXReadyScript(t *testing.T) {
 	}
 }
 
+func TestParallelsEnsureGuestReadyEnablesMacOSRemoteLogin(t *testing.T) {
+	runner := &parallelsFakeRunner{}
+	client := NewParallelsClient(Config{}, runner)
+	err := client.EnsureGuestReady(context.Background(), "vm1", Config{SSHUser: "runner", WorkRoot: "/Users/runner/crabbox", TargetOS: targetMacOS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(runner.lastReq.Args, "\n")
+	for _, want := range []string{"launchctl load -w /System/Library/LaunchDaemons/ssh.plist", "launchctl enable system/com.openssh.sshd", "launchctl kickstart -k system/com.openssh.sshd"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("macOS guest prep missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestParallelsEnsureGuestReadySkipsWindows(t *testing.T) {
 	runner := &parallelsFakeRunner{}
 	client := NewParallelsClient(Config{}, runner)

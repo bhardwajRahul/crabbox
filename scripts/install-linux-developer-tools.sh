@@ -89,8 +89,15 @@ docker_packages_installed() {
   return 0
 }
 
+node_toolchain_ready() {
+  command -v node >/dev/null 2>&1 &&
+    node --version | grep -q "^v${node_major}\\." &&
+    command -v npm >/dev/null 2>&1 &&
+    command -v corepack >/dev/null 2>&1
+}
+
 add_nodesource() {
-  if command -v node >/dev/null 2>&1 && node --version | grep -q "^v${node_major}\\."; then
+  if node_toolchain_ready; then
     return 0
   fi
   install -d -m 0755 "$apt_sources_dir"
@@ -167,6 +174,8 @@ EOF
 
 install_node_pnpm() {
   apt_install nodejs
+  command -v npm >/dev/null
+  command -v corepack >/dev/null
   corepack enable
   corepack prepare "pnpm@$pnpm_version" --activate
   command -v pnpm >/dev/null

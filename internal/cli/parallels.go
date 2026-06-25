@@ -86,11 +86,11 @@ func SelectParallelsFleetConfig(ctx context.Context, cfg Config, runner CommandR
 			continue
 		}
 		if source != "" && !parallelsVMListContains(vms, source) {
-			lastErr = exit(4, "Parallels source VM %q not found on host %s", source, blank(candidate.Parallels.SelectedHost, "local"))
+			lastErr = exit(4, "Parallels source VM %q not found on host %s", source, parallelsHostRefForConfig(candidate))
 			continue
 		}
 		if !parallelsHostWithinCapacity(candidate, vms) {
-			lastErr = exit(5, "Parallels host %s is at maxVMs capacity", blank(candidate.Parallels.SelectedHost, "local"))
+			lastErr = exit(5, "Parallels host %s is at maxVMs capacity", parallelsHostRefForConfig(candidate))
 			continue
 		}
 		return candidate, nil
@@ -574,6 +574,11 @@ APT
   systemctl restart ssh >/dev/null 2>&1 || systemctl restart ssh.socket >/dev/null 2>&1 || true
 fi
 if command -v sw_vers >/dev/null 2>&1; then
+  remote_login_log=/tmp/crabbox-remote-login.log
+  /bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist >"$remote_login_log" 2>&1 ||
+    /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist >>"$remote_login_log" 2>&1 || true
+  /bin/launchctl enable system/com.openssh.sshd >>"$remote_login_log" 2>&1 || true
+  /bin/launchctl kickstart -k system/com.openssh.sshd >>"$remote_login_log" 2>&1 || true
   cat >/usr/local/bin/crabbox-ready <<'READY'
 #!/bin/sh
 set -eu

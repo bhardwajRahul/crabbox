@@ -881,9 +881,9 @@ func (a App) checkpointForkParallelsSnapshot(ctx context.Context, fs *flag.FlagS
 		for i := 1; i <= count; i++ {
 			slug := checkpointForkFanoutSlug(requestedSlug, i, count)
 			if count == 1 {
-				fmt.Fprintf(a.Stdout, "would fork provider=parallels host=%s source=%s snapshot=%s name=%q slug=%s\n", blank(selected.Parallels.SelectedHost, "local"), cfg.Parallels.Source, snapshot.ID, snapshot.Name, blank(slug, "-"))
+				fmt.Fprintf(a.Stdout, "would fork provider=parallels host=%s source=%s snapshot=%s name=%q slug=%s\n", parallelsHostRefForConfig(selected), cfg.Parallels.Source, snapshot.ID, snapshot.Name, blank(slug, "-"))
 			} else {
-				fmt.Fprintf(a.Stdout, "would fork provider=parallels host=%s source=%s snapshot=%s name=%q slug=%s index=%d/%d\n", blank(selected.Parallels.SelectedHost, "local"), cfg.Parallels.Source, snapshot.ID, snapshot.Name, blank(slug, "-"), i, count)
+				fmt.Fprintf(a.Stdout, "would fork provider=parallels host=%s source=%s snapshot=%s name=%q slug=%s index=%d/%d\n", parallelsHostRefForConfig(selected), cfg.Parallels.Source, snapshot.ID, snapshot.Name, blank(slug, "-"), i, count)
 			}
 		}
 		return nil

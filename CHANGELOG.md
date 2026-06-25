@@ -69,6 +69,13 @@
 
 ### Fixed
 
+- Restored incomplete Linux Node.js toolchains through NodeSource when `npm` or Corepack is missing, preventing source installers from failing on otherwise valid images.
+- Rejected AWS developer-tool images older than Node.js 24 during candidate smoke validation.
+- Added the documented `--ssh-port` lease-creation override so provider warmups can select the target SSH port without environment-only configuration.
+- Preserved direct remote Parallels host identity in logs, inventory labels, errors, checkpoint previews, and follow-up lifecycle routing.
+- Enabled macOS Remote Login while preparing Parallels clones so disabled source templates fail fast into a usable SSH lease instead of waiting for readiness timeout.
+- Made remote Parallels proxy SSH non-interactive with a bounded connection attempt, preventing encrypted host keys from stalling lease and WebVNC readiness.
+- Switched Windows desktops to TightVNC service mode and removed the broken per-user startup path, restoring authenticated WebVNC sessions for already logged-in guests.
 - Fixed Tart SSH readiness on hosts where OpenSSH can reach the guest but Go's raw TCP probe cannot. Thanks @kmcquade.
 - Revoked active WebVNC and Code viewers when their lease share access is removed while preserving owner, admin, and still-authorized sessions. Thanks @coygeek.
 - Prevented E2B and Upstash Box credentials from following redirects outside each request's trusted origin while preserving same-origin redirects. Thanks @coygeek.
