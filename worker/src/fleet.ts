@@ -15348,13 +15348,16 @@ export class AWSProvider implements CloudProvider {
       sourceCIDRs.length > 0 || globalCIDRs.length > 0,
     );
     const configuredSecurityGroupID = awsConfiguredSecurityGroupID(config, this.env);
+    const managedSecurityGroupName = `${awsManagedSecurityGroupName(config)}-${(
+      await sha256Hex(`${lease.org}\0${lease.owner}`)
+    ).slice(0, 12)}`;
     const nextLease: LeaseRecord = {
       ...nextLeaseWithSources,
       network: {
         ...nextLeaseWithSources.network,
         ...(configuredSecurityGroupID
           ? { awsSecurityGroupID: configuredSecurityGroupID }
-          : { awsSecurityGroupName: awsManagedSecurityGroupName(config) }),
+          : { awsSecurityGroupName: managedSecurityGroupName }),
         ...(config.awsSubnetID ? { awsSubnetID: config.awsSubnetID } : {}),
       },
     };
@@ -15378,6 +15381,7 @@ export class AWSProvider implements CloudProvider {
     return {
       config: {
         ...config,
+        awsSGName: configuredSecurityGroupID ? "" : managedSecurityGroupName,
         awsSSHCIDRs: activeAWSSSHSourceCIDRs(targetLeases, [...sourceCIDRs, ...globalCIDRs]),
       },
       lease: nextLease,
@@ -15450,30 +15454,33 @@ export class AWSProvider implements CloudProvider {
         hasUnknownActiveAWSSSHSource(targetLeases)
           ? "additive"
           : "authoritative";
-      const config = leaseConfig({
-        provider: "aws",
-        target: targetLease.target,
-        windowsMode: targetLease.windowsMode ?? "normal",
-        class: targetLease.class,
-        serverType: targetLease.serverType,
-        awsSSHCIDRs: cidrs,
-        ...(targetLease.network?.awsSecurityGroupID
-          ? { awsSGID: targetLease.network.awsSecurityGroupID }
-          : {}),
-        ...(targetLease.network?.awsSubnetID
-          ? { awsSubnetID: targetLease.network.awsSubnetID }
-          : {}),
-        capacity: { market: targetLease.market === "spot" ? "spot" : "on-demand" },
-        providerKey: targetLease.providerKey,
-        sshUser: targetLease.sshUser,
-        sshPort: target.port,
-        sshFallbackPorts: [],
-        sshPublicKey: "ssh-ed25519 ingress-reconcile",
-        workRoot: targetLease.workRoot,
-        ...(targetLease.hostId || targetLease.hostID
-          ? { hostId: targetLease.hostId || targetLease.hostID }
-          : {}),
-      });
+      const config = {
+        ...leaseConfig({
+          provider: "aws",
+          target: targetLease.target,
+          windowsMode: targetLease.windowsMode ?? "normal",
+          class: targetLease.class,
+          serverType: targetLease.serverType,
+          awsSSHCIDRs: cidrs,
+          ...(targetLease.network?.awsSecurityGroupID
+            ? { awsSGID: targetLease.network.awsSecurityGroupID }
+            : {}),
+          ...(targetLease.network?.awsSubnetID
+            ? { awsSubnetID: targetLease.network.awsSubnetID }
+            : {}),
+          capacity: { market: targetLease.market === "spot" ? "spot" : "on-demand" },
+          providerKey: targetLease.providerKey,
+          sshUser: targetLease.sshUser,
+          sshPort: target.port,
+          sshFallbackPorts: [],
+          sshPublicKey: "ssh-ed25519 ingress-reconcile",
+          workRoot: targetLease.workRoot,
+          ...(targetLease.hostId || targetLease.hostID
+            ? { hostId: targetLease.hostId || targetLease.hostID }
+            : {}),
+        }),
+        awsSGName: targetLease.network?.awsSecurityGroupName ?? "",
+      };
       const { region } = target;
       const client = region === this.region ? this.client : new EC2SpotClient(this.env, region);
       // oxlint-disable-next-line eslint/no-await-in-loop -- each regional shared group is distinct.

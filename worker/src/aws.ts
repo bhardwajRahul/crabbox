@@ -57,7 +57,12 @@ const awsMacHostQuotaSpecs: Record<string, { quotaCode: string; quotaName: strin
 const snapshotDeleteBackoffMs = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000];
 const securityGroupVisibilityBackoffMs = [100, 200, 400, 800, 1_600, 3_200];
 
-export function awsManagedSecurityGroupName(config: Pick<LeaseConfig, "providerKey">): string {
+export function awsManagedSecurityGroupName(
+  config: Pick<LeaseConfig, "providerKey"> & Partial<Pick<LeaseConfig, "awsSGName">>,
+): string {
+  if (config.awsSGName) {
+    return config.awsSGName;
+  }
   return config.providerKey.startsWith(workspaceProviderKeyPrefix)
     ? "crabbox-workspaces"
     : "crabbox-runners";

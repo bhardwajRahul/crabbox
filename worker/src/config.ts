@@ -51,6 +51,7 @@ export interface LeaseConfig {
   awsPromotedAMIs: Record<string, string>;
   awsSnapshot: string;
   awsSGID: string;
+  awsSGName: string;
   awsSubnetID: string;
   awsProfile: string;
   awsRootGB: number;
@@ -284,6 +285,7 @@ export function leaseConfig(input: LeaseRequest, defaults: LeaseConfigDefaults =
     awsPromotedAMIs: {},
     awsSnapshot: input.awsSnapshot ?? "",
     awsSGID: input.awsSGID ?? "",
+    awsSGName: "",
     awsSubnetID: input.awsSubnetID ?? "",
     awsProfile: input.awsProfile ?? "",
     awsRootGB: input.awsRootGB ?? 400,

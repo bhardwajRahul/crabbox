@@ -9830,11 +9830,14 @@ describe("fleet lease identity and idle", () => {
       network: { sshSourceCIDRs: ["203.0.113.7/32"] },
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
+    const managedGroupName = `crabbox-runners-${(
+      await sha256Hex(`${lease.org}\0${lease.owner}`)
+    ).slice(0, 12)}`;
     const active = testLease({
       id: "cbx_000000000001",
       provider: "aws",
       network: {
-        awsSecurityGroupName: "crabbox-runners",
+        awsSecurityGroupName: managedGroupName,
         sshSourceCIDRs: ["198.51.100.44/32"],
       },
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -9846,11 +9849,18 @@ describe("fleet lease identity and idle", () => {
     });
 
     expect(prepared.config.awsSSHCIDRs).toEqual(["198.51.100.44/32", "203.0.113.7/32"]);
-    expect(prepared.lease.network?.awsSecurityGroupName).toBe("crabbox-runners");
+    expect(prepared.lease.network?.awsSecurityGroupName).toBe(managedGroupName);
     expect(prepared.provisioning).toMatchObject({
       sshIngressReconcile: "additive",
       publishAccessBeforeProvisioning: true,
     });
+
+    const otherPrepared = await provider.prepareLeaseCreate(
+      config,
+      { ...lease, owner: "other@example.com" },
+      { requestSourceCIDRs: ["192.0.2.7/32"], activeLeases: [] },
+    );
+    expect(otherPrepared.lease.network?.awsSecurityGroupName).not.toBe(managedGroupName);
   });
 
   it("reports each AWS fallback region before provisioning mutates it", async () => {
