@@ -11057,7 +11057,7 @@ describe("fleet lease identity and idle", () => {
     });
   });
 
-  it("requires admin auth for provider host pins on AWS macOS leases", async () => {
+  it("requires admin auth for new AWS macOS host pins but permits owner reuse", async () => {
     let created = false;
     const fleet = testFleet(new MemoryStorage(), {
       aws: fakeProvider(
@@ -11109,6 +11109,30 @@ describe("fleet lease identity and idle", () => {
     expect(created).toBe(true);
     const { lease } = (await create.json()) as { lease: LeaseRecord };
     expect(lease.hostId).toBe("h-000000000001");
+
+    const released = await fleet.fetch(
+      request("POST", `/v1/leases/${lease.id}/release`, {
+        headers: {
+          "x-crabbox-admin": "true",
+          "x-crabbox-owner": "admin@example.com",
+          "x-crabbox-org": "example-org",
+        },
+      }),
+    );
+    expect(released.status).toBe(200);
+
+    created = false;
+    const reused = await fleet.fetch(
+      request("POST", "/v1/leases", {
+        headers: {
+          "x-crabbox-owner": "admin@example.com",
+          "x-crabbox-org": "example-org",
+        },
+        body: { ...body, leaseID: "cbx_abcdef123458" },
+      }),
+    );
+    expect(reused.status).toBe(201);
+    expect(created).toBe(true);
   });
 
   it("only applies target-matching promoted AWS images", async () => {

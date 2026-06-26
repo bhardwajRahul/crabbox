@@ -1660,7 +1660,21 @@ export class FleetCoordinator {
         { status: 403 },
       );
     }
-    if (!isAdminRequest(request) && (config.hostID || config.awsMacHostID)) {
+    const requestedHostID = config.hostID || config.awsMacHostID;
+    const reusesOwnedReleasedMacHost =
+      requestedHostID &&
+      config.provider === "aws" &&
+      config.target === "macos" &&
+      (await this.leaseRecords()).some(
+        (lease) =>
+          lease.state === "released" &&
+          lease.owner === owner &&
+          lease.org === org &&
+          lease.provider === "aws" &&
+          lease.target === "macos" &&
+          leaseHostID(lease) === requestedHostID,
+      );
+    if (!isAdminRequest(request) && requestedHostID && !reusesOwnedReleasedMacHost) {
       return json(
         {
           error: "admin_required",
@@ -1782,7 +1796,6 @@ export class FleetCoordinator {
       if (providerRegion) {
         record.region = providerRegion;
       }
-      const requestedHostID = config.hostID || config.awsMacHostID;
       if (requestedHostID) {
         record.hostId = requestedHostID;
       }
