@@ -71,6 +71,7 @@
 
 ### Fixed
 
+- Derived omitted coordinator lease provider keys from the finalized lease ID instead of a shared fallback, preventing cross-lease SSH key reuse. Thanks @TurboTheTurtle.
 - Rejected portal OAuth return targets containing HTTP header control characters, preventing malformed redirect responses from breaking login completion. Thanks @TurboTheTurtle.
 - Prevented Cloudflare Sandbox bridge credentials and request bodies from following redirects outside the configured bridge origin while preserving same-origin redirects. Thanks @coygeek.
 - Dropped invalid allowlisted environment names before rendering remote POSIX or Windows commands, preventing shell metacharacters in ambient names from creating unintended commands. Thanks @coygeek.
