@@ -8278,7 +8278,7 @@ export class FleetCoordinator {
     request: Request,
     identifier: string,
   ): Promise<LeaseBridgeTicketConsumption<WebVNCTicketRecord>> {
-    const value = bridgeTicketFromRequest(request);
+    const value = bridgeTicketFromRequest(request, this.env);
     if (!validWebVNCTicket(value)) {
       return { status: "invalid" };
     }
@@ -8317,7 +8317,7 @@ export class FleetCoordinator {
     request: Request,
     identifier: string,
   ): Promise<LeaseBridgeTicketConsumption<CodeTicketRecord>> {
-    const value = bridgeTicketFromRequest(request);
+    const value = bridgeTicketFromRequest(request, this.env);
     if (!validCodeTicket(value)) {
       return { status: "invalid" };
     }
@@ -8357,7 +8357,7 @@ export class FleetCoordinator {
     identifier: string,
     role: EgressRole,
   ): Promise<LeaseBridgeTicketConsumption<EgressTicketRecord>> {
-    const value = bridgeTicketFromRequest(request);
+    const value = bridgeTicketFromRequest(request, this.env);
     if (!validEgressTicket(value)) {
       return { status: "invalid" };
     }
@@ -13214,7 +13214,10 @@ function codeViewerSessionCookie(session: CodeViewerSessionRecord, maxAgeSeconds
   ].join("; ");
 }
 
-export function bridgeTicketFromRequest(request: Request): string {
+export function bridgeTicketFromRequest(
+  request: Request,
+  env?: Pick<Env, "CRABBOX_ALLOW_QUERY_BRIDGE_TICKETS">,
+): string {
   const upgradeTicket = request.headers.get("x-crabbox-bridge-ticket")?.trim() ?? "";
   if (validBridgeTicket(upgradeTicket)) {
     return upgradeTicket;
@@ -13225,13 +13228,13 @@ export function bridgeTicketFromRequest(request: Request): string {
   if (validBridgeTicket(bearerTicket)) {
     return bearerTicket;
   }
-  // Legacy clients sent tickets in the request target. Keep accepting them for
-  // compatibility, but current clients use the dedicated upgrade header.
-  const queryTicket = new URL(request.url).searchParams.get("ticket") ?? "";
-  if (validBridgeTicket(queryTicket)) {
-    return queryTicket;
+  if (envFlagEnabled(env?.CRABBOX_ALLOW_QUERY_BRIDGE_TICKETS)) {
+    const queryTicket = new URL(request.url).searchParams.get("ticket") ?? "";
+    if (validBridgeTicket(queryTicket)) {
+      return queryTicket;
+    }
   }
-  return upgradeTicket || bearerTicket || queryTicket;
+  return upgradeTicket || bearerTicket;
 }
 
 function validBridgeTicket(value: string): boolean {
