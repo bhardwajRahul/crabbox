@@ -1,9 +1,8 @@
-package applevz
+package applevm
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,8 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofrs/flock"
-	"github.com/openclaw/crabbox/internal/applevzhelper"
+	"github.com/openclaw/crabbox/internal/applevmhelper"
 	core "github.com/openclaw/crabbox/internal/cli"
 )
 
@@ -67,7 +65,7 @@ func mustJSON(t *testing.T, value any) string {
 	return string(data)
 }
 
-func writeAppleVZInstanceClaim(t *testing.T, inst applevzhelper.Instance) {
+func writeAppleVMInstanceClaim(t *testing.T, inst applevmhelper.Instance) {
 	t.Helper()
 	server := core.Server{CloudID: inst.Name, Provider: providerName, Name: inst.Name, Labels: map[string]string{
 		"instance": inst.Name,
@@ -101,7 +99,7 @@ func testBackend(t *testing.T, runner *recordingRunner) *backend {
 	root := t.TempDir()
 	cfg := core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ = core.AppleVZConfig{
+	cfg.AppleVM = core.AppleVMConfig{
 		HelperPath:  "/tmp/helper-source",
 		Image:       "https://cloud-images.ubuntu.com/releases/noble/release-20260518/ubuntu-24.04-server-cloudimg-arm64.img",
 		ImageSHA256: "6a61b967ba4a27dd1966f835a67643073ed55c2860ce3dc1cb0517282e6b8bec",
@@ -113,7 +111,6 @@ func testBackend(t *testing.T, runner *recordingRunner) *backend {
 	}
 	b := newBackend(Provider{}.Spec(), cfg, core.Runtime{Stdout: io.Discard, Stderr: io.Discard, Exec: runner}).(*backend)
 	b.prepareHelper = func(context.Context, core.Config) (string, error) { return "helper", nil }
-	b.prepareExistingHelper = b.prepareHelper
 	b.stateRoot = func() (string, error) { return root, nil }
 	b.waitForSSH = func(context.Context, *core.SSHTarget, io.Writer, string, time.Duration) error { return nil }
 	return b
@@ -158,7 +155,7 @@ func TestProviderSpecAndAliases(t *testing.T) {
 	if p.Name() != providerName {
 		t.Fatalf("Name=%q want %s", p.Name(), providerName)
 	}
-	for _, alias := range []string{"apple-vz", "applevz"} {
+	for _, alias := range []string{"apple-vm", "applevm"} {
 		got, err := core.ProviderFor(alias)
 		if err != nil {
 			t.Fatalf("ProviderFor(%q): %v", alias, err)
@@ -181,10 +178,10 @@ func TestProviderSpecAndAliases(t *testing.T) {
 func TestApplyDefaults(t *testing.T) {
 	cfg := core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ = core.AppleVZConfig{}
+	cfg.AppleVM = core.AppleVMConfig{}
 	applyDefaults(&cfg)
-	if cfg.AppleVZ.User != "crabbox" || cfg.AppleVZ.WorkRoot != "/work/crabbox" || cfg.AppleVZ.CPUs != 4 || cfg.AppleVZ.MemoryMiB != 8192 || cfg.AppleVZ.DiskGiB != 30 {
-		t.Fatalf("defaults not applied: %#v", cfg.AppleVZ)
+	if cfg.AppleVM.User != "crabbox" || cfg.AppleVM.WorkRoot != "/work/crabbox" || cfg.AppleVM.CPUs != 4 || cfg.AppleVM.MemoryMiB != 8192 || cfg.AppleVM.DiskGiB != 30 {
+		t.Fatalf("defaults not applied: %#v", cfg.AppleVM)
 	}
 	if cfg.SSHUser != "crabbox" || cfg.SSHPort != "22" || cfg.WorkRoot != "/work/crabbox" {
 		t.Fatalf("derived SSH defaults wrong: user=%q port=%q work=%q", cfg.SSHUser, cfg.SSHPort, cfg.WorkRoot)
@@ -192,15 +189,15 @@ func TestApplyDefaults(t *testing.T) {
 
 	cfg = core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ.CPUs = 0
-	cfg.AppleVZ.MemoryMiB = 0
-	cfg.AppleVZ.DiskGiB = 0
-	core.MarkAppleVZCPUsExplicit(&cfg)
-	core.MarkAppleVZMemoryExplicit(&cfg)
-	core.MarkAppleVZDiskExplicit(&cfg)
+	cfg.AppleVM.CPUs = 0
+	cfg.AppleVM.MemoryMiB = 0
+	cfg.AppleVM.DiskGiB = 0
+	core.MarkAppleVMCPUsExplicit(&cfg)
+	core.MarkAppleVMMemoryExplicit(&cfg)
+	core.MarkAppleVMDiskExplicit(&cfg)
 	applyDefaults(&cfg)
-	if cfg.AppleVZ.CPUs != 0 || cfg.AppleVZ.MemoryMiB != 0 || cfg.AppleVZ.DiskGiB != 0 {
-		t.Fatalf("explicit zero numeric settings defaulted: %+v", cfg.AppleVZ)
+	if cfg.AppleVM.CPUs != 0 || cfg.AppleVM.MemoryMiB != 0 || cfg.AppleVM.DiskGiB != 0 {
+		t.Fatalf("explicit zero numeric settings defaulted: %+v", cfg.AppleVM)
 	}
 }
 
@@ -211,46 +208,46 @@ func TestValidateConfigRejectsUnsafeGuestIdentity(t *testing.T) {
 		t.Fatalf("default config validation error=%v", err)
 	}
 
-	cfg.AppleVZ.User = "yes\nroot"
-	cfg.AppleVZ.WorkRoot = "/work/crabbox"
+	cfg.AppleVM.User = "yes\nroot"
+	cfg.AppleVM.WorkRoot = "/work/crabbox"
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "valid POSIX") {
 		t.Fatalf("unsafe user validation error=%v", err)
 	}
 
-	cfg.AppleVZ.User = "runner"
-	cfg.AppleVZ.WorkRoot = "relative/work"
+	cfg.AppleVM.User = "runner"
+	cfg.AppleVM.WorkRoot = "relative/work"
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "safe absolute POSIX path") {
 		t.Fatalf("relative work root validation error=%v", err)
 	}
 
-	cfg.AppleVZ.WorkRoot = `C:\work\crabbox`
+	cfg.AppleVM.WorkRoot = `C:\work\crabbox`
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "safe absolute POSIX path") {
 		t.Fatalf("host-native work root validation error=%v", err)
 	}
 
-	cfg.AppleVZ.WorkRoot = "/work/$(touch)"
+	cfg.AppleVM.WorkRoot = "/work/$(touch)"
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "safe absolute POSIX path") {
 		t.Fatalf("shell-active work root validation error=%v", err)
 	}
 
 	cfg = core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ.MemoryMiB = 512
+	cfg.AppleVM.MemoryMiB = 512
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "at least 1024 MiB") {
 		t.Fatalf("low memory validation error=%v", err)
 	}
 
 	cfg = core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ.MemoryMiB = 0
-	core.MarkAppleVZMemoryExplicit(&cfg)
+	cfg.AppleVM.MemoryMiB = 0
+	core.MarkAppleVMMemoryExplicit(&cfg)
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "got 0") {
 		t.Fatalf("explicit zero memory validation error=%v", err)
 	}
 
 	cfg = core.BaseConfig()
 	cfg.Provider = providerName
-	cfg.AppleVZ.MemoryMiB = -1
+	cfg.AppleVM.MemoryMiB = -1
 	if err := (Provider{}).ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "got -1") {
 		t.Fatalf("negative memory validation error=%v", err)
 	}
@@ -261,8 +258,8 @@ func TestValidateConfigRejectsUnsafeGuestIdentity(t *testing.T) {
 		mark     func(*core.Config)
 		want     string
 	}{
-		{name: "cpus", setValue: func(cfg *core.Config, value int) { cfg.AppleVZ.CPUs = value }, mark: core.MarkAppleVZCPUsExplicit, want: "appleVZ.cpus must be positive"},
-		{name: "disk", setValue: func(cfg *core.Config, value int) { cfg.AppleVZ.DiskGiB = value }, mark: core.MarkAppleVZDiskExplicit, want: "appleVZ.diskGiB must be positive"},
+		{name: "cpus", setValue: func(cfg *core.Config, value int) { cfg.AppleVM.CPUs = value }, mark: core.MarkAppleVMCPUsExplicit, want: "appleVM.cpus must be positive"},
+		{name: "disk", setValue: func(cfg *core.Config, value int) { cfg.AppleVM.DiskGiB = value }, mark: core.MarkAppleVMDiskExplicit, want: "appleVM.diskGiB must be positive"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, value := range []int{0, -1} {
@@ -282,9 +279,9 @@ func TestValidateConfigRejectsUnsafeGuestIdentity(t *testing.T) {
 
 func TestServerFromInstanceMapsRuntimeErrorToTerminalFailure(t *testing.T) {
 	b := testBackend(t, &recordingRunner{})
-	inst := applevzhelper.Instance{
+	inst := applevmhelper.Instance{
 		Name:   "runtime-error",
-		Status: applevzhelper.StatusError,
+		Status: applevmhelper.StatusError,
 	}
 	claim := core.LeaseClaim{Labels: map[string]string{"state": "ready"}}
 
@@ -299,48 +296,48 @@ func TestApplyDefaultsHonorsGlobalWorkRoot(t *testing.T) {
 	cfg.Provider = providerName
 	cfg.WorkRoot = "/custom/crabbox"
 	applyDefaults(&cfg)
-	if cfg.WorkRoot != "/custom/crabbox" || cfg.AppleVZ.WorkRoot != "/custom/crabbox" {
-		t.Fatalf("work root=%q apple-vz=%q want /custom/crabbox", cfg.WorkRoot, cfg.AppleVZ.WorkRoot)
+	if cfg.WorkRoot != "/custom/crabbox" || cfg.AppleVM.WorkRoot != "/custom/crabbox" {
+		t.Fatalf("work root=%q apple-vm=%q want /custom/crabbox", cfg.WorkRoot, cfg.AppleVM.WorkRoot)
 	}
 
 	cfg = core.BaseConfig()
 	cfg.Provider = providerName
 	cfg.WorkRoot = "/custom/crabbox"
-	cfg.AppleVZ.WorkRoot = "/work/apple-vz"
+	cfg.AppleVM.WorkRoot = "/work/apple-vm"
 	applyDefaults(&cfg)
-	if cfg.WorkRoot != "/work/apple-vz" || cfg.AppleVZ.WorkRoot != "/work/apple-vz" {
-		t.Fatalf("specific work root=%q apple-vz=%q want /work/apple-vz", cfg.WorkRoot, cfg.AppleVZ.WorkRoot)
+	if cfg.WorkRoot != "/work/apple-vm" || cfg.AppleVM.WorkRoot != "/work/apple-vm" {
+		t.Fatalf("specific work root=%q apple-vm=%q want /work/apple-vm", cfg.WorkRoot, cfg.AppleVM.WorkRoot)
 	}
 }
 
 func TestApplyFlags(t *testing.T) {
 	cfg := core.BaseConfig()
 	cfg.Provider = providerName
-	fs := flag.NewFlagSet("apple-vz", flag.ContinueOnError)
+	fs := flag.NewFlagSet("apple-vm", flag.ContinueOnError)
 	values := registerFlags(fs, cfg)
 	if err := fs.Parse([]string{
-		"--apple-vz-helper", "/opt/bin/helper",
-		"--apple-vz-image", "/tmp/custom.img",
-		"--apple-vz-image-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"--apple-vz-user", "ci",
-		"--apple-vz-work-root", "/work/ci",
-		"--apple-vz-cpus", "6",
-		"--apple-vz-memory", "12288",
-		"--apple-vz-disk", "64",
+		"--apple-vm-helper", "/opt/bin/helper",
+		"--apple-vm-image", "/tmp/custom.img",
+		"--apple-vm-image-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--apple-vm-user", "ci",
+		"--apple-vm-work-root", "/work/ci",
+		"--apple-vm-cpus", "6",
+		"--apple-vm-memory", "12288",
+		"--apple-vm-disk", "64",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := applyFlags(&cfg, fs, values); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AppleVZ.HelperPath != "/opt/bin/helper" || cfg.AppleVZ.Image != "/tmp/custom.img" || cfg.AppleVZ.ImageSHA256 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || cfg.AppleVZ.User != "ci" || cfg.AppleVZ.WorkRoot != "/work/ci" || cfg.AppleVZ.CPUs != 6 || cfg.AppleVZ.MemoryMiB != 12288 || cfg.AppleVZ.DiskGiB != 64 {
-		t.Fatalf("flags not applied: %#v", cfg.AppleVZ)
+	if cfg.AppleVM.HelperPath != "/opt/bin/helper" || cfg.AppleVM.Image != "/tmp/custom.img" || cfg.AppleVM.ImageSHA256 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || cfg.AppleVM.User != "ci" || cfg.AppleVM.WorkRoot != "/work/ci" || cfg.AppleVM.CPUs != 6 || cfg.AppleVM.MemoryMiB != 12288 || cfg.AppleVM.DiskGiB != 64 {
+		t.Fatalf("flags not applied: %#v", cfg.AppleVM)
 	}
-	if !core.AppleVZImageExplicit(cfg) {
-		t.Fatal("apple-vz image should be explicit after --apple-vz-image")
+	if !core.AppleVMImageExplicit(cfg) {
+		t.Fatal("apple-vm image should be explicit after --apple-vm-image")
 	}
-	if !core.AppleVZCPUsExplicit(cfg) || !core.AppleVZMemoryExplicit(cfg) || !core.AppleVZDiskExplicit(cfg) {
-		t.Fatal("apple-vz numeric settings should be explicit after flags")
+	if !core.AppleVMCPUsExplicit(cfg) || !core.AppleVMMemoryExplicit(cfg) || !core.AppleVMDiskExplicit(cfg) {
+		t.Fatal("apple-vm numeric settings should be explicit after flags")
 	}
 }
 
@@ -354,9 +351,9 @@ func TestApplyFlagsRejectsRemoteImages(t *testing.T) {
 	} {
 		cfg := core.BaseConfig()
 		cfg.Provider = providerName
-		fs := flag.NewFlagSet("apple-vz", flag.ContinueOnError)
+		fs := flag.NewFlagSet("apple-vm", flag.ContinueOnError)
 		values := registerFlags(fs, cfg)
-		if err := fs.Parse([]string{"--apple-vz-image", image}); err != nil {
+		if err := fs.Parse([]string{"--apple-vm-image", image}); err != nil {
 			t.Fatal(err)
 		}
 		err := applyFlags(&cfg, fs, values)
@@ -366,7 +363,7 @@ func TestApplyFlagsRejectsRemoteImages(t *testing.T) {
 		if strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") {
 			t.Fatalf("error exposes remote URL %q: %v", image, err)
 		}
-		if !strings.Contains(err.Error(), "CRABBOX_APPLE_VZ_IMAGE") {
+		if !strings.Contains(err.Error(), "CRABBOX_APPLE_VM_IMAGE") {
 			t.Fatalf("error=%v, want secret-safe input guidance", err)
 		}
 	}
@@ -374,9 +371,9 @@ func TestApplyFlagsRejectsRemoteImages(t *testing.T) {
 
 func TestRegisterFlagsRedactsSignedImageDefault(t *testing.T) {
 	cfg := core.BaseConfig()
-	cfg.AppleVZ.Image = "https://downloads.example.test/bearer-secret/ubuntu.img?token=private"
-	cfg.AppleVZ.ImageSHA256 = strings.Repeat("a", 64)
-	fs := flag.NewFlagSet("apple-vz", flag.ContinueOnError)
+	cfg.AppleVM.Image = "https://downloads.example.test/bearer-secret/ubuntu.img?token=private"
+	cfg.AppleVM.ImageSHA256 = strings.Repeat("a", 64)
+	fs := flag.NewFlagSet("apple-vm", flag.ContinueOnError)
 	var output bytes.Buffer
 	fs.SetOutput(&output)
 	registerFlags(fs, cfg)
@@ -395,7 +392,7 @@ func TestRegisterFlagsRedactsSignedImageDefault(t *testing.T) {
 
 func TestDoctorReady(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{
-		commandKey("helper", []string{"doctor", "--state-root", "", "--image-request-stdin"}): {Stdout: mustJSON(t, applevzhelper.DoctorResponse{
+		commandKey("helper", []string{"doctor", "--state-root", "", "--image-request-stdin"}): {Stdout: mustJSON(t, applevmhelper.DoctorResponse{
 			Status:    "ok",
 			Message:   "runtime ready",
 			Instances: 2,
@@ -419,12 +416,12 @@ func TestDoctorPassesSignedImageViaStdinAndRedactsDisplay(t *testing.T) {
 	runner := &recordingRunner{}
 	b := testBackend(t, runner)
 	signedImage := "https://downloads.example.test/bearer-secret/ubuntu.img"
-	t.Setenv("CRABBOX_APPLE_VZ_IMAGE", signedImage)
+	t.Setenv("CRABBOX_APPLE_VM_IMAGE", signedImage)
 	t.Setenv("GITHUB_TOKEN", "github-secret")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
 	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:8080")
-	b.cfg.AppleVZ.Image = signedImage
-	b.cfg.AppleVZ.ImageSHA256 = strings.Repeat("a", 64)
+	b.cfg.AppleVM.Image = signedImage
+	b.cfg.AppleVM.ImageSHA256 = strings.Repeat("a", 64)
 	applyDefaults(&b.cfg)
 
 	runner.hook = func(req core.LocalCommandRequest) (core.LocalCommandResult, error, bool) {
@@ -435,7 +432,7 @@ func TestDoctorPassesSignedImageViaStdinAndRedactsDisplay(t *testing.T) {
 			t.Fatalf("helper argv exposes signed image: %s", args)
 		}
 		for _, entry := range req.Env {
-			if strings.HasPrefix(entry, "CRABBOX_APPLE_VZ_IMAGE=") {
+			if strings.HasPrefix(entry, "CRABBOX_APPLE_VM_IMAGE=") {
 				t.Fatalf("helper environment exposes signed image")
 			}
 			if strings.HasPrefix(entry, "GITHUB_TOKEN=") || strings.HasPrefix(entry, "AWS_SECRET_ACCESS_KEY=") {
@@ -452,14 +449,14 @@ func TestDoctorPassesSignedImageViaStdinAndRedactsDisplay(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var imageRequest applevzhelper.ImageRequest
+		var imageRequest applevmhelper.ImageRequest
 		if err := json.Unmarshal(data, &imageRequest); err != nil {
 			t.Fatal(err)
 		}
 		if imageRequest.Image != signedImage || imageRequest.SHA256 != strings.Repeat("a", 64) {
 			t.Fatalf("image request=%+v", imageRequest)
 		}
-		return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DoctorResponse{
+		return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DoctorResponse{
 			Status:  "ok",
 			Message: "runtime ready",
 			Details: map[string]string{"image": signedImage},
@@ -492,8 +489,8 @@ func TestAcquireRedactsSignedImageFromLogsAndLeaseMetadata(t *testing.T) {
 	runner := &recordingRunner{}
 	b := testBackend(t, runner)
 	signedImage := "https://downloads.example.test/bearer-secret/ubuntu.img"
-	b.cfg.AppleVZ.Image = signedImage
-	b.cfg.AppleVZ.ImageSHA256 = strings.Repeat("a", 64)
+	b.cfg.AppleVM.Image = signedImage
+	b.cfg.AppleVM.ImageSHA256 = strings.Repeat("a", 64)
 	applyDefaults(&b.cfg)
 	var stderr bytes.Buffer
 	b.rt.Stderr = &stderr
@@ -504,7 +501,7 @@ func TestAcquireRedactsSignedImageFromLogsAndLeaseMetadata(t *testing.T) {
 		}
 		switch req.Args[0] {
 		case "list":
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.ListResponse{})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.ListResponse{})}, nil, true
 		case "start":
 			leaseID := argumentValue(req.Args, "--lease-id")
 			name := argumentValue(req.Args, "--name")
@@ -522,19 +519,19 @@ func TestAcquireRedactsSignedImageFromLogsAndLeaseMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var imageRequest applevzhelper.ImageRequest
+			var imageRequest applevmhelper.ImageRequest
 			if err := json.Unmarshal(data, &imageRequest); err != nil {
 				t.Fatal(err)
 			}
 			if imageRequest.Image != signedImage {
 				t.Fatalf("image request=%+v", imageRequest)
 			}
-			inst := applevzhelper.Instance{
+			inst := applevmhelper.Instance{
 				Name:      argumentValue(req.Args, "--name"),
 				LeaseID:   argumentValue(req.Args, "--lease-id"),
 				Slug:      argumentValue(req.Args, "--slug"),
-				Status:    applevzhelper.StatusRunning,
-				Image:     applevzhelper.ImageIdentity(signedImage, b.cfg.AppleVZ.ImageSHA256),
+				Status:    applevmhelper.StatusRunning,
+				Image:     applevmhelper.ImageIdentity(signedImage, b.cfg.AppleVM.ImageSHA256),
 				SSHUser:   argumentValue(req.Args, "--ssh-user"),
 				WorkRoot:  argumentValue(req.Args, "--work-root"),
 				SSHHost:   "127.0.0.1",
@@ -542,7 +539,7 @@ func TestAcquireRedactsSignedImageFromLogsAndLeaseMetadata(t *testing.T) {
 				CreatedAt: time.Now().UTC(),
 				UpdatedAt: time.Now().UTC(),
 			}
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.StartResponse{Instance: inst})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.StartResponse{Instance: inst})}, nil, true
 		default:
 			return core.LocalCommandResult{}, nil, false
 		}
@@ -607,11 +604,11 @@ func TestAcquireResolveListAndRelease(t *testing.T) {
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
 	name := ""
-	startInstance := applevzhelper.Instance{
-		Status:    applevzhelper.StatusRunning,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+	startInstance := applevmhelper.Instance{
+		Status:    applevmhelper.StatusRunning,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		SSHHost:   "127.0.0.1",
 		SSHPort:   43022,
 		CreatedAt: time.Now().UTC(),
@@ -619,7 +616,7 @@ func TestAcquireResolveListAndRelease(t *testing.T) {
 	}
 	runner.responses[commandKey("helper", []string{
 		"list", "--state-root", root,
-	})] = core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.ListResponse{})}
+	})] = core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.ListResponse{})}
 	runner.hook = func(req core.LocalCommandRequest) (core.LocalCommandResult, error, bool) {
 		if req.Name != "helper" || len(req.Args) == 0 || req.Args[0] != "start" {
 			return core.LocalCommandResult{}, nil, false
@@ -629,7 +626,7 @@ func TestAcquireResolveListAndRelease(t *testing.T) {
 		instance.Name = name
 		instance.LeaseID = argumentValue(req.Args, "--lease-id")
 		instance.Slug = argumentValue(req.Args, "--slug")
-		return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.StartResponse{Instance: instance})}, nil, true
+		return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.StartResponse{Instance: instance})}, nil, true
 	}
 
 	req := core.AcquireRequest{Repo: core.Repo{Root: t.TempDir()}, RequestedSlug: "demo"}
@@ -641,14 +638,14 @@ func TestAcquireResolveListAndRelease(t *testing.T) {
 		t.Fatalf("unexpected lease target: %#v", lease)
 	}
 
-	listResp := applevzhelper.ListResponse{Instances: []applevzhelper.Instance{{
+	listResp := applevmhelper.ListResponse{Instances: []applevmhelper.Instance{{
 		Name:      name,
 		LeaseID:   lease.LeaseID,
 		Slug:      "demo",
-		Status:    applevzhelper.StatusRunning,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+		Status:    applevmhelper.StatusRunning,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		SSHHost:   "127.0.0.1",
 		SSHPort:   43022,
 		CreatedAt: time.Now().UTC(),
@@ -670,7 +667,7 @@ func TestAcquireResolveListAndRelease(t *testing.T) {
 		t.Fatalf("unexpected list output: %#v", views)
 	}
 
-	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true, Instance: listResp.Instances[0]})}
+	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true, Instance: listResp.Instances[0]})}
 	if err := b.ReleaseLease(context.Background(), core.ReleaseLeaseRequest{Lease: lease}); err != nil {
 		t.Fatal(err)
 	}
@@ -685,21 +682,21 @@ func TestResolveStatusOnlyAllowsStartingInstanceWithoutSSHEndpoint(t *testing.T)
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	inst := applevzhelper.Instance{
+	inst := applevmhelper.Instance{
 		Name:      "crabbox-cbx123-starting",
 		LeaseID:   "cbx_starting123",
 		Slug:      "starting",
-		Status:    applevzhelper.StatusStarting,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+		Status:    applevmhelper.StatusStarting,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{inst}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{inst}}),
 	}
-	writeAppleVZInstanceClaim(t, inst)
+	writeAppleVMInstanceClaim(t, inst)
 
 	for _, readyProbe := range []bool{false, true} {
 		lease, err := b.Resolve(context.Background(), core.ResolveRequest{
@@ -710,7 +707,7 @@ func TestResolveStatusOnlyAllowsStartingInstanceWithoutSSHEndpoint(t *testing.T)
 		if err != nil {
 			t.Fatalf("Resolve readyProbe=%v: %v", readyProbe, err)
 		}
-		if lease.Server.Status != applevzhelper.StatusStarting || lease.Server.PublicNet.IPv4.IP != "" {
+		if lease.Server.Status != applevmhelper.StatusStarting || lease.Server.PublicNet.IPv4.IP != "" {
 			t.Fatalf("Resolve readyProbe=%v server=%+v", readyProbe, lease.Server)
 		}
 		if lease.SSH.Host != "" || lease.SSH.Port != "" {
@@ -780,7 +777,7 @@ func TestReleaseLeasePreservesClaimAndKeyWhenInstanceLookupFails(t *testing.T) {
 
 func TestReleaseLeaseRejectsUnclaimedRawInstance(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{
-		"helper\x00delete": {Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true})},
+		"helper\x00delete": {Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true})},
 	}}
 	b := testBackend(t, runner)
 	leaseID := "cbx_unclaimed_apple_vz"
@@ -799,7 +796,7 @@ func TestReleaseLeaseRejectsUnclaimedRawInstance(t *testing.T) {
 	}
 }
 
-func TestRequireExactAppleVZClaimRequiresInstanceBinding(t *testing.T) {
+func TestRequireExactAppleVMClaimRequiresInstanceBinding(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		providerScope string
@@ -817,7 +814,7 @@ func TestRequireExactAppleVZClaimRequiresInstanceBinding(t *testing.T) {
 			leaseID := "cbx_bound_apple_vz"
 			if err := core.ClaimLeaseForRepoProviderScopePond(
 				leaseID,
-				"bound-apple-vz",
+				"bound-apple-vm",
 				providerName,
 				tc.providerScope,
 				"",
@@ -831,12 +828,12 @@ func TestRequireExactAppleVZClaimRequiresInstanceBinding(t *testing.T) {
 				if err := core.UpdateLeaseClaimEndpoint(leaseID, core.Server{Provider: providerName, CloudID: tc.labelInstance, Labels: map[string]string{
 					"instance": tc.labelInstance,
 					"provider": providerName,
-					"slug":     "bound-apple-vz",
+					"slug":     "bound-apple-vm",
 				}}, core.SSHTarget{}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			err := requireExactAppleVZClaim(leaseID, "owned-instance")
+			err := requireExactAppleVMClaim(leaseID, "owned-instance")
 			if tc.wantAllowed && err != nil {
 				t.Fatalf("bound claim rejected: %v", err)
 			}
@@ -847,27 +844,27 @@ func TestRequireExactAppleVZClaimRequiresInstanceBinding(t *testing.T) {
 	}
 }
 
-func TestResolveRawAppleVZRequiresExplicitReclaimAndPersistsBinding(t *testing.T) {
+func TestResolveRawAppleVMRequiresExplicitReclaimAndPersistsBinding(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	inst := applevzhelper.Instance{
+	inst := applevmhelper.Instance{
 		Name:      "crabbox-cbx123-raw",
 		LeaseID:   "cbx_raw_apple_vz",
-		Slug:      "raw-apple-vz",
-		Status:    applevzhelper.StatusRunning,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+		Slug:      "raw-apple-vm",
+		Status:    applevmhelper.StatusRunning,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		SSHHost:   "127.0.0.1",
 		SSHPort:   43023,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{inst}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{inst}}),
 	}
-	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true, Instance: inst})}
+	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true, Instance: inst})}
 	repo := core.Repo{Root: t.TempDir()}
 	if _, err := b.Resolve(context.Background(), core.ResolveRequest{ID: inst.Name, Repo: repo}); err == nil || !strings.Contains(err.Error(), "explicit --reclaim") {
 		t.Fatalf("Resolve without reclaim error=%v", err)
@@ -898,17 +895,17 @@ func TestResolveRawAppleVZRequiresExplicitReclaimAndPersistsBinding(t *testing.T
 	}
 }
 
-func TestResolveReclaimDoesNotRetargetBoundAppleVZClaim(t *testing.T) {
+func TestResolveReclaimDoesNotRetargetBoundAppleVMClaim(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	instA := applevzhelper.Instance{Name: "instance-a", LeaseID: "cbx_bound_apple_vz", Slug: "bound-apple-vz", Status: applevzhelper.StatusRunning, SSHHost: "127.0.0.1", SSHPort: 43024, SSHUser: "runner"}
+	instA := applevmhelper.Instance{Name: "instance-a", LeaseID: "cbx_bound_apple_vz", Slug: "bound-apple-vm", Status: applevmhelper.StatusRunning, SSHHost: "127.0.0.1", SSHPort: 43024, SSHUser: "runner"}
 	instB := instA
 	instB.Name = "instance-b"
 	instB.SSHPort = 43025
-	writeAppleVZInstanceClaim(t, instA)
+	writeAppleVMInstanceClaim(t, instA)
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{instB, instA}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{instB, instA}}),
 	}
 	repo := core.Repo{Root: t.TempDir()}
 	lease, err := b.Resolve(context.Background(), core.ResolveRequest{ID: instA.LeaseID, Repo: repo, Reclaim: true})
@@ -930,13 +927,13 @@ func TestResolveReclaimDoesNotRetargetBoundAppleVZClaim(t *testing.T) {
 	}
 }
 
-func TestResolveStatusOnlyAllowsClaimlessAppleVZWithoutClaiming(t *testing.T) {
+func TestResolveStatusOnlyAllowsClaimlessAppleVMWithoutClaiming(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	inst := applevzhelper.Instance{Name: "status-instance", LeaseID: "cbx_status_apple_vz", Slug: "status-apple-vz", Status: applevzhelper.StatusStarting}
+	inst := applevmhelper.Instance{Name: "status-instance", LeaseID: "cbx_status_apple_vz", Slug: "status-apple-vm", Status: applevmhelper.StatusStarting}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{inst}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{inst}}),
 	}
 	lease, err := b.Resolve(context.Background(), core.ResolveRequest{ID: inst.Name, Repo: core.Repo{Root: t.TempDir()}, StatusOnly: true})
 	if err != nil {
@@ -950,7 +947,7 @@ func TestResolveStatusOnlyAllowsClaimlessAppleVZWithoutClaiming(t *testing.T) {
 	} else if claim.LeaseID != "" {
 		t.Fatalf("status-only resolve minted claim: %#v", claim)
 	}
-	writeAppleVZInstanceClaim(t, inst)
+	writeAppleVMInstanceClaim(t, inst)
 	before, err := core.ReadLeaseClaim(inst.LeaseID)
 	if err != nil {
 		t.Fatal(err)
@@ -967,15 +964,15 @@ func TestResolveStatusOnlyAllowsClaimlessAppleVZWithoutClaiming(t *testing.T) {
 	}
 }
 
-func TestResolveMetadataLessAppleVZDirectsCleanup(t *testing.T) {
+func TestResolveMetadataLessAppleVMDirectsCleanup(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	inst := applevzhelper.Instance{Name: "metadata-less", Status: applevzhelper.StatusStopped}
+	inst := applevmhelper.Instance{Name: "metadata-less", Status: applevmhelper.StatusStopped}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{inst}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{inst}}),
 	}
-	if _, err := b.Resolve(context.Background(), core.ResolveRequest{ID: inst.Name, ReleaseOnly: true}); err == nil || !strings.Contains(err.Error(), "crabbox cleanup --provider apple-vz") {
+	if _, err := b.Resolve(context.Background(), core.ResolveRequest{ID: inst.Name, ReleaseOnly: true}); err == nil || !strings.Contains(err.Error(), "crabbox cleanup --provider apple-vm") {
 		t.Fatalf("metadata-less resolve error=%v", err)
 	}
 }
@@ -988,7 +985,7 @@ func TestReleaseLeaseRemovesClaimAndKeyWhenInstanceIsMissing(t *testing.T) {
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{}),
 	}
 
 	leaseID := "cbx_missing123456"
@@ -1038,23 +1035,23 @@ func TestResolveStatusReadyProbeIncludesPublishedSSHEndpoint(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]core.LocalCommandResult{}}
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
-	inst := applevzhelper.Instance{
+	inst := applevmhelper.Instance{
 		Name:      "crabbox-cbx123-running",
 		LeaseID:   "cbx_running123",
 		Slug:      "running",
-		Status:    applevzhelper.StatusRunning,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+		Status:    applevmhelper.StatusRunning,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		SSHHost:   "127.0.0.1",
 		SSHPort:   43022,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{inst}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{inst}}),
 	}
-	writeAppleVZInstanceClaim(t, inst)
+	writeAppleVMInstanceClaim(t, inst)
 
 	for _, readyProbe := range []bool{false, true} {
 		lease, err := b.Resolve(context.Background(), core.ResolveRequest{
@@ -1083,21 +1080,21 @@ func TestAcquireKeepRollsBackFailedProvisioning(t *testing.T) {
 		}
 		switch req.Args[0] {
 		case "list":
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.ListResponse{})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.ListResponse{})}, nil, true
 		case "start":
 			name = argumentValue(req.Args, "--name")
 			leaseID = argumentValue(req.Args, "--lease-id")
-			if err := os.MkdirAll(applevzhelper.InstanceDir(root, name), 0o755); err != nil {
+			if err := os.MkdirAll(applevmhelper.InstanceDir(root, name), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(applevzhelper.HelperLogPath(root, name), []byte("helper failed after boot\n"), 0o644); err != nil {
+			if err := os.WriteFile(applevmhelper.HelperLogPath(root, name), []byte("helper failed after boot\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			inst := applevzhelper.Instance{
+			inst := applevmhelper.Instance{
 				Name:      name,
 				LeaseID:   leaseID,
 				Slug:      argumentValue(req.Args, "--slug"),
-				Status:    applevzhelper.StatusRunning,
+				Status:    applevmhelper.StatusRunning,
 				SSHUser:   argumentValue(req.Args, "--ssh-user"),
 				WorkRoot:  argumentValue(req.Args, "--work-root"),
 				SSHHost:   "127.0.0.1",
@@ -1105,13 +1102,13 @@ func TestAcquireKeepRollsBackFailedProvisioning(t *testing.T) {
 				CreatedAt: time.Now().UTC(),
 				UpdatedAt: time.Now().UTC(),
 			}
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.StartResponse{Instance: inst})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.StartResponse{Instance: inst})}, nil, true
 		case "delete":
 			deleted = true
-			if err := os.RemoveAll(applevzhelper.InstanceDir(root, name)); err != nil {
+			if err := os.RemoveAll(applevmhelper.InstanceDir(root, name)); err != nil {
 				t.Fatal(err)
 			}
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true})}, nil, true
 		default:
 			return core.LocalCommandResult{}, nil, false
 		}
@@ -1140,7 +1137,7 @@ func TestAcquireKeepRollsBackFailedProvisioning(t *testing.T) {
 	if !deleted {
 		t.Fatal("failed keep acquisition did not delete the instance")
 	}
-	if _, statErr := os.Stat(applevzhelper.InstanceDir(root, name)); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(applevmhelper.InstanceDir(root, name)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("instance directory stat error=%v, want os.ErrNotExist", statErr)
 	}
 	if keyPath, keyErr := core.TestboxKeyPath(leaseID); keyErr != nil {
@@ -1153,11 +1150,11 @@ func TestAcquireKeepRollsBackFailedProvisioning(t *testing.T) {
 func TestInstanceDiagnosticsEscapesTerminalControls(t *testing.T) {
 	stateRoot := t.TempDir()
 	name := "diagnostic-controls"
-	if err := os.MkdirAll(applevzhelper.InstanceDir(stateRoot, name), 0o700); err != nil {
+	if err := os.MkdirAll(applevmhelper.InstanceDir(stateRoot, name), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		applevzhelper.ConsoleLogPath(stateRoot, name),
+		applevmhelper.ConsoleLogPath(stateRoot, name),
 		[]byte("guest failed\x1b]0;owned\x07\rmoved"),
 		0o600,
 	); err != nil {
@@ -1184,18 +1181,18 @@ func TestAcquirePreservesKeyWhenRollbackFails(t *testing.T) {
 		}
 		switch req.Args[0] {
 		case "list":
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.ListResponse{})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.ListResponse{})}, nil, true
 		case "start":
 			name = argumentValue(req.Args, "--name")
 			leaseID = argumentValue(req.Args, "--lease-id")
-			if err := os.MkdirAll(applevzhelper.InstanceDir(root, name), 0o755); err != nil {
+			if err := os.MkdirAll(applevmhelper.InstanceDir(root, name), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			inst := applevzhelper.Instance{
+			inst := applevmhelper.Instance{
 				Name:      name,
 				LeaseID:   leaseID,
 				Slug:      argumentValue(req.Args, "--slug"),
-				Status:    applevzhelper.StatusRunning,
+				Status:    applevmhelper.StatusRunning,
 				SSHUser:   argumentValue(req.Args, "--ssh-user"),
 				WorkRoot:  argumentValue(req.Args, "--work-root"),
 				SSHHost:   "127.0.0.1",
@@ -1203,9 +1200,9 @@ func TestAcquirePreservesKeyWhenRollbackFails(t *testing.T) {
 				CreatedAt: time.Now().UTC(),
 				UpdatedAt: time.Now().UTC(),
 			}
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.StartResponse{Instance: inst})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.StartResponse{Instance: inst})}, nil, true
 		case "delete":
-			return core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: false})}, nil, true
+			return core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: false})}, nil, true
 		default:
 			return core.LocalCommandResult{}, nil, false
 		}
@@ -1215,14 +1212,14 @@ func TestAcquirePreservesKeyWhenRollbackFails(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		core.RemoveStoredTestboxKey(leaseID)
-		_ = os.RemoveAll(applevzhelper.InstanceDir(root, name))
+		_ = os.RemoveAll(applevmhelper.InstanceDir(root, name))
 	})
 
 	_, err := b.Acquire(context.Background(), core.AcquireRequest{
 		Repo:          core.Repo{Root: t.TempDir()},
 		RequestedSlug: "rollback-failure",
 	})
-	if err == nil || !strings.Contains(err.Error(), "apple-vz cleanup failed") {
+	if err == nil || !strings.Contains(err.Error(), "apple-vm cleanup failed") {
 		t.Fatalf("Acquire error=%v", err)
 	}
 	keyPath, keyErr := core.TestboxKeyPath(leaseID)
@@ -1231,110 +1228,6 @@ func TestAcquirePreservesKeyWhenRollbackFails(t *testing.T) {
 	}
 	if _, statErr := os.Stat(keyPath); statErr != nil {
 		t.Fatalf("rollback failure should preserve lease key: %v", statErr)
-	}
-}
-
-func TestEnsureHelperBinarySignsOnlyWhenSourceChanges(t *testing.T) {
-	runner := &recordingRunner{}
-	b := testBackend(t, runner)
-	sourcePath := filepath.Join(t.TempDir(), applevzhelper.ManagedHelperName)
-	if err := os.WriteFile(sourcePath, []byte("first"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfg := b.configForRun()
-	cfg.AppleVZ.HelperPath = sourcePath
-
-	managedPath, err := b.ensureHelperBinary(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := codesignCallCount(runner.calls); got != 1 {
-		t.Fatalf("codesign calls=%d want 1", got)
-	}
-	if _, err := b.ensureHelperBinary(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := codesignCallCount(runner.calls); got != 1 {
-		t.Fatalf("unchanged source codesign calls=%d want 1", got)
-	}
-
-	digestPath := managedHelperDigestPath(managedPath)
-	digestData, err := os.ReadFile(digestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var digests managedHelperDigests
-	if err := json.Unmarshal(digestData, &digests); err != nil {
-		t.Fatal(err)
-	}
-	digests.EntitlementsSHA256 = "stale"
-	digestData, err = json.Marshal(digests)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(digestPath, digestData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.ensureHelperBinary(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := codesignCallCount(runner.calls); got != 2 {
-		t.Fatalf("stale entitlements codesign calls=%d want 2", got)
-	}
-
-	if err := os.WriteFile(managedPath, []byte("wrong"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.ensureHelperBinary(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := codesignCallCount(runner.calls); got != 3 {
-		t.Fatalf("tampered managed helper codesign calls=%d want 3", got)
-	}
-
-	if err := os.WriteFile(sourcePath, []byte("other"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	changedPath, err := b.ensureHelperBinary(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := codesignCallCount(runner.calls); got != 4 {
-		t.Fatalf("changed source codesign calls=%d want 4", got)
-	}
-	if changedPath == managedPath {
-		t.Fatalf("changed source reused managed helper path %q", managedPath)
-	}
-	data, err := os.ReadFile(changedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "other" {
-		t.Fatalf("managed helper=%q want changed source", string(data))
-	}
-	data, err = os.ReadFile(managedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "first" {
-		t.Fatalf("previous managed helper changed to %q", string(data))
-	}
-
-	if err := os.Remove(sourcePath); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.ensureHelperBinary(context.Background(), cfg); err == nil {
-		t.Fatal("strict helper preparation succeeded after source removal")
-	}
-	fallbackPath, err := b.ensureExistingHelperBinary(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fallbackPath != changedPath {
-		t.Fatalf("fallback helper path=%q want %q", fallbackPath, changedPath)
-	}
-	if got := codesignCallCount(runner.calls); got != 4 {
-		t.Fatalf("fallback codesign calls=%d want 4", got)
 	}
 }
 
@@ -1349,7 +1242,7 @@ func TestResolveHelperSourcePathDoesNotTrustCheckoutBin(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	checkoutHelper := filepath.Join(binDir, applevzhelper.ManagedHelperName)
+	checkoutHelper := filepath.Join(binDir, applevmhelper.ManagedHelperName)
 	if err := os.WriteFile(checkoutHelper, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1359,217 +1252,13 @@ func TestResolveHelperSourcePathDoesNotTrustCheckoutBin(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	cfg := core.BaseConfig()
-	cfg.AppleVZ.HelperPath = ""
+	cfg.AppleVM.HelperPath = ""
 	path, err := resolveHelperSourcePath(cfg)
 	if err == nil {
 		t.Fatalf("resolveHelperSourcePath trusted checkout helper %q", path)
 	}
 	if strings.Contains(err.Error(), checkoutHelper) {
 		t.Fatalf("error exposes or selects checkout helper: %v", err)
-	}
-}
-
-func TestEnsureHelperBinarySignsManagedSourcePath(t *testing.T) {
-	runner := &recordingRunner{}
-	b := testBackend(t, runner)
-	root, err := b.stateRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	helperDir := applevzhelper.HelperDir(root)
-	if err := os.MkdirAll(helperDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	managedPath := filepath.Join(helperDir, applevzhelper.ManagedHelperName)
-	if err := os.WriteFile(managedPath, []byte("managed source"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfg := b.configForRun()
-	cfg.AppleVZ.HelperPath = managedPath
-
-	got, err := b.ensureHelperBinary(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceDigest := dataSHA256([]byte("managed source"))
-	entitlementsDigest := dataSHA256([]byte(applevzhelper.HelperEntitlements))
-	want := managedHelperInstallPath(helperDir, sourceDigest, entitlementsDigest)
-	if got != want {
-		t.Fatalf("managed helper path=%q want %q", got, want)
-	}
-	if got := codesignCallCount(runner.calls); got != 1 {
-		t.Fatalf("codesign calls=%d want 1", got)
-	}
-}
-
-func TestManagedHelperPathsIncludeEntitlementsDigest(t *testing.T) {
-	helperDir := t.TempDir()
-	sourceDigest := strings.Repeat("a", 64)
-	firstEntitlements := strings.Repeat("b", 64)
-	secondEntitlements := strings.Repeat("c", 64)
-
-	firstHelper := managedHelperInstallPath(helperDir, sourceDigest, firstEntitlements)
-	secondHelper := managedHelperInstallPath(helperDir, sourceDigest, secondEntitlements)
-	if firstHelper == secondHelper {
-		t.Fatalf("helper paths collide across entitlement sets: %q", firstHelper)
-	}
-	firstFile := managedHelperEntitlementsPath(helperDir, firstEntitlements)
-	secondFile := managedHelperEntitlementsPath(helperDir, secondEntitlements)
-	if firstFile == secondFile || !strings.Contains(firstFile, firstEntitlements) || !strings.Contains(secondFile, secondEntitlements) {
-		t.Fatalf("entitlements paths are not content-specific: %q %q", firstFile, secondFile)
-	}
-}
-
-func TestCleanupObsoleteManagedHelpersKeepsCurrentAndNewest(t *testing.T) {
-	helperDir := t.TempDir()
-	now := time.Now()
-	paths := make([]string, 6)
-	for index := range paths {
-		digest := strings.Repeat(string(rune('a'+index)), sha256.Size*2)
-		paths[index] = filepath.Join(helperDir, applevzhelper.ManagedHelperName+"-"+digest)
-		if err := os.WriteFile(paths[index], []byte(digest), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		digestPath := managedHelperDigestPath(paths[index])
-		if err := os.WriteFile(digestPath, []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		modTime := now.Add(-managedHelperRecentGrace - time.Duration(index+1)*time.Minute)
-		if err := os.Chtimes(paths[index], modTime, modTime); err != nil {
-			t.Fatal(err)
-		}
-	}
-	unmanagedPath := filepath.Join(helperDir, applevzhelper.ManagedHelperName+"-custom")
-	if err := os.WriteFile(unmanagedPath, []byte("leave me"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(unmanagedPath, now.Add(-2*managedHelperRecentGrace), now.Add(-2*managedHelperRecentGrace)); err != nil {
-		t.Fatal(err)
-	}
-	bareDigestPath := filepath.Join(helperDir, strings.Repeat("f", sha256.Size*2))
-	if err := os.WriteFile(bareDigestPath, []byte("leave me too"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(bareDigestPath, now.Add(-2*managedHelperRecentGrace), now.Add(-2*managedHelperRecentGrace)); err != nil {
-		t.Fatal(err)
-	}
-
-	currentPath := paths[len(paths)-1]
-	if err := cleanupObsoleteManagedHelpers(helperDir, currentPath, now); err != nil {
-		t.Fatal(err)
-	}
-	remaining := 0
-	for _, path := range paths {
-		_, err := os.Stat(path)
-		if err == nil {
-			remaining++
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(managedHelperDigestPath(path)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("removed helper sidecar still exists for %s: %v", path, err)
-		}
-	}
-	if remaining != managedHelperKeepVersions {
-		t.Fatalf("remaining managed helpers=%d want %d", remaining, managedHelperKeepVersions)
-	}
-	if _, err := os.Stat(currentPath); err != nil {
-		t.Fatalf("current managed helper was removed: %v", err)
-	}
-	if _, err := os.Stat(unmanagedPath); err != nil {
-		t.Fatalf("unmanaged helper was removed: %v", err)
-	}
-	if _, err := os.Stat(bareDigestPath); err != nil {
-		t.Fatalf("bare digest file was removed: %v", err)
-	}
-}
-
-func TestCleanupObsoleteManagedHelpersPreservesActiveVersion(t *testing.T) {
-	helperDir := t.TempDir()
-	now := time.Now()
-	paths := make([]string, 6)
-	for index := range paths {
-		digest := strings.Repeat(string(rune('a'+index)), sha256.Size*2)
-		paths[index] = filepath.Join(helperDir, applevzhelper.ManagedHelperName+"-"+digest)
-		if err := os.WriteFile(paths[index], []byte(digest), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(managedHelperDigestPath(paths[index]), []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		modTime := now.Add(-managedHelperRecentGrace - time.Duration(index+1)*time.Minute)
-		if err := os.Chtimes(paths[index], modTime, modTime); err != nil {
-			t.Fatal(err)
-		}
-	}
-	activePath := paths[4]
-	useLock := flock.New(applevzhelper.ManagedHelperUseLockPath(activePath), flock.SetPermissions(0o600))
-	if err := useLock.RLock(); err != nil {
-		t.Fatal(err)
-	}
-	defer useLock.Unlock()
-
-	if err := cleanupObsoleteManagedHelpers(helperDir, paths[5], now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(activePath); err != nil {
-		t.Fatalf("active managed helper was removed: %v", err)
-	}
-	if _, err := os.Stat(managedHelperDigestPath(activePath)); err != nil {
-		t.Fatalf("active managed helper sidecar was removed: %v", err)
-	}
-	if _, err := os.Stat(paths[3]); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("inactive obsolete managed helper was not removed: %v", err)
-	}
-}
-
-func TestAppleVZHelperEnvAddsUseLockOnlyForManagedCopies(t *testing.T) {
-	managedPath := filepath.Join(t.TempDir(), applevzhelper.ManagedHelperName+"-"+strings.Repeat("a", sha256.Size*2))
-	lockEntry := applevzhelper.ManagedHelperUseLockEnv + "=" + applevzhelper.ManagedHelperUseLockPath(managedPath)
-	if !slices.Contains(appleVZHelperEnv(managedPath), lockEntry) {
-		t.Fatalf("managed helper environment missing %q", lockEntry)
-	}
-	if slices.ContainsFunc(appleVZHelperEnv("/tmp/custom-helper"), func(entry string) bool {
-		return strings.HasPrefix(entry, applevzhelper.ManagedHelperUseLockEnv+"=")
-	}) {
-		t.Fatal("custom helper environment unexpectedly includes managed helper use lock")
-	}
-	if slices.ContainsFunc(appleVZHelperEnv(filepath.Join(t.TempDir(), strings.Repeat("a", sha256.Size*2))), func(entry string) bool {
-		return strings.HasPrefix(entry, applevzhelper.ManagedHelperUseLockEnv+"=")
-	}) {
-		t.Fatal("bare digest helper environment unexpectedly includes managed helper use lock")
-	}
-}
-
-func TestManagedHelperInstallLockExcludesSecondOwner(t *testing.T) {
-	helperDir := t.TempDir()
-	first, err := lockManagedHelperDir(helperDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second := flock.New(filepath.Join(helperDir, ".install.lock"), flock.SetPermissions(0o600))
-	locked, err := second.TryLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if locked {
-		_ = second.Unlock()
-		t.Fatal("second owner acquired managed helper install lock")
-	}
-	if err := unlockManagedHelperDir(first); err != nil {
-		t.Fatal(err)
-	}
-	locked, err = second.TryLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !locked {
-		t.Fatal("second owner could not acquire released managed helper install lock")
-	}
-	if err := second.Unlock(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -1590,19 +1279,19 @@ func TestCleanupRemovesStoppedInstance(t *testing.T) {
 	if err := core.ClaimLeaseForRepoProviderScopePondEndpoint(leaseID, slug, providerName, name, "", t.TempDir(), 5*time.Minute, false, server, target); err != nil {
 		t.Fatal(err)
 	}
-	instance := applevzhelper.Instance{
+	instance := applevmhelper.Instance{
 		Name:      name,
 		LeaseID:   leaseID,
 		Slug:      slug,
-		Status:    applevzhelper.StatusStopped,
-		Image:     b.configForRun().AppleVZ.Image,
-		SSHUser:   b.configForRun().AppleVZ.User,
-		WorkRoot:  b.configForRun().AppleVZ.WorkRoot,
+		Status:    applevmhelper.StatusStopped,
+		Image:     b.configForRun().AppleVM.Image,
+		SSHUser:   b.configForRun().AppleVM.User,
+		WorkRoot:  b.configForRun().AppleVM.WorkRoot,
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
-	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{instance}})}
-	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true, Instance: instance})}
+	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{instance}})}
+	runner.responses["helper\x00delete"] = core.LocalCommandResult{Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true, Instance: instance})}
 	if err := b.Cleanup(context.Background(), core.CleanupRequest{}); err != nil {
 		t.Fatal(err)
 	}
@@ -1619,19 +1308,19 @@ func TestCleanupRemovesOldRunningInstanceWithoutPersistedClaim(t *testing.T) {
 	root, _ := b.stateRoot()
 	leaseID := "cbx_orphan123456"
 	name := core.LeaseProviderName(leaseID, "orphan-demo")
-	instance := applevzhelper.Instance{
+	instance := applevmhelper.Instance{
 		Name:      name,
 		LeaseID:   leaseID,
 		Slug:      "orphan-demo",
-		Status:    applevzhelper.StatusRunning,
+		Status:    applevmhelper.StatusRunning,
 		CreatedAt: time.Now().UTC().Add(-unclaimedInstanceGrace - time.Minute),
 		UpdatedAt: time.Now().UTC().Add(-unclaimedInstanceGrace - time.Minute),
 	}
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{Instances: []applevzhelper.Instance{instance}}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{Instances: []applevmhelper.Instance{instance}}),
 	}
 	runner.responses["helper\x00delete"] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.DeleteResponse{Deleted: true, Instance: instance}),
+		Stdout: mustJSON(t, applevmhelper.DeleteResponse{Deleted: true, Instance: instance}),
 	}
 
 	if err := b.Cleanup(context.Background(), core.CleanupRequest{}); err != nil {
@@ -1653,7 +1342,7 @@ func TestCleanupPreservesFreshStartupClaimWithoutVisibleInstance(t *testing.T) {
 	b := testBackend(t, runner)
 	root, _ := b.stateRoot()
 	runner.responses[commandKey("helper", []string{"list", "--state-root", root})] = core.LocalCommandResult{
-		Stdout: mustJSON(t, applevzhelper.ListResponse{}),
+		Stdout: mustJSON(t, applevmhelper.ListResponse{}),
 	}
 	leaseID := "cbx_startup123456"
 	if err := core.ClaimLeaseForRepoProviderScopePond(
@@ -1682,8 +1371,8 @@ func TestCleanupPreservesFreshStartupClaimWithoutVisibleInstance(t *testing.T) {
 
 func TestShouldCleanupUsesLatestLifecycleTimestampForUnclaimedInstance(t *testing.T) {
 	now := time.Now().UTC()
-	inst := applevzhelper.Instance{
-		Status:    applevzhelper.StatusRunning,
+	inst := applevmhelper.Instance{
+		Status:    applevmhelper.StatusRunning,
 		CreatedAt: now.Add(-unclaimedInstanceGrace - time.Hour),
 		UpdatedAt: now.Add(-unclaimedInstanceGrace + time.Minute),
 	}
@@ -1705,8 +1394,8 @@ func TestClaimWithinStartupGrace(t *testing.T) {
 
 func TestShouldCleanupPreservesFreshRunningInstanceWithoutClaim(t *testing.T) {
 	now := time.Now().UTC()
-	inst := applevzhelper.Instance{
-		Status:    applevzhelper.StatusRunning,
+	inst := applevmhelper.Instance{
+		Status:    applevmhelper.StatusRunning,
 		CreatedAt: now.Add(-unclaimedInstanceGrace + time.Minute),
 	}
 	server := core.Server{Status: "running", Labels: map[string]string{"keep": "false"}}
@@ -1722,14 +1411,4 @@ func argumentValue(args []string, name string) string {
 		}
 	}
 	return ""
-}
-
-func codesignCallCount(calls []core.LocalCommandRequest) int {
-	count := 0
-	for _, call := range calls {
-		if call.Name == "codesign" {
-			count++
-		}
-	}
-	return count
 }

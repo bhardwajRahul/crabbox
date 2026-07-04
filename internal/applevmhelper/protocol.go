@@ -1,4 +1,4 @@
-package applevzhelper
+package applevmhelper
 
 import (
 	"encoding/hex"
@@ -14,8 +14,16 @@ import (
 )
 
 const (
-	ManagedHelperName       = "crabbox-apple-vz-helper"
-	ManagedHelperUseLockEnv = "CRABBOX_APPLE_VZ_HELPER_USE_LOCK"
+	ManagedHelperName = "crabbox-apple-vm-helper"
+	// Helper binary name before the apple-vz -> apple-vm provider rename;
+	// still recognized when verifying daemons started by older releases.
+	LegacyManagedHelperName = "crabbox-apple-vz-helper"
+
+	// ManagedVMDName is the Swift Virtualization.framework daemon binary; the
+	// helper installs and entitlement-signs a managed copy under the state
+	// root. VMDPathEnv overrides the daemon source for source builds.
+	ManagedVMDName = "crabbox-apple-vm-vmd"
+	VMDPathEnv     = "CRABBOX_APPLE_VM_VMD"
 
 	StatusStarting = "starting"
 	StatusRunning  = "running"
@@ -34,10 +42,6 @@ const (
 	EFIFileName         = "efi-variable-store.bin"
 	PreparationFileName = "preparing.json"
 )
-
-func ManagedHelperUseLockPath(helperPath string) string {
-	return helperPath + ".use.lock"
-}
 
 const HelperEntitlements = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -215,10 +219,6 @@ func DownloadsDir(stateRoot string) string {
 
 func ImagesDir(stateRoot string) string {
 	return filepath.Join(CacheDir(stateRoot), "images")
-}
-
-func HelperDir(stateRoot string) string {
-	return filepath.Join(stateRoot, "helper")
 }
 
 func InstanceDir(stateRoot, name string) string {

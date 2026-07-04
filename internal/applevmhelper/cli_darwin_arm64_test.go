@@ -1,6 +1,6 @@
-//go:build darwin && arm64 && cgo
+//go:build darwin && arm64
 
-package applevzhelper
+package applevmhelper
 
 import (
 	"bytes"
@@ -17,9 +17,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/gofrs/flock"
-	"golang.org/x/sys/unix"
 )
 
 func TestRunStartCleansUpDaemonAndInstanceDirectoryOnReadinessTimeout(t *testing.T) {
@@ -38,7 +35,7 @@ while :; do sleep 1; done
 		t.Fatalf("write fake helper: %v", err)
 	}
 	originalPrepare := prepareInstanceAssetsFunc
-	originalExecutable := helperExecutable
+	originalEnsureVMD := ensureVMDFunc
 	originalProcessStartTime := processStartTime
 	originalWriteMetadata := writeMetadataFunc
 	originalReadyTimeout := runStartReadyTimeout
@@ -47,7 +44,7 @@ while :; do sleep 1; done
 	originalTerminatePoll := terminateInstancePollTime
 	t.Cleanup(func() {
 		prepareInstanceAssetsFunc = originalPrepare
-		helperExecutable = originalExecutable
+		ensureVMDFunc = originalEnsureVMD
 		processStartTime = originalProcessStartTime
 		writeMetadataFunc = originalWriteMetadata
 		runStartReadyTimeout = originalReadyTimeout
@@ -74,7 +71,7 @@ while :; do sleep 1; done
 		}
 		return inst, nil
 	}
-	helperExecutable = func() (string, error) { return helperPath, nil }
+	ensureVMDFunc = func(string) (string, error) { return helperPath, nil }
 	processStartTime = func(pid int) (string, error) { return strconv.Itoa(pid) + "-start", nil }
 	runStartReadyTimeout = time.Second
 	runStartPollInterval = 5 * time.Millisecond
@@ -280,11 +277,11 @@ exit 23
 	}
 
 	originalPrepare := prepareInstanceAssetsFunc
-	originalExecutable := helperExecutable
+	originalEnsureVMD := ensureVMDFunc
 	originalStartPoll := runStartPollInterval
 	t.Cleanup(func() {
 		prepareInstanceAssetsFunc = originalPrepare
-		helperExecutable = originalExecutable
+		ensureVMDFunc = originalEnsureVMD
 		runStartPollInterval = originalStartPoll
 	})
 	prepareInstanceAssetsFunc = func(_ context.Context, cfg startConfig) (Instance, error) {
@@ -296,7 +293,7 @@ exit 23
 		inst.ConsoleLogPath = ConsoleLogPath(cfg.StateRoot, inst.Name)
 		return inst, nil
 	}
-	helperExecutable = func() (string, error) { return helperPath, nil }
+	ensureVMDFunc = func(string) (string, error) { return helperPath, nil }
 	runStartPollInterval = 5 * time.Millisecond
 
 	err := runStart([]string{
@@ -315,7 +312,7 @@ exit 23
 	}, strings.NewReader(`{"image":"test.img"}`), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil ||
 		(!strings.Contains(err.Error(), "helper daemon exited before the VM reached running state") &&
-			!strings.Contains(err.Error(), "apple-vz helper stopped before reporting readiness")) {
+			!strings.Contains(err.Error(), "apple-vm helper stopped before reporting readiness")) {
 		t.Fatalf("runStart error=%v, want early helper exit", err)
 	}
 	if strings.Contains(err.Error(), "helper daemon exited before the VM reached running state") &&
@@ -343,14 +340,14 @@ while :; do sleep 1; done
 	}
 
 	originalPrepare := prepareInstanceAssetsFunc
-	originalExecutable := helperExecutable
+	originalEnsureVMD := ensureVMDFunc
 	originalProcessStartTime := processStartTime
 	originalWriteMetadata := writeMetadataFunc
 	originalTerminateGrace := terminateInstanceGraceTime
 	originalTerminatePoll := terminateInstancePollTime
 	t.Cleanup(func() {
 		prepareInstanceAssetsFunc = originalPrepare
-		helperExecutable = originalExecutable
+		ensureVMDFunc = originalEnsureVMD
 		processStartTime = originalProcessStartTime
 		writeMetadataFunc = originalWriteMetadata
 		terminateInstanceGraceTime = originalTerminateGrace
@@ -359,7 +356,7 @@ while :; do sleep 1; done
 	prepareInstanceAssetsFunc = func(_ context.Context, cfg startConfig) (Instance, error) {
 		return cfg.Instance, nil
 	}
-	helperExecutable = func() (string, error) { return helperPath, nil }
+	ensureVMDFunc = func(string) (string, error) { return helperPath, nil }
 	capturedPID := 0
 	processStartTime = func(pid int) (string, error) {
 		capturedPID = pid
@@ -444,27 +441,6 @@ func TestAuthorizeStartedHelperPersistsIdentityBeforeSignal(t *testing.T) {
 	}
 }
 
-func TestWaitForStartupAuthorizationRejectsParentExit(t *testing.T) {
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fd, err := unix.Dup(int(reader.Fd()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reader.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	err = waitForStartupAuthorization(fd)
-	if err == nil || !strings.Contains(err.Error(), "closed before approval") {
-		t.Fatalf("waitForStartupAuthorization error=%v", err)
-	}
-}
-
 func TestRunDeleteRemovesMetadataLessInstanceDirectory(t *testing.T) {
 	stateRoot := t.TempDir()
 	name := "partial-instance"
@@ -508,80 +484,6 @@ func TestRunDeleteRejectsActivePreparation(t *testing.T) {
 	}
 	if _, err := os.Stat(InstanceDir(stateRoot, name)); err != nil {
 		t.Fatalf("active instance directory removed: %v", err)
-	}
-}
-
-func TestInitializeServeInstancePersistsChildProcessIdentity(t *testing.T) {
-	stateRoot := t.TempDir()
-	name := "serve-identity"
-	mustCreateInstanceDir(t, stateRoot, name)
-	initial := Instance{
-		Name:      name,
-		Status:    StatusStarting,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
-	}
-	if err := writeMetadata(MetadataPath(stateRoot, name), initial); err != nil {
-		t.Fatal(err)
-	}
-	originalProcessStartTime := processStartTime
-	originalWriteMetadata := writeMetadataFunc
-	t.Cleanup(func() {
-		processStartTime = originalProcessStartTime
-		writeMetadataFunc = originalWriteMetadata
-	})
-
-	processStartTime = func(pid int) (string, error) {
-		if pid != os.Getpid() {
-			t.Fatalf("processStartTime pid=%d want %d", pid, os.Getpid())
-		}
-		return "child-start", nil
-	}
-
-	inst, err := initializeServeInstance(stateRoot, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inst.PID != os.Getpid() || inst.PIDStartedAt != "child-start" {
-		t.Fatalf("identity pid=%d started=%q", inst.PID, inst.PIDStartedAt)
-	}
-	persisted, err := readMetadata(MetadataPath(stateRoot, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.PID != os.Getpid() || persisted.PIDStartedAt != "child-start" {
-		t.Fatalf("persisted identity pid=%d started=%q", persisted.PID, persisted.PIDStartedAt)
-	}
-}
-
-func TestInitializeServeInstanceRejectsMissingProcessIdentity(t *testing.T) {
-	stateRoot := t.TempDir()
-	name := "serve-missing-identity"
-	mustCreateInstanceDir(t, stateRoot, name)
-	initial := Instance{
-		Name:      name,
-		Status:    StatusStarting,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
-	}
-	if err := writeMetadata(MetadataPath(stateRoot, name), initial); err != nil {
-		t.Fatal(err)
-	}
-	originalProcessStartTime := processStartTime
-	t.Cleanup(func() { processStartTime = originalProcessStartTime })
-	processStartTime = func(int) (string, error) {
-		return "", errors.New("identity unavailable")
-	}
-
-	if _, err := initializeServeInstance(stateRoot, name); err == nil || !strings.Contains(err.Error(), "identity unavailable") {
-		t.Fatalf("initializeServeInstance error=%v", err)
-	}
-	persisted, err := readMetadata(MetadataPath(stateRoot, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.PID != 0 || persisted.PIDStartedAt != "" {
-		t.Fatalf("unexpected persisted identity pid=%d started=%q", persisted.PID, persisted.PIDStartedAt)
 	}
 }
 
@@ -636,9 +538,9 @@ func TestLegacyProcessIdentityMigratesAfterVerifiedMatch(t *testing.T) {
 			t.Fatalf("processArguments pid=%d want %d", pid, inst.PID)
 		}
 		return []string{
-			"/tmp/crabbox-apple-vz-helper-0123456789abcdef",
+			"/tmp/crabbox-apple-vm-helper-0123456789abcdef",
 			"serve",
-			"--state-root", "/tmp/apple-vz",
+			"--state-root", "/tmp/apple-vm",
 			"--name", inst.Name,
 		}, nil
 	}
@@ -1080,43 +982,6 @@ func TestHelperDaemonEnvExcludesCallerCredentials(t *testing.T) {
 	}
 }
 
-func TestManagedHelperUseLockIsSharedAndPropagatedToDaemon(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), "managed-helper.use.lock")
-	t.Setenv(ManagedHelperUseLockEnv, lockPath)
-	useLock, err := lockManagedHelperUse()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if useLock == nil {
-		t.Fatal("managed helper use lock was not acquired")
-	}
-	exclusive := flock.New(lockPath, flock.SetPermissions(0o600))
-	locked, err := exclusive.TryLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if locked {
-		_ = exclusive.Unlock()
-		t.Fatal("exclusive cleanup lock acquired while helper use lock was held")
-	}
-	if !slices.Contains(helperDaemonEnv(), ManagedHelperUseLockEnv+"="+lockPath) {
-		t.Fatal("helper daemon environment did not preserve managed helper use lock")
-	}
-	if err := useLock.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	locked, err = exclusive.TryLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !locked {
-		t.Fatal("exclusive cleanup lock unavailable after helper use lock release")
-	}
-	if err := exclusive.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestHandleStartReadinessMetadataStoppedBeforeReadiness(t *testing.T) {
 	root := t.TempDir()
 	name := "stopped-before-ready"
@@ -1137,7 +1002,7 @@ func TestHandleStartReadinessMetadataStoppedBeforeReadiness(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected stopped-before-readiness error")
 	}
-	if got := err.Error(); !strings.Contains(got, "apple-vz helper stopped before reporting readiness (status=stopped)") {
+	if got := err.Error(); !strings.Contains(got, "apple-vm helper stopped before reporting readiness (status=stopped)") {
 		t.Fatalf("expected stopped-before-readiness error, got %q", got)
 	}
 	if strings.Contains(err.Error(), "helper daemon exited before the VM reached running state") {
@@ -1168,7 +1033,7 @@ func TestHandleStartReadinessMetadataStoppingDeadPIDCleansInstanceDir(t *testing
 	if err == nil {
 		t.Fatal("expected stopped-before-readiness error")
 	}
-	if got := err.Error(); !strings.Contains(got, "apple-vz helper stopped before reporting readiness (status=stopped)") {
+	if got := err.Error(); !strings.Contains(got, "apple-vm helper stopped before reporting readiness (status=stopped)") {
 		t.Fatalf("expected normalized stopped-before-readiness error, got %q", got)
 	}
 	if _, err := os.Stat(InstanceDir(root, name)); !errors.Is(err, os.ErrNotExist) {
