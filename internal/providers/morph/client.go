@@ -44,7 +44,7 @@ var newMorphClient = func(cfg Config, rt Runtime) (morphAPI, error) {
 	return &morphClient{
 		apiURL:     apiURL,
 		apiKey:     apiKey,
-		httpClient: httpClient,
+		httpClient: secureMorphHTTPClient(httpClient, apiURL),
 	}, nil
 }
 
@@ -52,6 +52,61 @@ type morphClient struct {
 	apiURL     string
 	apiKey     string
 	httpClient *http.Client
+}
+
+func secureMorphHTTPClient(source *http.Client, apiURL string) *http.Client {
+	client := *source
+	trusted, _ := url.Parse(apiURL)
+	originalCheckRedirect := source.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameMorphOrigin(trusted, req.URL) {
+			return &morphRedirectError{origin: morphRedirectOrigin(req.URL)}
+		}
+		if originalCheckRedirect != nil {
+			return originalCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &client
+}
+
+func sameMorphOrigin(a, b *url.URL) bool {
+	return a != nil && b != nil &&
+		strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectiveMorphPort(a) == effectiveMorphPort(b)
+}
+
+func effectiveMorphPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(value.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+type morphRedirectError struct {
+	origin string
+}
+
+func (e *morphRedirectError) Error() string {
+	return fmt.Sprintf("%s refused cross-origin redirect to %s", providerName, e.origin)
+}
+
+func morphRedirectOrigin(value *url.URL) string {
+	if value == nil || value.Scheme == "" || value.Host == "" {
+		return "<redacted>"
+	}
+	return value.Scheme + "://" + value.Host
 }
 
 type morphAPIError struct {
@@ -293,6 +348,11 @@ func (c *morphClient) doRaw(ctx context.Context, method, path string, query url.
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// net/http wraps CheckRedirect failures with the untrusted Location URL.
+		var redirectErr *morphRedirectError
+		if errors.As(err, &redirectErr) {
+			return nil, redirectErr
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
