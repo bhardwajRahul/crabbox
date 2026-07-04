@@ -60,6 +60,25 @@ test("production and snapshot releases have the same build budget", () => {
   assert.match(releaseWorkflow, /goreleaser:[\s\S]*?timeout-minutes:\s+45/);
 });
 
+test("manual retries replace only incomplete releases", () => {
+  const workflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
+  const resolveTag = workflow.indexOf("- name: Resolve release tag");
+  const removeIncomplete = workflow.indexOf("- name: Remove incomplete manual release");
+  const goreleaser = workflow.indexOf("- name: GoReleaser");
+  const retryStep = workflow.slice(removeIncomplete, goreleaser);
+
+  assert.ok(resolveTag < removeIncomplete, "the release tag must be resolved before retry cleanup");
+  assert.ok(removeIncomplete < goreleaser, "an incomplete release must be removed before publishing");
+  assert.match(retryStep, /if:\s+\$\{\{ github\.event_name == 'workflow_dispatch' \}\}/);
+  assert.match(retryStep, /404\) exit 0/);
+  assert.match(retryStep, /grep -q "\^## \$RELEASE_VERSION "/);
+  assert.match(retryStep, /already finalized; refusing to replace its artifacts/);
+  assert.match(
+    retryStep,
+    /gh api --method DELETE "repos\/\$GITHUB_REPOSITORY\/releases\/\$release_id"/,
+  );
+});
+
 test("Apple VZ release helper targets macOS 13", () => {
   const ciWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
   const goreleaser = fs.readFileSync(path.join(repoRoot, ".goreleaser.yaml"), "utf8");
