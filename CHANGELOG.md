@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.35.0 - 2026-07-04
 
 ### Added
 
-- Documented the deterministic perf evidence contract for future reproducible
-  metric budgets, separating fuel/instruction-style gates from existing
-  wall-clock timing and benchmark ledger behavior.
+- Documented the deterministic perf evidence contract for future reproducible metric budgets, separating fuel/instruction-style gates from existing wall-clock timing and benchmark ledger behavior.
 - Documented the delegated-runner contract and live proof bar required before built-in non-SSH provider adapters can advertise a hosted runner integration.
+- Added a delegated HashiCorp Nomad provider with create-only owned jobs, archive sync, retained lease reuse, exact-claim lifecycle cleanup, optional env-only ACL auth, and zero-residue live-smoke coverage. Thanks @coygeek.
+- Added `crabbox shard` to fork a checkpoint into parallel leases, run templated commands through the normal sync/history pipeline, stream per-shard output, merge JUnit results, and release every fork on success, failure, or interruption. Thanks @yetval.
 - Added `crabbox watch` to reuse one warm SSH lease, coalesce qualifying local changes into sequential runs through the normal sync/history pipeline, and release newly acquired leases on bounded idle or exit. Thanks @yetval.
 - Added `crabbox checkpoint fork -- <command...>` to run the normal `crabbox run` flow across fork fan-out leases with `{{index}}`, `{{total}}`, `{{lease}}`, and `{{slug}}` template variables.
 - Added Vast.ai direct Linux GPU SSH leases with guarded offer cost and reliability selection, per-lease keys, account-bound cleanup, required-tool bootstrap, and billable live-smoke coverage. Thanks @coygeek.
@@ -15,6 +15,14 @@
 
 ### Fixed
 
+- Revalidated cached GitHub and bearer admin grants against the current deployment before restoring bridge sockets or consuming durable bridge tickets and Code sessions, closing or downgrading sessions after revocation. Thanks @coygeek.
+- Redacted reflected provider credentials, lifecycle command URLs, and configured endpoint userinfo from error diagnostics and `config show` output while preserving useful failure detail. Thanks @coygeek.
+- Rejected cross-origin Morph and Railway redirects before credentials or request bodies can be replayed, and redacted rejected credential-bearing redirect destinations. Thanks @coygeek.
+- Required explicit browser-navigation intent for portal HTML routes, preventing ambient subresource requests from silently creating authenticated portal sessions.
+- Required exact endpoint-bound local claims before Daytona sandbox reuse, status, or deletion, including delayed provider inventory recovery. Thanks @coygeek.
+- Reported Apple VZ helper startup failures deterministically instead of racing them into misleading readiness timeouts. Thanks @coygeek.
+- Preserved the configured controller identity binding when rendering redacted configuration and launching controller subprocesses.
+- Released checkpoint forks with a fresh cleanup context after post-acquire provisioning failures or caller cancellation. Thanks @yetval.
 - Required canonical Hetzner labels plus an exact server-bound local claim before direct stop or cleanup can delete a server, and kept canonical lease IDs from falling through to slug or name aliases. Thanks @coygeek.
 - Kept WebVNC framebuffer and heartbeat traffic responsive while desktop themes apply, and fully detached long-lived Wayland wallpaper processes from their launching SSH sessions.
 - Required an exact local or explicit `stop --reclaim` deployment claim before stopping an out-of-band Railway service, binding adoption to the configured endpoint, project, environment, service, and deployment. Thanks @coygeek.
