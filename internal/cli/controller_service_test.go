@@ -1493,7 +1493,13 @@ func TestControllerPreAcquireAckFailureRetainsStoppingUntilStableAbsence(t *test
 	defer cancel()
 	service.opts.CreateTimeout = 2 * time.Second
 	base := time.Now().UTC()
-	service.now = func() time.Time { return base }
+	var clockMu sync.RWMutex
+	currentTime := base
+	service.now = func() time.Time {
+		clockMu.RLock()
+		defer clockMu.RUnlock()
+		return currentTime
+	}
 
 	created := controllerHTTP(service, http.MethodPost, "/v1/workspaces", "test-token", controllerWorkspaceRequest{ID: "pre-ack-absent-box"})
 	if created.Code != http.StatusAccepted {
@@ -1508,7 +1514,7 @@ func TestControllerPreAcquireAckFailureRetainsStoppingUntilStableAbsence(t *test
 	var stopping controllerWorkspaceRecord
 	for time.Now().Before(deadline) {
 		current, ok := service.workspace("pre-ack-absent-box")
-		if ok && current.Status == "stopping" && current.FailureAfterCleanup != "" {
+		if ok && current.Status == "stopping" && current.FailureAfterCleanup != "" && current.ProviderAbsentSince != "" {
 			stopping = current
 			break
 		}
@@ -1517,13 +1523,15 @@ func TestControllerPreAcquireAckFailureRetainsStoppingUntilStableAbsence(t *test
 	if stopping.Status != "stopping" || stopping.AttemptLeaseID == "" || stopping.Slug == "" || stopping.CreateObserved {
 		t.Fatalf("pre-ack failure did not retain stable cleanup identity: %#v", stopping)
 	}
-	time.Sleep(100 * time.Millisecond)
+	waitControllerWorkspaceInactive(t, service, stopping.Request.ID)
 	current, _ := service.workspace(stopping.Request.ID)
 	if current.Status != "stopping" || current.AttemptLeaseID != stopping.AttemptLeaseID || current.Slug != stopping.Slug {
 		t.Fatalf("workspace escaped late-materialization recovery window: %#v", current)
 	}
 
-	service.now = func() time.Time { return base.Add(3 * time.Second) }
+	clockMu.Lock()
+	currentTime = base.Add(3 * time.Second)
+	clockMu.Unlock()
 	service.enqueue(stopping.Request.ID)
 	failed := waitControllerWorkspaceStatus(t, service, stopping.Request.ID, "failed")
 	if failed.Message != "workspace provisioning failed before provider identity acknowledgment" {
