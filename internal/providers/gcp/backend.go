@@ -278,14 +278,15 @@ func (b *gcpLeaseBackend) Cleanup(ctx context.Context, req CleanupRequest) error
 			liveLeaseIDs[leaseID] = struct{}{}
 		}
 	}
+	now := time.Now().UTC()
 	for _, server := range servers {
-		shouldDelete, reason := core.ShouldCleanupServer(server, time.Now().UTC())
+		shouldDelete, reason := core.ShouldCleanupServer(server, now)
 		if !shouldDelete {
 			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=%s\n", server.DisplayID(), server.Name, reason)
 			continue
 		}
-		fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", server.DisplayID(), server.Name)
 		if req.DryRun {
+			fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", server.DisplayID(), server.Name)
 			continue
 		}
 		cfg := b.Cfg
@@ -296,20 +297,58 @@ func (b *gcpLeaseBackend) Cleanup(ctx context.Context, req CleanupRequest) error
 		if err != nil {
 			return err
 		}
-		if err := client.DeleteServer(ctx, server.CloudID); err != nil {
+		live, err := client.GetServer(ctx, server.CloudID)
+		if err != nil {
+			if core.IsGCPNotFound(err) {
+				fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=live instance no longer exists\n", server.DisplayID(), server.Name)
+				if leaseID := strings.TrimSpace(server.Labels["lease"]); leaseID != "" {
+					removeLeaseClaim(leaseID)
+				}
+				continue
+			}
+			return fmt.Errorf("re-read GCP cleanup candidate %s: %w", server.DisplayID(), err)
+		}
+		if err := validateGCPCleanupLiveServer(server, live); err != nil {
+			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=%v\n", server.DisplayID(), server.Name, err)
+			continue
+		}
+		if shouldDelete, reason := core.ShouldCleanupServer(live, now); !shouldDelete {
+			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=live instance %s\n", server.DisplayID(), server.Name, reason)
+			continue
+		}
+		fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", live.DisplayID(), live.Name)
+		if err := client.DeleteServer(ctx, live.CloudID); err != nil {
 			return err
 		}
 		if leaseID := strings.TrimSpace(server.Labels["lease"]); leaseID != "" {
 			removeLeaseClaim(leaseID)
 		}
 	}
-	if err := b.pruneStaleClaims(liveLeaseIDs, req.DryRun); err != nil {
+	if err := b.pruneStaleClaims(ctx, liveLeaseIDs, req.DryRun); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (b *gcpLeaseBackend) pruneStaleClaims(liveLeaseIDs map[string]struct{}, dryRun bool) error {
+func validateGCPCleanupLiveServer(expected, live Server) error {
+	cloudID := strings.TrimSpace(expected.CloudID)
+	if cloudID == "" || strings.TrimSpace(live.CloudID) != cloudID {
+		return fmt.Errorf("live cloud id %q does not match cleanup candidate %q", live.CloudID, expected.CloudID)
+	}
+	if expected.ID == 0 || live.ID != expected.ID {
+		return fmt.Errorf("live instance id %d does not match cleanup candidate id %d", live.ID, expected.ID)
+	}
+	if !isCrabboxGCPLease(live) {
+		return fmt.Errorf("live instance no longer has canonical Crabbox ownership labels")
+	}
+	expectedLeaseID := strings.TrimSpace(expected.Labels["lease"])
+	if liveLeaseID := strings.TrimSpace(live.Labels["lease"]); liveLeaseID != expectedLeaseID {
+		return fmt.Errorf("live instance lease %q does not match cleanup candidate lease %q", liveLeaseID, expectedLeaseID)
+	}
+	return nil
+}
+
+func (b *gcpLeaseBackend) pruneStaleClaims(ctx context.Context, liveLeaseIDs map[string]struct{}, dryRun bool) error {
 	claims, err := core.ListLeaseClaims()
 	if err != nil {
 		return err
@@ -324,6 +363,22 @@ func (b *gcpLeaseBackend) pruneStaleClaims(liveLeaseIDs map[string]struct{}, dry
 		}
 		if _, ok := liveLeaseIDs[claim.LeaseID]; ok {
 			continue
+		}
+		if strings.TrimSpace(claim.CloudID) != "" {
+			cfg := b.Cfg
+			if zone := strings.TrimSpace(claim.Labels["zone"]); zone != "" {
+				cfg.GCPZone = zone
+			}
+			client, err := newGCPClient(ctx, cfg)
+			if err != nil {
+				return err
+			}
+			if _, err := client.GetServer(ctx, claim.CloudID); err == nil {
+				fmt.Fprintf(b.RT.Stderr, "retain stale claim lease=%s slug=%s provider=gcp reason=cloud resource still exists\n", claim.LeaseID, blank(claim.Slug, "-"))
+				continue
+			} else if !core.IsGCPNotFound(err) {
+				return fmt.Errorf("re-read GCP stale claim %s: %w", claim.LeaseID, err)
+			}
 		}
 		fmt.Fprintf(b.RT.Stderr, "remove stale claim lease=%s slug=%s provider=gcp\n", claim.LeaseID, blank(claim.Slug, "-"))
 		if !dryRun {

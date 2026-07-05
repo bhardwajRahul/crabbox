@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,15 +15,19 @@ import (
 )
 
 type fakeAzureClient struct {
-	deleted   []string
-	tagged    []string
-	servers   []Server
-	listErr   error
-	created   Server
-	createCfg Config
-	createErr error
-	waitErr   error
-	getErr    error
+	deleted         []string
+	cleanupExpected []Server
+	tagged          []string
+	servers         []Server
+	listErr         error
+	created         Server
+	createCfg       Config
+	createErr       error
+	waitErr         error
+	getErr          error
+	get             map[string]Server
+	getErrs         map[string]error
+	getIDs          []string
 }
 
 func (c *fakeAzureClient) ListCrabboxServers(context.Context) ([]Server, error) {
@@ -50,8 +55,17 @@ func (c *fakeAzureClient) WaitForServerIP(context.Context, string) (Server, erro
 }
 
 func (c *fakeAzureClient) GetServer(_ context.Context, id string) (Server, error) {
+	c.getIDs = append(c.getIDs, id)
+	if err := c.getErrs[id]; err != nil {
+		return Server{}, err
+	}
 	if c.getErr != nil {
 		return Server{}, c.getErr
+	}
+	if c.get != nil {
+		if server, ok := c.get[id]; ok {
+			return server, nil
+		}
 	}
 	for _, server := range c.servers {
 		if server.CloudID == id || server.Name == id {
@@ -63,6 +77,12 @@ func (c *fakeAzureClient) GetServer(_ context.Context, id string) (Server, error
 
 func (c *fakeAzureClient) DeleteServer(_ context.Context, name string) error {
 	c.deleted = append(c.deleted, name)
+	return nil
+}
+
+func (c *fakeAzureClient) DeleteCleanupServer(_ context.Context, server Server, _ time.Time) error {
+	c.cleanupExpected = append(c.cleanupExpected, server)
+	c.deleted = append(c.deleted, server.CloudID)
 	return nil
 }
 
@@ -332,11 +352,146 @@ func TestAzureCleanupSkipsWeakTagsAndDeletesCanonicalExpiredVM(t *testing.T) {
 	}
 }
 
+func TestAzureCleanupRevalidatesLiveOwnershipBeforeDelete(t *testing.T) {
+	snapshot := azureTestServer("crabbox-stale", "cbx_123456abcdef", "stale")
+	snapshot.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(-time.Hour))
+	live := snapshot
+	live.Labels = maps.Clone(snapshot.Labels)
+	live.Labels["lease"] = "cbx_fedcba654321"
+	fake := &fakeAzureClient{
+		servers: []Server{snapshot},
+		get:     map[string]Server{snapshot.CloudID: live},
+	}
+	oldClient := newAzureClient
+	newAzureClient = func(context.Context, Config) (azureClient, error) { return fake, nil }
+	t.Cleanup(func() { newAzureClient = oldClient })
+
+	var stderr strings.Builder
+	backend := NewAzureLeaseBackend(ProviderSpec{}, azureAcquireTestConfig(), Runtime{Stderr: &stderr}).(*azureLeaseBackend)
+	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.getIDs) != 1 || fake.getIDs[0] != snapshot.CloudID {
+		t.Fatalf("live lookups=%v, want %s", fake.getIDs, snapshot.CloudID)
+	}
+	if len(fake.deleted) != 0 {
+		t.Fatalf("cleanup crossed changed ownership: deleted=%v", fake.deleted)
+	}
+	if !strings.Contains(stderr.String(), "does not match cleanup candidate lease") {
+		t.Fatalf("stderr=%q, want changed-lease skip", stderr.String())
+	}
+}
+
+func TestAzureCleanupRevalidatesLiveEligibilityBeforeDelete(t *testing.T) {
+	snapshot := azureTestServer("crabbox-renewed", "cbx_123456abcdef", "renewed")
+	snapshot.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(-time.Hour))
+	live := snapshot
+	live.Labels = maps.Clone(snapshot.Labels)
+	live.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(time.Hour))
+	fake := &fakeAzureClient{servers: []Server{snapshot}, get: map[string]Server{snapshot.CloudID: live}}
+	oldClient := newAzureClient
+	newAzureClient = func(context.Context, Config) (azureClient, error) { return fake, nil }
+	t.Cleanup(func() { newAzureClient = oldClient })
+
+	var stderr strings.Builder
+	backend := NewAzureLeaseBackend(ProviderSpec{}, azureAcquireTestConfig(), Runtime{Stderr: &stderr}).(*azureLeaseBackend)
+	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.deleted) != 0 {
+		t.Fatalf("cleanup deleted renewed VM: %v", fake.deleted)
+	}
+	if !strings.Contains(stderr.String(), "reason=live VM") {
+		t.Fatalf("stderr=%q, want renewed-live skip", stderr.String())
+	}
+}
+
+func TestAzureCleanupRejectsSameNameReplacementVM(t *testing.T) {
+	snapshot := azureTestServer("crabbox-replaced", "cbx_123456abcdef", "replaced")
+	snapshot.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(-time.Hour))
+	live := snapshot
+	live.ImmutableID = "vmid-replacement"
+	fake := &fakeAzureClient{servers: []Server{snapshot}, get: map[string]Server{snapshot.CloudID: live}}
+	oldClient := newAzureClient
+	newAzureClient = func(context.Context, Config) (azureClient, error) { return fake, nil }
+	t.Cleanup(func() { newAzureClient = oldClient })
+
+	var stderr strings.Builder
+	backend := NewAzureLeaseBackend(ProviderSpec{}, azureAcquireTestConfig(), Runtime{Stderr: &stderr}).(*azureLeaseBackend)
+	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.deleted) != 0 {
+		t.Fatalf("cleanup deleted replacement VM: %v", fake.deleted)
+	}
+	if !strings.Contains(stderr.String(), "VM identity") {
+		t.Fatalf("stderr=%q, want replacement identity skip", stderr.String())
+	}
+}
+
+func TestAzureCleanupDeleteBoundaryUsesOriginalCandidate(t *testing.T) {
+	snapshot := azureTestServer("candidate", "cbx_111111111111", "original")
+	snapshot.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(-time.Hour))
+	live := snapshot
+	live.Labels = maps.Clone(snapshot.Labels)
+	live.Labels["slug"] = "changed"
+	fake := &fakeAzureClient{servers: []Server{snapshot}, get: map[string]Server{snapshot.CloudID: live}}
+	oldClient := newAzureClient
+	newAzureClient = func(context.Context, Config) (azureClient, error) { return fake, nil }
+	t.Cleanup(func() { newAzureClient = oldClient })
+
+	backend := NewAzureLeaseBackend(ProviderSpec{}, azureAcquireTestConfig(), Runtime{Stderr: io.Discard}).(*azureLeaseBackend)
+	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.cleanupExpected) != 1 || fake.cleanupExpected[0].Labels["slug"] != "original" {
+		t.Fatalf("cleanup boundary candidates=%v, want original list candidate", fake.cleanupExpected)
+	}
+}
+
+func TestAzureCleanupContinuesWhenLiveCandidateAlreadyGone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	missing := azureTestServer("missing", "cbx_111111111111", "missing")
+	remaining := azureTestServer("remaining", "cbx_222222222222", "remaining")
+	for _, server := range []*Server{&missing, &remaining} {
+		server.Labels["expires_at"] = core.LeaseLabelTime(time.Now().Add(-time.Hour))
+	}
+	keyPath, _, err := core.EnsureTestboxKeyForConfig(Config{}, missing.Labels["lease"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAzureClient{
+		servers: []Server{missing, remaining},
+		get:     map[string]Server{remaining.CloudID: remaining},
+		getErrs: map[string]error{missing.CloudID: core.Exit(4, "azure vm not found: %s", missing.CloudID)},
+	}
+	oldClient := newAzureClient
+	newAzureClient = func(context.Context, Config) (azureClient, error) { return fake, nil }
+	t.Cleanup(func() { newAzureClient = oldClient })
+
+	var stderr strings.Builder
+	backend := NewAzureLeaseBackend(ProviderSpec{}, azureAcquireTestConfig(), Runtime{Stderr: &stderr}).(*azureLeaseBackend)
+	if err := backend.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.deleted) != 1 || fake.deleted[0] != remaining.CloudID {
+		t.Fatalf("deleted=%v, want only remaining candidate", fake.deleted)
+	}
+	if !strings.Contains(stderr.String(), "reason=live VM no longer exists") {
+		t.Fatalf("stderr=%q, want already-gone skip", stderr.String())
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("stored lease key was not retained for recovery: %v", err)
+	}
+}
+
 func azureTestServer(id, leaseID, slug string) Server {
 	return Server{
-		CloudID:  id,
-		Name:     id,
-		Provider: "azure",
+		CloudID:     id,
+		Name:        id,
+		Provider:    "azure",
+		ImmutableID: "vmid-" + id,
 		Labels: map[string]string{
 			"crabbox":    "true",
 			"created_by": "crabbox",

@@ -2,11 +2,13 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	core "github.com/openclaw/crabbox/internal/cli"
 	"github.com/openclaw/crabbox/internal/providers/shared"
 )
@@ -36,6 +38,7 @@ type azureClient interface {
 	WaitForServerIP(context.Context, string) (Server, error)
 	GetServer(context.Context, string) (Server, error)
 	DeleteServer(context.Context, string) error
+	DeleteCleanupServer(context.Context, Server, time.Time) error
 	SetTags(context.Context, string, map[string]string) error
 }
 
@@ -218,13 +221,39 @@ func (b *azureLeaseBackend) Cleanup(ctx context.Context, req CleanupRequest) err
 			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=%s\n", server.DisplayID(), server.Name, reason)
 			continue
 		}
-		fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", server.DisplayID(), server.Name)
 		if req.DryRun {
+			fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", server.DisplayID(), server.Name)
 			continue
 		}
-		if err := deleteServer(ctx, b.Cfg, server); err != nil {
+		live, err := client.GetServer(ctx, server.CloudID)
+		if err != nil {
+			if isAzureCleanupNotFound(err) {
+				fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=live VM no longer exists\n", server.DisplayID(), server.Name)
+				// Keep local recovery state: neither deterministically named companion resources nor the claim can be cleared without a live VM proving ownership.
+				continue
+			}
+			return fmt.Errorf("re-read Azure cleanup candidate %s: %w", server.DisplayID(), err)
+		}
+		if err := validateAzureCleanupLiveServer(server, live); err != nil {
+			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=%v\n", server.DisplayID(), server.Name, err)
+			continue
+		}
+		if shouldDelete, reason := core.ShouldCleanupServer(live, now); !shouldDelete {
+			fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=live VM %s\n", server.DisplayID(), server.Name, reason)
+			continue
+		}
+		if err := client.DeleteCleanupServer(ctx, server, now); err != nil {
+			if core.IsAzureCleanupSkipError(err) {
+				fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=%v\n", live.DisplayID(), live.Name, err)
+				continue
+			}
+			if isAzureCleanupNotFound(err) {
+				fmt.Fprintf(b.RT.Stderr, "skip server id=%s name=%s reason=live VM no longer exists at delete boundary\n", live.DisplayID(), live.Name)
+				continue
+			}
 			return err
 		}
+		fmt.Fprintf(b.RT.Stderr, "delete server id=%s name=%s\n", live.DisplayID(), live.Name)
 		leaseID := server.Labels["lease"]
 		removeLeaseClaim(leaseID)
 		core.RemoveStoredTestboxKey(leaseID)
@@ -282,12 +311,48 @@ func deleteServer(ctx context.Context, cfg Config, server Server) error {
 	if err != nil {
 		return err
 	}
+	return deleteAzureServerWithClient(ctx, client, server)
+}
+
+func deleteAzureServerWithClient(ctx context.Context, client azureClient, server Server) error {
 	name := server.CloudID
 	if name == "" {
 		name = server.Name
 	}
 	return client.DeleteServer(ctx, name)
 }
+
+func validateAzureCleanupLiveServer(expected, live Server) error {
+	cloudID := strings.TrimSpace(expected.CloudID)
+	if cloudID == "" || strings.TrimSpace(live.CloudID) != cloudID {
+		return fmt.Errorf("live cloud id %q does not match cleanup candidate %q", live.CloudID, expected.CloudID)
+	}
+	if strings.TrimSpace(expected.ImmutableID) == "" || strings.TrimSpace(live.ImmutableID) != strings.TrimSpace(expected.ImmutableID) {
+		return fmt.Errorf("live VM identity %q does not match cleanup candidate identity %q", live.ImmutableID, expected.ImmutableID)
+	}
+	if !isCrabboxAzureLease(live) {
+		return fmt.Errorf("live VM no longer has canonical Crabbox ownership tags")
+	}
+	expectedLeaseID := strings.TrimSpace(expected.Labels["lease"])
+	if liveLeaseID := strings.TrimSpace(live.Labels["lease"]); liveLeaseID != expectedLeaseID {
+		return fmt.Errorf("live VM lease %q does not match cleanup candidate lease %q", liveLeaseID, expectedLeaseID)
+	}
+	return nil
+}
+
+func isAzureCleanupNotFound(err error) bool {
+	var exitErr core.ExitError
+	if core.AsExitError(err, &exitErr) && exitErr.Code == 4 {
+		return true
+	}
+	var responseErr *azcore.ResponseError
+	if errors.As(err, &responseErr) && responseErr.StatusCode == 404 {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "ResourceNotFound") || strings.Contains(message, "NotFound")
+}
+
 func useStoredTestboxKey(target *SSHTarget, leaseID string) {
 	if keyPath, err := core.TestboxKeyPath(leaseID); err == nil {
 		if _, statErr := os.Stat(keyPath); statErr == nil {
