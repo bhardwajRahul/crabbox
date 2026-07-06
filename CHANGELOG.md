@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Made Sealos DevBox preflight work with tenant-scoped RBAC, rendered the runtime class, storage request, scheduling constraints, and SSH port contract required by hosted Sealos clusters, updated the SSHGate default to port 2233, bootstrapped missing sync tools, and cleaned local claims safely when a DevBox is already absent. Thanks @coygeek.
 - Changed portal logout to an authenticated, same-origin `POST` with a read-only `GET` confirmation page, preventing cross-site top-level navigation from clearing portal cookies or revoking isolated Code viewer sessions. Thanks @coygeek.
 - Bound non-admin GitHub WebVNC, Code, and egress bridges to their encrypted user grant and portal session, closing active or restored bridges after logout, emergency revocation, membership loss, or membership-check failure without persisting plaintext GitHub credentials. Thanks @coygeek.
 - Prevented Git seed from forwarding HTTP(S) origin credentials to Linux or Windows lease runners; Crabbox now warns without printing the remote and falls back to file sync. Thanks @coygeek.
@@ -13,6 +14,10 @@
 - Required Lambda inventory, stop, and cleanup to use an unchanged instance-bound local claim, with claim-bound SSH-key deletion and durable unique-instance recovery for ambiguous creates. Thanks @coygeek.
 
 ## 0.36.0 - 2026-07-05
+
+### Added
+
+- Added Sealos DevBox Linux SSH leases through the Kubernetes CRD with exact provider/resource-bound claims, conflict-safe explicit `--reclaim` adoption, claim-locked release and cleanup, controller-owned Secret SSH routing, and guarded zero-residue lifecycle proof. Thanks @coygeek.
 
 ### Changed
 
