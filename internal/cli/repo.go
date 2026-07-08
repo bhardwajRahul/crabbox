@@ -116,7 +116,7 @@ func defaultExcludes() []string {
 }
 
 func configuredExcludes(cfg Config) []string {
-	return appendUniqueStrings(defaultExcludes(), cfg.Sync.Excludes...)
+	return appendOrderedStrings(defaultExcludes(), cfg.Sync.Excludes...)
 }
 
 func syncExcludes(root string, cfg Config) ([]string, error) {
@@ -125,7 +125,7 @@ func syncExcludes(root string, cfg Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return appendUniqueStrings(excludes, ignore...), nil
+	return appendOrderedStrings(excludes, ignore...), nil
 }
 
 // syncIncludes returns the configured sync include (whitelist) patterns. When
@@ -616,36 +616,87 @@ func splitNul(data []byte) []string {
 
 func pathExcluded(rel string, excludes []string) bool {
 	rel = filepath.ToSlash(rel)
-	parts := strings.Split(rel, "/")
+	excluded := false
 	for _, exclude := range excludes {
-		exclude = strings.Trim(filepath.ToSlash(strings.TrimSpace(exclude)), "/")
-		if exclude == "" {
+		exclude, negated := excludeRule(exclude)
+		if excludeMatches(rel, exclude) {
+			excluded = !negated
+		}
+	}
+	return excluded
+}
+
+func excludeRule(rule string) (pattern string, negated bool) {
+	rule = strings.TrimSpace(rule)
+	if strings.HasPrefix(rule, `\!`) {
+		return strings.TrimPrefix(rule, `\`), false
+	}
+	if strings.HasPrefix(rule, "!") {
+		return strings.TrimSpace(strings.TrimPrefix(rule, "!")), true
+	}
+	return rule, false
+}
+
+// excludedDirMayContainReinclude keeps watch traversal open when a later file
+// can be re-included below an otherwise excluded directory.
+func excludedDirMayContainReinclude(rel string, excludes []string) bool {
+	rel = strings.Trim(filepath.ToSlash(rel), "/")
+	for _, rule := range excludes {
+		pattern, negated := excludeRule(rule)
+		if !negated {
 			continue
 		}
-		if rel == exclude || strings.HasPrefix(rel, exclude+"/") {
+		pattern = strings.Trim(filepath.ToSlash(pattern), "/")
+		if pattern == "" {
+			continue
+		}
+		if !strings.Contains(pattern, "/") {
 			return true
 		}
-		if !strings.Contains(exclude, "/") {
-			for _, part := range parts {
-				if part == exclude {
-					return true
-				}
-				if ok, _ := filepath.Match(exclude, part); ok {
-					return true
-				}
-			}
-		}
-		if ok, _ := filepath.Match(exclude, filepath.Base(rel)); ok {
-			return true
-		}
-		if ok, _ := filepath.Match(exclude, rel); ok {
-			return true
-		}
-		for i := 1; i < len(parts); i++ {
-			prefix := strings.Join(parts[:i], "/")
-			if ok, _ := filepath.Match(exclude, prefix); ok {
+		meta := strings.IndexAny(pattern, "*?[")
+		if meta < 0 {
+			if pattern == rel || strings.HasPrefix(pattern, rel+"/") || strings.HasPrefix(rel, pattern+"/") {
 				return true
 			}
+			continue
+		}
+		prefix := strings.TrimSuffix(pattern[:meta], "/")
+		if prefix == "" || prefix == rel || strings.HasPrefix(prefix, rel+"/") || strings.HasPrefix(rel, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func excludeMatches(rel string, exclude string) bool {
+	parts := strings.Split(rel, "/")
+	exclude = strings.Trim(filepath.ToSlash(strings.TrimSpace(exclude)), "/")
+	if exclude == "" {
+		return false
+	}
+	if rel == exclude || strings.HasPrefix(rel, exclude+"/") {
+		return true
+	}
+	if !strings.Contains(exclude, "/") {
+		for _, part := range parts {
+			if part == exclude {
+				return true
+			}
+			if ok, _ := filepath.Match(exclude, part); ok {
+				return true
+			}
+		}
+	}
+	if ok, _ := filepath.Match(exclude, filepath.Base(rel)); ok {
+		return true
+	}
+	if ok, _ := filepath.Match(exclude, rel); ok {
+		return true
+	}
+	for i := 1; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/")
+		if ok, _ := filepath.Match(exclude, prefix); ok {
+			return true
 		}
 	}
 	return false
