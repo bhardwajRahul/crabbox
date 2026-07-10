@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Sealed short-lived WebVNC handoff credentials with their one-use tickets and removed ticket material from storage keys, preventing coordinator storage reads from bypassing the browser handoff. Thanks @coygeek.
 - Kept brokered Daytona SSH tokens owner- and admin-only across lease reads and management responses, and skipped token refresh for shared viewers, preventing `use` or `manage` shares from receiving direct sandbox credentials. Thanks @coygeek.
 - Kept expired provider-consuming leases inside active capacity limits and rejected heartbeats after their deadline, preventing cleanup-pending leases from bypassing coordinator caps. Thanks @coygeek.
 - Redacted passwordless URL userinfo and common OAuth and cloud credential aliases consistently from CLI and coordinator diagnostics, including truncated provider error bodies. Thanks @coygeek.

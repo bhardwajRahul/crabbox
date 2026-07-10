@@ -19902,6 +19902,24 @@ describe("fleet lease identity and idle", () => {
     expect(storage.alarm()).toBe(Date.parse(issuedHandoffBody.expiresAt));
     expect(issuedHandoffBody).not.toHaveProperty("username");
     expect(issuedHandoffBody).not.toHaveProperty("password");
+    const storedHandoffs = await storage.list<Record<string, unknown>>({
+      prefix: "webvnc-credential-handoff:",
+    });
+    expect(storedHandoffs.size).toBe(1);
+    const [storedKey, storedHandoff] = [...storedHandoffs.entries()][0]!;
+    expect(storedKey).toMatch(/^webvnc-credential-handoff:cbx_000000000001:[a-f0-9]{64}$/);
+    expect(storedKey).not.toContain(issuedHandoffBody.ticket.slice("vnc_handoff_".length));
+    expect(JSON.stringify({ storedKey, storedHandoff })).not.toContain(issuedHandoffBody.ticket);
+    expect(JSON.stringify(storedHandoff)).not.toContain("vnc-user");
+    expect(JSON.stringify(storedHandoff)).not.toContain("generated-vnc-password");
+    expect(storedHandoff).toMatchObject({
+      version: 1,
+      leaseID: "cbx_000000000001",
+      expiresAt: issuedHandoffBody.expiresAt,
+    });
+    expect(storedHandoff).not.toHaveProperty("ticket");
+    expect(storedHandoff).not.toHaveProperty("username");
+    expect(storedHandoff).not.toHaveProperty("password");
 
     const apiCannotRedeem = await fleet.fetch(
       request("POST", "/v1/leases/blue-lobster/webvnc/handoff", {
@@ -19933,6 +19951,19 @@ describe("fleet lease identity and idle", () => {
     );
     expect(outsiderCannotRedeem.status).toBe(404);
 
+    const wrongTicket = `${issuedHandoffBody.ticket.slice(0, -1)}${issuedHandoffBody.ticket.endsWith("0") ? "1" : "0"}`;
+    const wrongTicketCannotRedeem = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/handoff", {
+        headers: {
+          "x-crabbox-owner": "friend@example.com",
+          "x-crabbox-org": "example-org",
+        },
+        body: { ticket: wrongTicket },
+      }),
+    );
+    expect(wrongTicketCannotRedeem.status).toBe(401);
+    expect((await storage.list({ prefix: "webvnc-credential-handoff:" })).size).toBe(1);
+
     const redeemedHandoff = await fleet.fetch(
       request("POST", "/portal/leases/blue-lobster/vnc/handoff", {
         headers: {
@@ -19959,6 +19990,38 @@ describe("fleet lease identity and idle", () => {
       }),
     );
     expect(replayedHandoff.status).toBe(401);
+
+    const tamperedHandoff = await fleet.fetch(
+      request("POST", "/v1/leases/blue-lobster/webvnc/handoff", {
+        headers,
+        body: { username: "tampered-user", password: "tampered-password" },
+      }),
+    );
+    expect(tamperedHandoff.status).toBe(200);
+    const tamperedHandoffBody = (await tamperedHandoff.json()) as { ticket: string };
+    const tamperedStoredHandoffs = await storage.list<Record<string, unknown>>({
+      prefix: "webvnc-credential-handoff:",
+    });
+    expect(tamperedStoredHandoffs.size).toBe(1);
+    const [tamperedStoredKey, tamperedStoredHandoff] = [...tamperedStoredHandoffs.entries()][0]!;
+    const originalCiphertext = tamperedStoredHandoff.ciphertext;
+    expect(originalCiphertext).toEqual(expect.stringMatching(/^[a-f0-9]+$/));
+    const ciphertext = originalCiphertext as string;
+    await storage.put(tamperedStoredKey, {
+      ...tamperedStoredHandoff,
+      ciphertext: `${ciphertext.slice(0, -1)}${ciphertext.endsWith("0") ? "1" : "0"}`,
+    });
+    const tamperedCannotRedeem = await fleet.fetch(
+      request("POST", "/portal/leases/blue-lobster/vnc/handoff", {
+        headers: {
+          "x-crabbox-owner": "friend@example.com",
+          "x-crabbox-org": "example-org",
+        },
+        body: { ticket: tamperedHandoffBody.ticket },
+      }),
+    );
+    expect(tamperedCannotRedeem.status).toBe(401);
+    expect((await storage.list({ prefix: "webvnc-credential-handoff:" })).size).toBe(0);
 
     const invalidTheme = await fleet.fetch(
       request("POST", "/portal/leases/blue-lobster/vnc/theme", {
