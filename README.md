@@ -540,8 +540,9 @@ CRABBOX_BIN=./bin/crabbox scripts/live-firecracker-smoke.sh
 
 CI runs the full gate (gofmt, vet, race tests, all Go modules, coverage
 threshold, repository script tests, docs link/build check, GoReleaser snapshot, and Worker
-lint/typecheck/tests/build) on every push and PR. Tagged pushes matching `v*`
-publish Go archives via GoReleaser and bump the Homebrew formula at
+lint/typecheck/tests/build) on every push and PR. After a `vMAJOR.MINOR.PATCH`
+tag exists in `main` history, a `repository_dispatch` event of type `release`
+with the tag in `client_payload.tag` publishes Go archives via GoReleaser and bumps the Homebrew formula at
 [openclaw/homebrew-tap](https://github.com/openclaw/homebrew-tap).
 
 Cloudflare, Node/PostgreSQL, container, ingress, secrets, and DNS deployment live in
