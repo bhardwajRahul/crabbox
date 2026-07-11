@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "repository": "openclaw/crabbox",
+  "tag": "v0.38.0",
+  "tagObject": "49a4127f1d0548d745ad71bc56a5098598e49952",
+  "sourceCommit": "406c93a26ed872f46b130443c48dda499088ccf2",
+  "publicationStatus": "blocked",
+  "blocker": "The signed source still carries Worker package metadata for 0.37.0 instead of 0.38.0. Preserve this tag and release from a new signed patch tag containing the corrected package metadata."
+}

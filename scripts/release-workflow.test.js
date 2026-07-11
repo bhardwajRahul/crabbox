@@ -545,6 +545,15 @@ test("v0.37.1 is pinned to the signed trust-repair source and ready for publicat
   assert.equal(record.publicationStatus, "ready");
 });
 
+test("v0.38.0 is pinned to its signed source and blocked for stale package metadata", () => {
+  const record = JSON.parse(read("release/records/v0.38.0.json"));
+  assert.equal(record.tag, "v0.38.0");
+  assert.equal(record.tagObject, "49a4127f1d0548d745ad71bc56a5098598e49952");
+  assert.equal(record.sourceCommit, "406c93a26ed872f46b130443c48dda499088ccf2");
+  assert.equal(record.publicationStatus, "blocked");
+  assert.match(record.blocker, /Worker package metadata for 0\.37\.0 instead of 0\.38\.0/);
+});
+
 test("managed Foundation signing and notary configuration is repository-owned and secret-free", () => {
   const manifest = read(".mac-release.env");
   const codeowners = read(".github/CODEOWNERS");
