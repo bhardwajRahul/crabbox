@@ -411,6 +411,23 @@ test("Homebrew verifier is publishability-gated, native, token-free, and read-on
   assert.ok(phase.indexOf('"$brew_bin" test') < phase.indexOf('"$installed_cli" --version'));
 });
 
+test("Homebrew verifier cleanup survives main function scope", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crabbox-homebrew-cleanup-"));
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      'source "$1"; CRABBOX_HOMEBREW_VERIFY_WORK=$2; cleanup_homebrew_work',
+      "homebrew-cleanup-test",
+      verifier,
+      root,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(root), false);
+});
+
 test("public Homebrew proof binds the current release, successful run, both native proofs, and local bytes", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crabbox-public-proof-"));
   const assetDirectory = path.join(root, "assets");

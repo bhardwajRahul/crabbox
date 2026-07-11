@@ -23,6 +23,11 @@ PROTECTED_HOMEBREW_TOOLING=(
   scripts/verify-release-source.sh
 )
 
+cleanup_homebrew_work() {
+  local path=${CRABBOX_HOMEBREW_VERIFY_WORK:-}
+  [[ -z "$path" ]] || rm -rf -- "$path"
+}
+
 usage() {
   echo "usage: $0 vX.Y.Z <asset-directory> <tag-object> <source-commit> <verifier-commit> <release-id> <public-verifier-run-id> <public-proof-zip-directory>" >&2
   exit 2
@@ -622,7 +627,8 @@ main() {
     exit 1
   }
   work=$(mktemp -d "${TMPDIR:-/tmp}/crabbox-homebrew-verify.XXXXXX")
-  trap 'rm -rf "$work"' EXIT
+  CRABBOX_HOMEBREW_VERIFY_WORK=$work
+  trap cleanup_homebrew_work EXIT
   homebrew_home="$work/home"
   homebrew_cache="$work/cache"
   mkdir -m 700 "$homebrew_home" "$homebrew_cache"
