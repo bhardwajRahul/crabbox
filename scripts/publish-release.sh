@@ -93,7 +93,14 @@ api_get() {
     "$1"
 }
 
-api_download() {
+api_artifact_download() {
+  gh api --method GET \
+    --header 'Accept: application/vnd.github+json' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    "$1"
+}
+
+api_asset_download() {
   gh api --method GET \
     --header 'Accept: application/octet-stream' \
     --header 'X-GitHub-Api-Version: 2022-11-28' \
@@ -231,7 +238,7 @@ for arch in arm64 x86_64; do
     [.artifacts[] | select(.name == $name)] |
     if length == 1 then .[0].digest else error("ambiguous artifact") end
   ' "$WORK/artifacts.json")
-  api_download "repos/$REPOSITORY/actions/artifacts/$artifact_id/zip" >"$WORK/proof-$arch.zip"
+  api_artifact_download "repos/$REPOSITORY/actions/artifacts/$artifact_id/zip" >"$WORK/proof-$arch.zip"
   actual_zip_size=$(wc -c <"$WORK/proof-$arch.zip" | tr -d '[:space:]')
   actual_zip_digest="sha256:$(shasum -a 256 "$WORK/proof-$arch.zip" | awk '{print $1}')"
   [[ "$actual_zip_size" == "$expected_zip_size" && "$actual_zip_digest" == "$expected_zip_digest" ]] || {
@@ -266,7 +273,7 @@ publication_environment node "$ROOT/scripts/validate-release-publication.mjs" st
 
 mkdir -m 700 "$WORK/release-assets"
 while IFS=$'\t' read -r asset_id asset_name expected_size expected_sha; do
-  api_download "repos/$REPOSITORY/releases/assets/$asset_id" >"$WORK/release-assets/$asset_name"
+  api_asset_download "repos/$REPOSITORY/releases/assets/$asset_id" >"$WORK/release-assets/$asset_name"
   actual_size=$(wc -c <"$WORK/release-assets/$asset_name" | tr -d '[:space:]')
   actual_sha=$(shasum -a 256 "$WORK/release-assets/$asset_name" | awk '{print $1}')
   [[ "$actual_size" == "$expected_size" && "$actual_sha" == "$expected_sha" ]] || {
