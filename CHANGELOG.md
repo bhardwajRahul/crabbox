@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added external-provider desktop access for remote macOS, Windows, and WSL2 machines while keeping desktop credentials local. Thanks @MuduiClaw.
 - Added a Herdr plugin for Crabbox lease controls and repository workflows, with workspace-aware actions and managed panes. Thanks @zozo123.
 - Added a single `open --editor=<name>` lease handoff for external editors, starting with Zed Remote Projects and preserving lease activity while the editor is connected. Thanks @zozo123.
 - Added experimental read-only CUA diagnostics and existing-sandbox inventory while failing all remote lifecycle mutations closed until upstream exposes safe creation and deletion ownership primitives. Thanks @coygeek.

@@ -18,6 +18,9 @@ import (
 type Config struct {
 	Profile                       string
 	Provider                      string
+	externalDesktopCredentialName string
+	externalDesktopCredential     transientSecret
+	externalDesktopEnvDenylist    []string
 	providerExplicit              bool
 	providerDefaultsApplied       string
 	TargetOS                      string
@@ -473,6 +476,11 @@ type ExternalConfig struct {
 	RoutingFile              string
 	routingLoaded            bool
 	routingCredentialVersion int
+	routingDigest            string
+	routingGeneration        string
+	routingTargetOS          string
+	routingWindowsMode       string
+	routingArchitecture      string
 }
 
 type ExternalCapabilitiesConfig struct {
@@ -507,6 +515,7 @@ type ExternalConnectionConfig struct {
 	ServerType           string                      `yaml:"serverType,omitempty" json:"serverType,omitempty"`
 	Labels               map[string]string           `yaml:"labels,omitempty" json:"labels,omitempty"`
 	SSH                  ExternalSSHConnectionConfig `yaml:"ssh,omitempty" json:"ssh,omitempty"`
+	Desktop              ExternalDesktopConfig       `yaml:"desktop,omitempty" json:"desktop,omitzero"`
 }
 
 type ExternalSSHConnectionConfig struct {
@@ -522,6 +531,11 @@ type ExternalSSHConnectionConfig struct {
 	ProxyCommand        string   `yaml:"proxyCommand,omitempty" json:"proxyCommand,omitempty"`
 	AllowEnv            bool     `yaml:"allowEnv,omitempty" json:"allowEnv,omitempty"`
 	TrustProviderOutput bool     `yaml:"trustProviderOutput,omitempty" json:"trustProviderOutput,omitempty"`
+}
+
+type ExternalDesktopConfig struct {
+	Username    string `yaml:"username,omitempty" json:"username,omitempty"`
+	PasswordEnv string `yaml:"passwordEnv,omitempty" json:"passwordEnv,omitempty"`
 }
 
 type NamespaceConfig struct {
@@ -1581,6 +1595,12 @@ func loadConfigWithOverrides(coordinator, provider string) (Config, error) {
 	if err := applyEnv(&cfg); err != nil {
 		return Config{}, err
 	}
+	// Validate this cross-provider environment destination before provider
+	// dispatch. The selected value may itself be CRABBOX_PROVIDER, so waiting
+	// for External provider validation would let that value route around it.
+	if err := ValidateExternalDesktopPasswordEnvironmentName(cfg.External.Connection.Desktop.PasswordEnv); err != nil {
+		return Config{}, exit(2, "%v", err)
+	}
 	applyCloudflareDynamicWorkersRepositoryCaps(&cfg)
 	if coordinator = strings.TrimSpace(coordinator); coordinator != "" {
 		cfg.Coordinator = coordinator
@@ -2559,6 +2579,11 @@ func IsTargetExplicit(cfg *Config) bool {
 
 func MarkTargetExplicit(cfg *Config) {
 	cfg.targetExplicit = true
+	cfg.credentialProvenance.externalDesktopTarget = credentialSourceFlag
+	if normalizeTargetOS(cfg.TargetOS) != targetWindows {
+		cfg.WindowsMode = windowsModeNormal
+		cfg.credentialProvenance.externalDesktopMode = credentialSourceFlag
+	}
 }
 
 func IsSSHUserExplicit(cfg *Config) bool {
@@ -5998,23 +6023,29 @@ func applyFileConfigWithTrust(cfg *Config, file fileConfig, trusted bool) error 
 			cfg.credentialProvenance.externalLifecycle = credentialSource
 		}
 		if file.External.Connection != nil {
+			PreserveExternalDesktopChildEnvironmentBoundary(cfg)
 			cfg.External.Connection = *file.External.Connection
 			ssh := cfg.External.Connection.SSH
 			cfg.credentialProvenance.externalConnection = credentialSource
 			cfg.credentialProvenance.externalSSHConnection = credentialSource
 			if trusted {
+				targetOS, windowsMode := normalizedExternalDesktopTarget(*cfg)
 				outputContract, outputContractOK := externalProviderOutputContract(cfg.External)
 				if ssh.TrustProviderOutput && !outputContractOK {
 					return exit(2, "external provider-output contract must be JSON encodable")
 				}
 				cfg.credentialProvenance.externalApproved = externalCredentialApproval{
-					resource:       cfg.External.Connection.ResourceName,
-					host:           ssh.Host,
-					proxy:          ssh.ProxyCommand,
-					allowEnv:       ssh.AllowEnv,
-					envSSH:         ssh,
-					providerOutput: ssh.TrustProviderOutput,
-					outputContract: outputContract,
+					resource:           cfg.External.Connection.ResourceName,
+					host:               ssh.Host,
+					proxy:              ssh.ProxyCommand,
+					allowEnv:           ssh.AllowEnv,
+					envSSH:             ssh,
+					providerOutput:     ssh.TrustProviderOutput,
+					desktopUsername:    strings.TrimSpace(cfg.External.Connection.Desktop.Username),
+					desktopEnv:         cfg.External.Connection.Desktop.PasswordEnv,
+					desktopTarget:      targetOS,
+					desktopWindowsMode: windowsMode,
+					outputContract:     outputContract,
 				}
 				cfg.credentialProvenance.externalApproved.envSSH.FallbackPorts = append([]string(nil), ssh.FallbackPorts...)
 			}
@@ -6028,6 +6059,16 @@ func applyFileConfigWithTrust(cfg *Config, file fileConfig, trusted bool) error 
 				ssh.ProxyCommand, cfg.credentialProvenance.externalApproved.proxy, credentialSource,
 			)
 			cfg.credentialProvenance.externalSSHAllowEnv = credentialSourceForBool(ssh.AllowEnv, credentialSource)
+			cfg.credentialProvenance.externalDesktopUser = credentialDestinationSource(
+				cfg.External.Connection.Desktop.Username,
+				cfg.credentialProvenance.externalApproved.desktopUsername,
+				credentialSource,
+			)
+			cfg.credentialProvenance.externalDesktopEnv = credentialDestinationSource(
+				cfg.External.Connection.Desktop.PasswordEnv,
+				cfg.credentialProvenance.externalApproved.desktopEnv,
+				credentialSource,
+			)
 			if !trusted && ssh.AllowEnv && cfg.credentialProvenance.externalApproved.allowEnv &&
 				externalSSHEnvApprovalMatches(cfg.External.Connection, cfg.credentialProvenance.externalApproved) {
 				cfg.credentialProvenance.externalSSHAllowEnv = credentialSourceTrustedFile
@@ -7872,9 +7913,11 @@ func applyEnv(cfg *Config) error {
 	if t := os.Getenv("CRABBOX_TARGET"); t != "" {
 		cfg.TargetOS = t
 		cfg.targetExplicit = true
+		cfg.credentialProvenance.externalDesktopTarget = credentialSourceEnvironment
 	} else if t := os.Getenv("CRABBOX_TARGET_OS"); t != "" {
 		cfg.TargetOS = t
 		cfg.targetExplicit = true
+		cfg.credentialProvenance.externalDesktopTarget = credentialSourceEnvironment
 	}
 	if arch := os.Getenv("CRABBOX_ARCH"); arch != "" {
 		cfg.Architecture = arch
@@ -7891,6 +7934,7 @@ func applyEnv(cfg *Config) error {
 	if windowsMode := os.Getenv("CRABBOX_WINDOWS_MODE"); windowsMode != "" {
 		cfg.WindowsMode = windowsMode
 		cfg.explicitWindowsMode = windowsMode
+		cfg.credentialProvenance.externalDesktopMode = credentialSourceEnvironment
 	}
 	if value, ok := getenvBool("CRABBOX_DESKTOP"); ok {
 		cfg.Desktop = value
@@ -8462,6 +8506,7 @@ func applyEnv(cfg *Config) error {
 		cfg.External.RoutingFile = value
 		cfg.credentialProvenance.externalRouting = credentialSourceEnvironment
 	}
+	ApplyExternalDesktopEnvironmentOverrides(cfg)
 	if value, ok := getenvBool("CRABBOX_EXTERNAL_IDEMPOTENT_LEASE_ID"); ok {
 		cfg.External.Capabilities.IdempotentLeaseID = value
 	}
@@ -9437,6 +9482,26 @@ func applyEnv(cfg *Config) error {
 		cfg.Run.PreflightTools = normalizePreflightToolNames(splitCommaList(tools))
 	}
 	return nil
+}
+
+// ApplyExternalDesktopEnvironmentOverrides reapplies process-local desktop
+// credential references after persisted routing replaces External config.
+func ApplyExternalDesktopEnvironmentOverrides(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	PreserveExternalDesktopChildEnvironmentBoundary(cfg)
+	configuredPasswordEnv := strings.TrimSpace(cfg.External.Connection.Desktop.PasswordEnv)
+	if !strings.EqualFold(configuredPasswordEnv, "CRABBOX_EXTERNAL_DESKTOP_USERNAME") {
+		cfg.External.Connection.Desktop.Username = getenv("CRABBOX_EXTERNAL_DESKTOP_USERNAME", cfg.External.Connection.Desktop.Username)
+	}
+	if os.Getenv("CRABBOX_EXTERNAL_DESKTOP_USERNAME") != "" && !strings.EqualFold(configuredPasswordEnv, "CRABBOX_EXTERNAL_DESKTOP_USERNAME") {
+		cfg.credentialProvenance.externalDesktopUser = credentialSourceEnvironment
+	}
+	if value := os.Getenv("CRABBOX_EXTERNAL_DESKTOP_PASSWORD_ENV"); value != "" && !strings.EqualFold(configuredPasswordEnv, "CRABBOX_EXTERNAL_DESKTOP_PASSWORD_ENV") {
+		cfg.External.Connection.Desktop.PasswordEnv = value
+		cfg.credentialProvenance.externalDesktopEnv = credentialSourceEnvironment
+	}
 }
 
 func expandUserPath(path string) string {

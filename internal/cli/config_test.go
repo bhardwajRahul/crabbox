@@ -3584,6 +3584,93 @@ func TestExternalFixedLeaseIDCapabilityConfigAndEnv(t *testing.T) {
 	}
 }
 
+func TestExternalDesktopCredentialsEnv(t *testing.T) {
+	clearConfigEnv(t)
+	cfg := baseConfig()
+	t.Setenv("CRABBOX_EXTERNAL_DESKTOP_USERNAME", "screen-user")
+	t.Setenv("CRABBOX_EXTERNAL_DESKTOP_PASSWORD_ENV", "EXTERNAL_TEST_DESKTOP_PASSWORD")
+	if err := applyEnv(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.External.Connection.Desktop.Username != "screen-user" {
+		t.Fatalf("desktop username=%q", cfg.External.Connection.Desktop.Username)
+	}
+	if cfg.External.Connection.Desktop.PasswordEnv != "EXTERNAL_TEST_DESKTOP_PASSWORD" {
+		t.Fatalf("desktop password env=%q", cfg.External.Connection.Desktop.PasswordEnv)
+	}
+}
+
+func TestExternalDesktopReservedEnvironmentCannotSelfRedirect(t *testing.T) {
+	const secret = "unique-operator-screen-sharing-secret"
+	for _, reserved := range []string{
+		"CRABBOX_EXTERNAL_DESKTOP_USERNAME",
+		"CRABBOX_EXTERNAL_DESKTOP_PASSWORD_ENV",
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"LD_PRELOAD",
+		"LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES",
+		"dyld_library_path",
+		"MallocDebugReport",
+		"malloc_check_",
+		"MALLOC_STACK_LOGGING",
+		"GODEBUG",
+		"GOGC",
+		"GOMEMLIMIT",
+		"GOMAXPROCS",
+		"GOTRACEBACK",
+		"USERNAME",
+		"USERDOMAIN",
+	} {
+		t.Run(reserved, func(t *testing.T) {
+			cfg := Config{Provider: "external", TargetOS: targetMacOS}
+			cfg.External.Connection.Desktop.PasswordEnv = reserved
+			t.Setenv(reserved, secret)
+			ApplyExternalDesktopEnvironmentOverrides(&cfg)
+			if cfg.External.Connection.Desktop.Username == secret || cfg.External.Connection.Desktop.PasswordEnv == secret {
+				t.Fatalf("reserved environment copied secret into config: %#v", cfg.External.Connection.Desktop)
+			}
+			err := ValidateExternalDesktopPasswordEnvironmentName(cfg.External.Connection.Desktop.PasswordEnv)
+			if err == nil || !strings.Contains(err.Error(), "reserved") || strings.Contains(err.Error(), secret) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestExternalDesktopReservedProviderEnvironmentCannotBypassValidation(t *testing.T) {
+	clearConfigEnv(t)
+	home := t.TempDir()
+	configPath := filepath.Join(home, "config.yaml")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("CRABBOX_CONFIG", configPath)
+	// The password value doubles as provider selection before provider-specific
+	// validation runs. Global validation must reject the name first.
+	t.Setenv("CRABBOX_PROVIDER", "aws")
+	if err := os.WriteFile(configPath, []byte(`
+provider: external
+external:
+  command: provider-command
+  connection:
+    desktop:
+      passwordEnv: CRABBOX_PROVIDER
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "CRABBOX_PROVIDER") || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("error=%v, want reserved CRABBOX_PROVIDER rejection before dispatch", err)
+	}
+}
+
+func TestLegacyExternalDesktopPasswordEnvironmentRemainsSupported(t *testing.T) {
+	for _, name := range []string{legacyExternalDesktopPasswordEnvironment, strings.ToLower(legacyExternalDesktopPasswordEnvironment)} {
+		if err := ValidateExternalDesktopPasswordEnvironmentName(name); err != nil {
+			t.Fatalf("legacy environment %q rejected: %v", name, err)
+		}
+	}
+}
+
 func TestTartConfigYAMLMissingFieldsNotOverwritten(t *testing.T) {
 	clearConfigEnv(t)
 	cfg := baseConfig()
