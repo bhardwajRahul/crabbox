@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Bound GitHub OAuth callbacks independently to each initiating browser flow and bound sessions, durable ownership, admin grants, and revocations to immutable GitHub account IDs instead of reassignable emails or logins, with a fail-closed operator recovery path for legacy records. Thanks @zozo123.
 - Made the default `crabbox init` Agent Skill include standards-compliant
   `SKILL.md` metadata, enforced conformant skill destinations, and allowed
   `--skill` to target multiple agent discovery paths with an all-target
