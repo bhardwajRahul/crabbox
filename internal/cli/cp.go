@@ -104,15 +104,29 @@ func copyOverResolvedSSH(ctx context.Context, target SSHTarget, src, dst string,
 		}
 		return exit(2, "SSH cp requires rsync 3.4.3 or newer for secure transfers; found %s", version)
 	}
-	if isWindowsWSL2Target(target) {
+	// Prefer secluded arguments whenever the remote rsync supports them: the
+	// paths then travel over the rsync protocol stream instead of the remote
+	// shell command line. Shell-transported filename args are where rsync
+	// clients apply wildcard escaping, and rsync 3.4.4's safe_arg() leaves one
+	// uninitialized heap byte after a backslash-escaped wildcard (our escaped
+	// "\[" and friends), intermittently corrupting the remote path. WSL2
+	// targets still hard-require secluded support; other targets fall back to
+	// shell-transported args so remotes without secluded support (for example
+	// macOS openrsync) keep working.
+	secludedArgs := isWindowsWSL2Target(target)
+	if secludedArgs {
 		if probeErr := probeResolvedSSHRemoteSecludedArgs(ctx, session, target, wslExe); probeErr != nil {
 			if ctxErr := context.Cause(ctx); ctxErr != nil {
 				return ctxErr
 			}
 			return exit(2, "SSH cp to WSL2 requires remote rsync support for secluded arguments")
 		}
+	} else if probeErr := probeResolvedSSHRemoteSecludedArgs(ctx, session, target, wslExe); probeErr == nil {
+		secludedArgs = true
+	} else if ctxErr := context.Cause(ctx); ctxErr != nil {
+		return ctxErr
 	}
-	args, err := resolvedSSHCopyArgs(session, target, src, dst, followLink)
+	args, err := resolvedSSHCopyArgs(session, target, src, dst, followLink, secludedArgs)
 	if err != nil {
 		return err
 	}
@@ -168,7 +182,13 @@ func resolvedSSHCopyWSLArgs(args []string, mountRoot string) []string {
 }
 
 func probeResolvedSSHRemoteSecludedArgs(ctx context.Context, session *sshTransportSession, target SSHTarget, wslExe string) error {
-	args := append(session.commandPrefix(), "-n", session.host(), "wsl.exe rsync --protect-args --version")
+	// --protect-args is the pre-3.2.6 spelling of --secluded-args, so the
+	// probe also accepts older remote rsyncs that predate the rename.
+	remoteProbe := "rsync --protect-args --version"
+	if isWindowsWSL2Target(target) {
+		remoteProbe = "wsl.exe " + remoteProbe
+	}
+	args := append(session.commandPrefix(), "-n", session.host(), remoteProbe)
 	name := "ssh"
 	if wslExe != "" {
 		name = wslExe
@@ -299,7 +319,8 @@ func sshCopyUsesWSL(goos string, target SSHTarget) bool {
 	return goos == "windows" && !target.SSHConfigProxy
 }
 
-func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, dst string, followLink bool) ([]string, error) {
+func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, dst string, followLink, secludedArgs bool) ([]string, error) {
+	secludedArgs = secludedArgs || isWindowsWSL2Target(target)
 	srcRemote, srcPath := sandboxCopyPath(src)
 	dstRemote, dstPath := sandboxCopyPath(dst)
 	if srcRemote == dstRemote {
@@ -315,6 +336,18 @@ func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, ds
 	if strings.ContainsAny(remotePath, "\x00\r\n") {
 		return nil, exit(2, "remote copy paths must not contain control characters")
 	}
+	// Tilde paths need remote-shell expansion. Keep that behavior when the
+	// encoded path avoids rsync 3.4.4's safe_arg() bug, and fail closed when a
+	// backslash-wildcard pair would re-enter the vulnerable transport path.
+	if secludedArgs && !isWindowsWSL2Target(target) && strings.HasPrefix(remotePath, "~") {
+		if srcRemote && !strings.Contains(remotePath, "/") {
+			return nil, exit(2, "remote downloads from bare ~ or ~user are unsupported; use a path under ~/ or an absolute path")
+		}
+		if rsyncRemoteCopyPathTriggersSafeArgBug(remotePath) {
+			return nil, exit(2, "remote copy paths using ~ must not require rsync wildcard escaping; use an absolute path")
+		}
+		secludedArgs = false
+	}
 	args := []string{"-az", "--no-old-args"}
 	if srcRemote {
 		// A lease is outside the host trust boundary. Preserve regular file and
@@ -322,7 +355,7 @@ func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, ds
 		// links, special files, ownership, groups, or permission bits locally.
 		args = []string{"-rtz", "--no-links", "--no-devices", "--no-specials", "--no-owner", "--no-group", "--no-perms", "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r", "--no-old-args"}
 	}
-	if isWindowsWSL2Target(target) {
+	if secludedArgs {
 		args = append(args, "--secluded-args")
 	} else {
 		args = append(args, "--no-secluded-args")
@@ -336,10 +369,14 @@ func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, ds
 	}
 	args = append(args, "--")
 	if srcRemote {
-		args = append(args, session.host()+":"+rsyncRemoteCopyPath(srcPath), rsyncCopyLocalPath(dstPath))
+		remoteSource := rsyncRemoteCopyPath(srcPath)
+		if secludedArgs {
+			remoteSource = rsyncSecludedRemoteSourcePath(srcPath)
+		}
+		args = append(args, session.host()+":"+remoteSource, rsyncCopyLocalPath(dstPath))
 	} else {
 		remoteDestination := rsyncRemoteCopyPath(dstPath)
-		if isWindowsWSL2Target(target) {
+		if secludedArgs {
 			remoteDestination = rsyncSecludedRemoteDestinationPath(dstPath)
 		}
 		args = append(args, rsyncCopyLocalPath(srcPath), session.host()+":"+remoteDestination)
@@ -348,6 +385,25 @@ func resolvedSSHCopyArgs(session *sshTransportSession, target SSHTarget, src, ds
 }
 
 func rsyncSecludedRemoteDestinationPath(path string) string {
+	if strings.HasPrefix(path, ":") {
+		return "./" + path
+	}
+	return path
+}
+
+func rsyncSecludedRemoteSourcePath(path string) string {
+	components := strings.Split(path, "/")
+	for index, component := range components {
+		if strings.ContainsAny(component, "*?[") {
+			component = strings.ReplaceAll(component, `\`, `\\`)
+		}
+		components[index] = strings.NewReplacer(
+			`*`, `\*`,
+			`?`, `\?`,
+			`[`, `\[`,
+		).Replace(component)
+	}
+	path = strings.Join(components, "/")
 	if strings.HasPrefix(path, ":") {
 		return "./" + path
 	}
@@ -367,6 +423,16 @@ func rsyncRemoteCopyPath(path string) string {
 		return "./" + path
 	}
 	return path
+}
+
+func rsyncRemoteCopyPathTriggersSafeArgBug(path string) bool {
+	path = rsyncRemoteCopyPath(path)
+	for index := 0; index+1 < len(path); index++ {
+		if path[index] == '\\' && strings.ContainsRune("*?[]", rune(path[index+1])) {
+			return true
+		}
+	}
+	return false
 }
 
 func rsyncCopyLocalPath(path string) string {
